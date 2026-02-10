@@ -24,7 +24,7 @@ struct IslandView: View {
     private var openAnimation: Animation {
         reduceMotion
             ? .easeInOut(duration: 0.2)
-            : .spring(response: 0.7, dampingFraction: 0.68, blendDuration: 0)
+            : .spring(response: 1.1, dampingFraction: 0.68, blendDuration: 0)
     }
 
     // Close retracts fluidly back into the notch
@@ -77,7 +77,8 @@ struct IslandView: View {
             notchContent
                 .frame(
                     maxWidth: currentWidth + hoverWidthBoost,
-                    maxHeight: currentHeight + hoverHeightBoost
+                    maxHeight: currentHeight + hoverHeightBoost,
+                    alignment: .top
                 )
                 .padding(.horizontal, isExpanded ? topRadius : bottomRadius)
                 .padding([.horizontal, .bottom], isExpanded ? 12 : 0)
@@ -151,14 +152,6 @@ struct IslandView: View {
                         anchor: .top
                     )
             }
-            .transition(
-                .asymmetric(
-                    insertion: .scale(scale: 0.92, anchor: .top)
-                        .combined(with: .opacity)
-                        .animation(.smooth(duration: 0.4)),
-                    removal: .opacity.animation(.easeOut(duration: 0.12))
-                )
-            )
         } else {
             closedHeaderContent
         }
