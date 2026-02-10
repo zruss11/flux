@@ -140,7 +140,12 @@ struct IslandView: View {
 
     @ViewBuilder
     private var notchContent: some View {
-        if isExpanded {
+        ZStack {
+            // Closed state — centered in the notch
+            closedHeaderContent
+                .opacity(isExpanded ? 0 : 1)
+
+            // Expanded state — header + body
             VStack(alignment: .leading, spacing: 0) {
                 openedHeaderContent
                     .frame(height: max(24, closedHeight))
@@ -152,8 +157,7 @@ struct IslandView: View {
                         anchor: .top
                     )
             }
-        } else {
-            closedHeaderContent
+            .opacity(isExpanded ? 1 : 0)
         }
     }
 
