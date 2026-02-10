@@ -206,27 +206,35 @@ final class IslandWindowManager: ObservableObject {
             .sink { [weak self] event in
                 guard let self else { return }
 
-                // If the click is inside our own panel, don't run collapse logic
-                if event.window === self.panel {
-                    return
-                }
-
                 let mouseLocation = NSEvent.mouseLocation
 
                 if !self.isExpanded {
                     // Click in notch → expand immediately
-                    if geometry.isPointInNotch(mouseLocation) {
+                    if event.window !== self.panel, geometry.isPointInNotch(mouseLocation) {
                         self.hoverTimer?.cancel()
                         self.hoverTimer = nil
                         self.expand()
                     }
                 } else {
-                    // Click outside panel → collapse and re-post click
+                    // Click outside panel content → collapse
                     if geometry.isPointOutsidePanel(mouseLocation, size: self.expandedContentSize) {
                         self.collapse()
-                        self.repostClick(at: mouseLocation)
+                        // Only re-post if the click came from outside our panel
+                        // (local monitor events with window === panel already fall through via hitTest)
+                        if event.window !== self.panel {
+                            self.repostClick(at: mouseLocation)
+                        }
                     }
                 }
+            }
+            .store(in: &cancellables)
+
+        // App deactivation: collapse when user clicks another app
+        NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.isExpanded else { return }
+                self.collapse()
             }
             .store(in: &cancellables)
     }
