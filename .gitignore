@@ -1,0 +1,14 @@
+.DS_Store
+*.xcuserdata
+xcuserdata/
+build/
+DerivedData/
+*.swp
+*.swo
+*~
+.build/
+node_modules/
+sidecar/dist/
+sidecar/node_modules/
+.env
+.env.local
