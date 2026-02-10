@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DERIVED_DATA="${ROOT}/.context/DerivedData"
 SIDECAR_DIR="${ROOT}/sidecar"
+DEV_APP_BUNDLE="${FLUX_DEV_APP_BUNDLE:-$HOME/Applications/Flux Dev.app}"
 
 mkdir -p "${DERIVED_DATA}"
 
@@ -24,6 +25,25 @@ trap cleanup EXIT INT TERM
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm not found (need Node.js installed)." >&2
   exit 1
+fi
+
+# Avoid EADDRINUSE if a previous sidecar is still running.
+if lsof -nP -iTCP:7847 -sTCP:LISTEN >/dev/null 2>&1; then
+  pid="$(lsof -nP -iTCP:7847 -sTCP:LISTEN -t | head -n1 || true)"
+  cmd=""
+  if [[ -n "${pid}" ]]; then
+    cmd="$(ps -p "${pid}" -o command= 2>/dev/null || true)"
+  fi
+
+  if [[ "${cmd}" == *"/sidecar/"* ]] || [[ "${cmd}" == *"tsx src/index.ts"* ]]; then
+    echo "[dev] Port 7847 in use by previous sidecar (pid ${pid}). Stopping it..."
+    kill "${pid}" >/dev/null 2>&1 || true
+    sleep 0.3
+  else
+    echo "[dev] Port 7847 is already in use (pid ${pid}). Stop that process and re-run." >&2
+    echo "[dev] Listener command: ${cmd}" >&2
+    exit 1
+  fi
 fi
 
 echo "[dev] Starting sidecar (ws://localhost:7847)..."
@@ -67,10 +87,50 @@ if [[ ! -x "${APP_BIN}" ]]; then
   exit 1
 fi
 
+# Install/update a stable dev .app bundle location.
+# TCC permissions (Accessibility/Screen Recording) can be finicky when the app path changes.
+APP_BUNDLE="${DEV_APP_BUNDLE}"
+mkdir -p "$(dirname "${APP_BUNDLE}")"
+mkdir -p "${APP_BUNDLE}/Contents/MacOS"
+mkdir -p "${APP_BUNDLE}/Contents/Resources"
+cp "${APP_BIN}" "${APP_BUNDLE}/Contents/MacOS/Flux"
+cp "${ROOT}/Flux/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
+
+# Codesign the bundle so TCC permissions (Accessibility / Screen Recording) stick across rebuilds.
+# Prefer Apple Development; fall back to Developer ID; finally fall back to ad-hoc.
+SIGN_IDENTITY="${FLUX_CODESIGN_IDENTITY:-}"
+if [[ -z "${SIGN_IDENTITY}" ]]; then
+  SIGN_IDENTITY="$(
+    security find-identity -p codesigning -v 2>/dev/null \
+      | awk -F'"' '/Apple Development:/{print $2; exit}'
+  )"
+fi
+if [[ -z "${SIGN_IDENTITY}" ]]; then
+  SIGN_IDENTITY="$(
+    security find-identity -p codesigning -v 2>/dev/null \
+      | awk -F'"' '/Developer ID Application:/{print $2; exit}'
+  )"
+fi
+if [[ -z "${SIGN_IDENTITY}" ]]; then
+  SIGN_IDENTITY="-"
+  echo "[dev] Warning: no codesigning identity found; using ad-hoc signing (TCC may not persist permissions)." >&2
+else
+  echo "[dev] Codesigning app with: ${SIGN_IDENTITY}"
+fi
+
+codesign --force --deep --sign "${SIGN_IDENTITY}" --timestamp=none "${APP_BUNDLE}" >/dev/null 2>&1 || {
+  echo "[dev] codesign failed for identity: ${SIGN_IDENTITY}" >&2
+  exit 1
+}
+
+codesign --verify --deep --strict "${APP_BUNDLE}" >/dev/null 2>&1 || {
+  echo "[dev] codesign verification failed" >&2
+  exit 1
+}
+
 echo "[dev] Launching Flux..."
-"${APP_BIN}" &
+open -W "${APP_BUNDLE}" &
 app_pid="$!"
 
 echo "[dev] Running. Ctrl-C to stop."
 wait "${app_pid}"
-

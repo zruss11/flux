@@ -19,6 +19,7 @@ final class ScreenCapture {
 
     func captureMainDisplay() async -> String? {
         do {
+            guard CGPreflightScreenCaptureAccess() else { return nil }
             if let last = lastCaptureAt, Date().timeIntervalSince(last) < minSecondsBetweenCaptures {
                 return "Capture throttled (too frequent)"
             }
@@ -47,6 +48,7 @@ final class ScreenCapture {
 
     func captureFrontmostWindow() async -> String? {
         do {
+            guard CGPreflightScreenCaptureAccess() else { return nil }
             if let last = lastCaptureAt, Date().timeIntervalSince(last) < minSecondsBetweenCaptures {
                 return "Capture throttled (too frequent)"
             }

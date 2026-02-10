@@ -37,6 +37,10 @@ final class AgentBridge: @unchecked Sendable {
         self.webSocketTask = task
         task.resume()
 
+        // Send API key immediately on connection (don't wait for first receive)
+        let storedKey = UserDefaults.standard.string(forKey: "anthropicApiKey") ?? ""
+        sendApiKey(storedKey)
+
         // Send MCP auth config proactively; doesn't depend on receiving a message first.
         sendMcpAuthIfNeeded()
 
@@ -77,6 +81,15 @@ final class AgentBridge: @unchecked Sendable {
         send(message)
     }
 
+    func sendApiKey(_ key: String) {
+        guard !key.isEmpty else { return }
+        let message: [String: Any] = [
+            "type": "set_api_key",
+            "apiKey": key
+        ]
+        send(message)
+    }
+
     private func send(_ dict: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let string = String(data: data, encoding: .utf8) else { return }
@@ -110,7 +123,9 @@ final class AgentBridge: @unchecked Sendable {
             switch result {
             case .success(let message):
                 Task { @MainActor in
-                    self.isConnected = true
+                    if !self.isConnected {
+                        self.isConnected = true
+                    }
                     self.reconnectDelay = 1.0
                 }
                 switch message {

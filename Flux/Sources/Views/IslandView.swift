@@ -1,4 +1,7 @@
 import SwiftUI
+import CoreGraphics
+import AppKit
+@preconcurrency import ApplicationServices
 
 enum IslandContentType: Equatable {
     case chat
@@ -13,6 +16,7 @@ struct IslandView: View {
 
     @State private var contentType: IslandContentType = .chat
     @State private var showExpandedContent = false
+    @State private var measuredChatHeight: CGFloat = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -43,13 +47,19 @@ struct IslandView: View {
         conversationStore.activeConversation?.messages.count ?? 0
     }
 
-    // Height grows with content: starts at minExpandedHeight, each message adds ~60pt
     private var expandedHeight: CGFloat {
         if contentType == .settings {
             return maxExpandedHeight
         }
-        let contentHeight = minExpandedHeight + CGFloat(messageCount) * 60
-        return min(contentHeight, maxExpandedHeight)
+        // No messages yet — compact initial state with just the input row
+        if messageCount == 0 {
+            return minExpandedHeight + 80
+        }
+        // Grow to fit measured chat content + header + input row + padding
+        // Header ~36pt, input row ~52pt, divider + padding ~20pt
+        let overhead: CGFloat = 108
+        let desired = measuredChatHeight + overhead
+        return min(max(desired, minExpandedHeight + 80), maxExpandedHeight)
     }
 
     private var currentWidth: CGFloat { isExpanded ? expandedWidth : closedWidth }
@@ -88,6 +98,7 @@ struct IslandView: View {
                 .animation(.spring(response: 0.38, dampingFraction: 0.8), value: isHovering)
                 .animation(.spring(response: 0.5, dampingFraction: 0.8), value: messageCount)
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
+                .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: isExpanded) { _, expanded in
@@ -112,6 +123,14 @@ struct IslandView: View {
             }
         }
         .onChange(of: contentType) { _, _ in
+            if isExpanded {
+                windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
+            }
+        }
+        .onPreferenceChange(ChatContentHeightKey.self) { height in
+            measuredChatHeight = height
+        }
+        .onChange(of: measuredChatHeight) { _, _ in
             if isExpanded {
                 windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
             }
@@ -231,7 +250,7 @@ struct IslandView: View {
                 case .chat:
                     ChatView(conversationStore: conversationStore, agentBridge: agentBridge)
                 case .settings:
-                    IslandSettingsView()
+                    IslandSettingsView(agentBridge: agentBridge)
                 }
             }
             .transition(.opacity.animation(.easeInOut(duration: 0.2)))
@@ -242,6 +261,8 @@ struct IslandView: View {
 // MARK: - In-Island Settings
 
 struct IslandSettingsView: View {
+    var agentBridge: AgentBridge
+
     @AppStorage("anthropicApiKey") private var apiKey = ""
     @AppStorage("discordWebhookUrl") private var discordWebhookUrl = ""
     @AppStorage("slackWebhookUrl") private var slackWebhookUrl = ""
@@ -249,6 +270,7 @@ struct IslandSettingsView: View {
 
     @State private var editingField: EditingField?
     @FocusState private var fieldFocused: Bool
+    @State private var permissionRefreshToken: Int = 0
 
     private enum EditingField: Hashable {
         case apiKey, linearToken, discord, slack
@@ -394,14 +416,29 @@ struct IslandSettingsView: View {
                             .foregroundStyle(accessibilityEnabled ? .green.opacity(0.8) : .orange.opacity(0.9))
                     )
                 })
+                .onTapGesture {
+                    requestAccessibilityPermission()
+                }
 
                 settingsRow(icon: "camera.fill", label: "Screen Recording", trailing: {
                     AnyView(
-                        Text("Granted")
+                        Text(screenRecordingGranted ? "Granted" : "Enable")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.green.opacity(0.8))
+                            .foregroundStyle(screenRecordingGranted ? .green.opacity(0.8) : .orange.opacity(0.9))
                     )
                 })
+                .onTapGesture {
+                    requestScreenRecordingPermission()
+                }
+
+                if !accessibilityEnabled || !screenRecordingGranted {
+                    settingsRow(icon: "arrow.clockwise", label: "Restart Flux", trailing: {
+                        AnyView(EmptyView())
+                    })
+                    .onTapGesture {
+                        relaunch()
+                    }
+                }
 
                 divider
 
@@ -435,6 +472,18 @@ struct IslandSettingsView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
         }
+        .onChange(of: editingField) { old, _ in
+            if old == .apiKey {
+                agentBridge.sendApiKey(apiKey)
+            }
+        }
+        .task {
+            // Poll while Settings is visible so status updates after the user toggles permissions in System Settings.
+            while !Task.isCancelled {
+                permissionRefreshToken &+= 1
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 
     private var divider: some View {
@@ -446,7 +495,67 @@ struct IslandSettingsView: View {
     }
 
     private var accessibilityEnabled: Bool {
-        AXIsProcessTrusted()
+        _ = permissionRefreshToken
+        return AXIsProcessTrusted()
+    }
+
+    private var screenRecordingGranted: Bool {
+        _ = permissionRefreshToken
+        return CGPreflightScreenCaptureAccess()
+    }
+
+    private func requestAccessibilityPermission() {
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue()
+        let options = [promptKey: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+
+        // The "prompt" typically opens System Settings rather than showing a modal prompt.
+        openSystemSettingsPrivacyPane(type: .accessibility)
+    }
+
+    private func requestScreenRecordingPermission() {
+        if !CGPreflightScreenCaptureAccess() {
+            CGRequestScreenCaptureAccess()
+        }
+        openSystemSettingsPrivacyPane(type: .screenRecording)
+    }
+
+    private enum PrivacyPaneType {
+        case accessibility
+        case screenRecording
+    }
+
+    private func openSystemSettingsPrivacyPane(type: PrivacyPaneType) {
+        let candidates: [String]
+        switch type {
+        case .accessibility:
+            candidates = [
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy"
+            ]
+        case .screenRecording:
+            candidates = [
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy"
+            ]
+        }
+
+        for str in candidates {
+            if let url = URL(string: str), NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+
+        // Fallback: open System Settings if deep-links aren't supported.
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
+    }
+
+    private func relaunch() {
+        let appURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in
+            NSApp.terminate(nil)
+        }
     }
 
     private func statusDot(isSet: Bool) -> some View {

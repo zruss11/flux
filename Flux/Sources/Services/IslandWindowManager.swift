@@ -3,6 +3,12 @@ import Combine
 import SwiftUI
 import CoreGraphics
 
+// MARK: - Keyable Panel (accepts keyboard focus for text input)
+
+class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 // MARK: - Pass-through hosting view
 
 class PassThroughHostingView<Content: View>: NSHostingView<Content> {
@@ -81,7 +87,7 @@ final class IslandWindowManager: ObservableObject {
             windowHeight: windowHeight
         )
 
-        let panel = NSPanel(
+        let panel = KeyablePanel(
             contentRect: windowFrame,
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
@@ -98,7 +104,7 @@ final class IslandWindowManager: ObservableObject {
         panel.titlebarAppearsTransparent = true
         panel.isMovable = false
         panel.isMovableByWindowBackground = false
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
@@ -199,6 +205,12 @@ final class IslandWindowManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
                 guard let self else { return }
+
+                // If the click is inside our own panel, don't run collapse logic
+                if event.window === self.panel {
+                    return
+                }
+
                 let mouseLocation = NSEvent.mouseLocation
 
                 if !self.isExpanded {

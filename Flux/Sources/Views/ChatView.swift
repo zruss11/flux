@@ -1,5 +1,13 @@
 import SwiftUI
 
+// Preference key to report the chat content's intrinsic height back up the view tree
+struct ChatContentHeightKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct ChatView: View {
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
@@ -12,7 +20,7 @@ struct ChatView: View {
             // Messages
             ScrollViewReader { scrollProxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 12) {
                         if let conversation = conversationStore.activeConversation {
                             ForEach(conversation.messages) { message in
                                 MessageBubble(message: message)
@@ -22,6 +30,12 @@ struct ChatView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .preference(key: ChatContentHeightKey.self, value: geo.size.height)
+                        }
+                    )
                 }
                 .onChange(of: conversationStore.activeConversation?.messages.count) { _, _ in
                     if let lastMessage = conversationStore.activeConversation?.messages.last {

@@ -18,7 +18,7 @@ final class VoiceInput {
 
     func requestPermission() async -> Bool {
         await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
+            PermissionRequests.requestSpeechAuthorization { status in
                 continuation.resume(returning: status == .authorized)
             }
         }
@@ -43,6 +43,11 @@ final class VoiceInput {
 
         let inputNode = engine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+
+        guard recordingFormat.sampleRate > 0 else {
+            print("No audio input available")
+            return
+        }
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
             request.append(buffer)

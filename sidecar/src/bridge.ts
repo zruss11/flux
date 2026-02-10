@@ -17,13 +17,18 @@ interface ToolResultMessage {
   toolResult: string;
 }
 
+interface SetApiKeyMessage {
+  type: 'set_api_key';
+  apiKey: string;
+}
+
 interface McpAuthMessage {
   type: 'mcp_auth';
   serverId: string;
   token: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | McpAuthMessage;
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -60,10 +65,11 @@ const MAX_RETAINED_TEXT_CHARS = 20_000;
 
 let activeClient: WebSocket | null = null;
 let anthropic: Anthropic | null = null;
+let runtimeApiKey: string | null = null;
 
 function getAnthropicClient(): Anthropic {
   if (!anthropic) {
-    anthropic = new Anthropic();
+    anthropic = new Anthropic(runtimeApiKey ? { apiKey: runtimeApiKey } : undefined);
   }
   return anthropic;
 }
@@ -180,6 +186,11 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
     case 'tool_result':
       handleToolResult(ws, message);
       break;
+    case 'set_api_key':
+      runtimeApiKey = message.apiKey;
+      anthropic = null; // reset so next call uses the new key
+      console.log('API key updated from Swift app');
+      break;
     case 'mcp_auth':
       handleMcpAuth(message);
       break;
@@ -202,6 +213,16 @@ function handleMcpAuth(message: McpAuthMessage): void {
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
   const { conversationId, content } = message;
   console.log(`[${conversationId}] User: ${content}`);
+
+  // Reject if no API key has been provided yet
+  if (!runtimeApiKey) {
+    sendToClient(ws, {
+      type: 'assistant_message',
+      conversationId,
+      content: 'No Anthropic API key configured. Please set your API key in Settings.',
+    });
+    return;
+  }
 
   // Get or create conversation history
   if (!conversationHistories.has(conversationId)) {

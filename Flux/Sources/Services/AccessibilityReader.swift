@@ -18,6 +18,7 @@ final class AccessibilityReader {
     }
 
     func readFrontmostWindow() async -> AXNode? {
+        guard AXIsProcessTrusted() else { return nil }
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         let pid = app.processIdentifier
         let appElement = AXUIElementCreateApplication(pid)
@@ -27,10 +28,12 @@ final class AccessibilityReader {
 
         guard result == .success, let window = focusedWindow else { return nil }
 
+        guard CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
         return extractTree(from: window as! AXUIElement, depth: 0)
     }
 
     func readSelectedText() async -> String? {
+        guard AXIsProcessTrusted() else { return nil }
         let systemWide = AXUIElementCreateSystemWide()
 
         var focusedElement: CFTypeRef?
@@ -39,6 +42,7 @@ final class AccessibilityReader {
         guard result == .success, let element = focusedElement else { return nil }
 
         var selectedText: CFTypeRef?
+        guard CFGetTypeID(element) == AXUIElementGetTypeID() else { return nil }
         let textResult = AXUIElementCopyAttributeValue(element as! AXUIElement, kAXSelectedTextAttribute as CFString, &selectedText)
 
         guard textResult == .success, let text = selectedText as? String, !text.isEmpty else { return nil }
