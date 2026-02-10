@@ -261,16 +261,24 @@ struct IslandSettingsView: View {
     var agentBridge: AgentBridge
 
     @AppStorage("anthropicApiKey") private var apiKey = ""
-    @AppStorage("discordWebhookUrl") private var discordWebhookUrl = ""
-    @AppStorage("slackWebhookUrl") private var slackWebhookUrl = ""
+    @AppStorage("discordChannelId") private var discordChannelId = ""
+    @AppStorage("slackChannelId") private var slackChannelId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
 
+    @State private var discordBotToken = ""
+    @State private var slackBotToken = ""
+    @State private var secretsLoaded = false
     @State private var editingField: EditingField?
     @FocusState private var fieldFocused: Bool
     @State private var permissionRefreshToken: Int = 0
 
     private enum EditingField: Hashable {
-        case apiKey, linearToken, discord, slack
+        case apiKey
+        case linearToken
+        case discordBotToken
+        case discordChannelId
+        case slackBotToken
+        case slackChannelId
     }
 
     var body: some View {
@@ -350,15 +358,18 @@ struct IslandSettingsView: View {
 
                 divider
 
-                // Discord Webhook
-                if editingField == .discord {
-                    editableRow(icon: "bubble.left.fill", label: "Discord") {
-                        TextField("https://discord.com/api/webhooks/...", text: $discordWebhookUrl)
+                // Discord Bot
+                if editingField == .discordBotToken {
+                    editableRow(icon: "bubble.left.fill", label: "Discord Bot Token") {
+                        SecureField("Bot token", text: $discordBotToken)
                             .textFieldStyle(.plain)
                             .font(.system(size: 12))
                             .foregroundStyle(.white)
                             .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
+                            .onSubmit {
+                                persistDiscordBotToken()
+                                editingField = nil
+                            }
                             .onAppear {
                                 IslandWindowManager.shared.makeKeyIfNeeded()
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -366,21 +377,29 @@ struct IslandSettingsView: View {
                                 }
                             }
                     } onDone: {
+                        persistDiscordBotToken()
                         editingField = nil
                     }
                 } else {
-                    settingsRow(icon: "bubble.left.fill", label: "Discord Webhook", trailing: {
-                        AnyView(statusDot(isSet: !discordWebhookUrl.isEmpty))
+                    settingsRow(icon: "bubble.left.fill", label: "Discord Bot", trailing: {
+                        AnyView(
+                            HStack(spacing: 8) {
+                                statusDot(isSet: !discordBotToken.isEmpty && !discordChannelId.isEmpty)
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.35))
+                                    .help(discordBotHelp)
+                            }
+                        )
                     })
                     .onTapGesture {
-                        editingField = .discord
+                        editingField = .discordBotToken
                     }
                 }
 
-                // Slack Webhook
-                if editingField == .slack {
-                    editableRow(icon: "number", label: "Slack") {
-                        TextField("https://hooks.slack.com/services/...", text: $slackWebhookUrl)
+                if editingField == .discordChannelId {
+                    editableRow(icon: "bubble.left.fill", label: "Discord Channel ID") {
+                        TextField("Channel ID (e.g. 123456789012345678)", text: $discordChannelId)
                             .textFieldStyle(.plain)
                             .font(.system(size: 12))
                             .foregroundStyle(.white)
@@ -396,11 +415,76 @@ struct IslandSettingsView: View {
                         editingField = nil
                     }
                 } else {
-                    settingsRow(icon: "number", label: "Slack Webhook", trailing: {
-                        AnyView(statusDot(isSet: !slackWebhookUrl.isEmpty))
+                    settingsRow(icon: "bubble.left.fill", label: "Discord Channel ID", trailing: {
+                        AnyView(statusDot(isSet: !discordChannelId.isEmpty))
                     })
                     .onTapGesture {
-                        editingField = .slack
+                        editingField = .discordChannelId
+                    }
+                }
+
+                // Slack Bot
+                if editingField == .slackBotToken {
+                    editableRow(icon: "number", label: "Slack Bot Token") {
+                        SecureField("xoxb-...", text: $slackBotToken)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onSubmit {
+                                persistSlackBotToken()
+                                editingField = nil
+                            }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        persistSlackBotToken()
+                        editingField = nil
+                    }
+                } else {
+                    settingsRow(icon: "number", label: "Slack Bot", trailing: {
+                        AnyView(
+                            HStack(spacing: 8) {
+                                statusDot(isSet: !slackBotToken.isEmpty && !slackChannelId.isEmpty)
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.35))
+                                    .help(slackBotHelp)
+                            }
+                        )
+                    })
+                    .onTapGesture {
+                        editingField = .slackBotToken
+                    }
+                }
+
+                if editingField == .slackChannelId {
+                    editableRow(icon: "number", label: "Slack Channel ID") {
+                        TextField("Channel ID (e.g. C123...)", text: $slackChannelId)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onSubmit { editingField = nil }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        editingField = nil
+                    }
+                } else {
+                    settingsRow(icon: "number", label: "Slack Channel ID", trailing: {
+                        AnyView(statusDot(isSet: !slackChannelId.isEmpty))
+                    })
+                    .onTapGesture {
+                        editingField = .slackChannelId
                     }
                 }
 
@@ -469,9 +553,19 @@ struct IslandSettingsView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
         }
+        .onAppear {
+            loadSecretsIfNeeded()
+        }
         .onChange(of: editingField) { old, _ in
-            if old == .apiKey {
+            switch old {
+            case .apiKey:
                 agentBridge.sendApiKey(apiKey)
+            case .discordBotToken:
+                persistDiscordBotToken()
+            case .slackBotToken:
+                persistSlackBotToken()
+            default:
+                break
             }
         }
         .task {
@@ -559,6 +653,50 @@ struct IslandSettingsView: View {
         Circle()
             .fill(isSet ? Color.green.opacity(0.8) : Color.white.opacity(0.2))
             .frame(width: 8, height: 8)
+    }
+
+    private var discordBotHelp: String {
+        [
+            "Discord bot setup:",
+            "1) Create a bot at Discord Developer Portal (Applications -> Bot).",
+            "2) Copy the bot token and paste it into \"Discord Bot\".",
+            "3) Invite the bot to your server with \"Send Messages\" permission.",
+            "4) Enable Developer Mode in Discord, then right click a channel -> Copy Channel ID.",
+        ].joined(separator: "\n")
+    }
+
+    private var slackBotHelp: String {
+        [
+            "Slack bot setup:",
+            "1) Create a Slack app (From scratch) with a Bot user.",
+            "2) Under OAuth & Permissions, add scopes: chat:write (+ chat:write.public for public channels without inviting the bot).",
+            "3) Install the app to your workspace and copy the Bot User OAuth Token (xoxb-...).",
+            "4) Copy the channel ID (starts with C or G). Invite the bot for private channels.",
+        ].joined(separator: "\n")
+    }
+
+    private func loadSecretsIfNeeded() {
+        guard !secretsLoaded else { return }
+        secretsLoaded = true
+
+        discordBotToken = KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? ""
+        slackBotToken = KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? ""
+    }
+
+    private func persistDiscordBotToken() {
+        do {
+            try KeychainService.setString(discordBotToken, forKey: SecretKeys.discordBotToken)
+        } catch {
+            // Best effort; ignore.
+        }
+    }
+
+    private func persistSlackBotToken() {
+        do {
+            try KeychainService.setString(slackBotToken, forKey: SecretKeys.slackBotToken)
+        } catch {
+            // Best effort; ignore.
+        }
     }
 
     private func editableRow<Field: View>(

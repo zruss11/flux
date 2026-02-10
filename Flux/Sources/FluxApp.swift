@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 
 @main
 struct FluxApp: App {
@@ -25,6 +26,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+
+        SecretMigration.migrateUserDefaultsTokensToKeychainIfNeeded()
 
         setupStatusItem()
 
@@ -161,8 +164,115 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let command = input["command"] as? String ?? ""
             return await toolRunner.executeShellScript(command)
 
+        case "send_slack_message":
+            let text = input["text"] as? String ?? ""
+            let channelOverride = (input["channelId"] as? String) ?? (input["channel"] as? String)
+            return await sendSlackMessage(text: text, channelIdOverride: channelOverride)
+
+        case "send_discord_message":
+            let content = input["content"] as? String ?? ""
+            let channelIdOverride = input["channelId"] as? String
+            return await sendDiscordMessage(content: content, channelIdOverride: channelIdOverride)
+
         default:
             return "Unknown tool: \(toolName)"
+        }
+    }
+
+    private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {
+        let token = (KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let channel = (channelIdOverride ?? UserDefaults.standard.string(forKey: "slackChannelId") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !token.isEmpty else {
+            return "Slack bot token not set. Open Flux Settings and set Slack Bot Token + Slack Channel ID."
+        }
+        guard !channel.isEmpty else {
+            return "Slack channel ID not set. Open Flux Settings and set Slack Channel ID."
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Slack message text is empty."
+        }
+
+        var req = URLRequest(url: URL(string: "https://slack.com/api/chat.postMessage")!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "channel": channel,
+            "text": text
+        ]
+
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let ok = json?["ok"] as? Bool
+            let error = json?["error"] as? String
+            let ts = json?["ts"] as? String
+
+            if status != 200 || ok != true {
+                let rawText = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let raw = rawText.count > 500 ? String(rawText.prefix(500)) + "…" : rawText
+                let detail = error ?? "HTTP \(status)"
+                return "Slack send failed: \(detail)\(raw.isEmpty ? "" : " - \(raw)")"
+            }
+
+            return "Slack message sent (ts=\(ts ?? "unknown"))."
+        } catch {
+            return "Slack send failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func sendDiscordMessage(content: String, channelIdOverride: String?) async -> String {
+        let token = (KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let channelId = (channelIdOverride ?? UserDefaults.standard.string(forKey: "discordChannelId") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !token.isEmpty else {
+            return "Discord bot token not set. Open Flux Settings and set Discord Bot Token + Discord Channel ID."
+        }
+        guard !channelId.isEmpty else {
+            return "Discord channel ID not set. Open Flux Settings and set Discord Channel ID."
+        }
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Discord message content is empty."
+        }
+
+        guard let url = URL(string: "https://discord.com/api/v10/channels/\(channelId)/messages") else {
+            return "Discord send failed: invalid channel ID."
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bot \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "content": content
+        ]
+
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+
+            if status < 200 || status >= 300 {
+                let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return "Discord send failed: HTTP \(status)\(text.isEmpty ? "" : " - \(text)")"
+            }
+
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let messageId = json?["id"] as? String
+            return "Discord message sent (id=\(messageId ?? "unknown"))."
+        } catch {
+            return "Discord send failed: \(error.localizedDescription)"
         }
     }
 }

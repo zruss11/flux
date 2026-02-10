@@ -64,6 +64,12 @@ cd sidecar && npm install && npm start
 └─────────────────────────────────────┘
 ```
 
+## Integrations
+
+Connect Flux to your messaging platforms so your AI copilot can reach you anywhere.
+
+- [Discord & Slack Bot Setup Guide](docs/bot-setup.md)
+
 ## License
 
 Apache 2.0
