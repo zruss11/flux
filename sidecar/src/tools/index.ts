@@ -1,14 +1,9 @@
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  input_schema: {
-    type: 'object';
-    properties: Record<string, unknown>;
-    required?: string[];
-  };
-}
+import type { ToolDefinition } from './types.js';
+import { McpManager } from '../mcp/manager.js';
+import { loadInstalledSkills } from '../skills/loadInstalledSkills.js';
+import type { InstalledSkill } from '../skills/types.js';
 
-export const tools: ToolDefinition[] = [
+export const baseTools: ToolDefinition[] = [
   {
     name: 'capture_screen',
     description:
@@ -80,3 +75,56 @@ export const tools: ToolDefinition[] = [
     },
   },
 ];
+
+const mcp = new McpManager();
+let skillsLoadedOnce = false;
+let installedSkills: InstalledSkill[] = [];
+
+async function ensureSkillsLoaded(): Promise<void> {
+  if (skillsLoadedOnce) return;
+  installedSkills = await loadInstalledSkills();
+  mcp.registerFromSkills(installedSkills);
+  skillsLoadedOnce = true;
+}
+
+function linearHelperTools(): ToolDefinition[] {
+  return [
+    {
+      name: 'linear__setup',
+      description: 'Explain how to configure Linear MCP auth for Flux sidecar.',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'linear__mcp_list_tools',
+      description: 'List available Linear MCP tools (requires Linear MCP auth).',
+      input_schema: { type: 'object', properties: {} },
+    },
+  ];
+}
+
+export async function getToolDefinitions(): Promise<{
+  tools: ToolDefinition[];
+  mcp: McpManager;
+  skills: InstalledSkill[];
+}> {
+  await ensureSkillsLoaded();
+
+  const all: ToolDefinition[] = [...baseTools];
+
+  // Skill-specific helpers (present even if MCP auth isn't configured yet).
+  if (mcp.hasServer('linear')) {
+    all.push(...linearHelperTools());
+
+    // Best-effort: expose Linear MCP tools directly as `linear__<toolName>` if we can list them.
+    if (mcp.hasAuthToken('linear')) {
+      try {
+        const linearTools = await mcp.getAnthropicTools('linear');
+        all.push(...linearTools);
+      } catch {
+        // Keep only helper tools when unavailable.
+      }
+    }
+  }
+
+  return { tools: all, mcp, skills: installedSkills };
+}

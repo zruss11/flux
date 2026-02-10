@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import Anthropic from '@anthropic-ai/sdk';
-import { tools } from './tools/index.js';
+import { getToolDefinitions } from './tools/index.js';
+import { executeNodeTool, isNodeTool } from './tools/nodeRouter.js';
 
 interface ChatMessage {
   type: 'chat';
@@ -21,7 +22,13 @@ interface SetApiKeyMessage {
   apiKey: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage;
+interface McpAuthMessage {
+  type: 'mcp_auth';
+  serverId: string;
+  token: string;
+}
+
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -184,9 +191,23 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
       anthropic = null; // reset so next call uses the new key
       console.log('API key updated from Swift app');
       break;
+    case 'mcp_auth':
+      handleMcpAuth(message);
+      break;
     default:
       console.warn('Unknown message type:', (message as Record<string, unknown>).type);
   }
+}
+
+function handleMcpAuth(message: McpAuthMessage): void {
+  // Token may be empty (clear). Persist in-memory for subsequent MCP tool calls.
+  // We set it on the shared MCP manager instance that `getToolDefinitions()` returns.
+  // Note: `getToolDefinitions()` creates/returns a stable manager instance.
+  getToolDefinitions()
+    .then(({ mcp }) => mcp.setAuthToken(message.serverId, message.token))
+    .catch((err) => {
+      console.error('Failed to apply MCP auth update:', err);
+    });
 }
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
@@ -233,6 +254,10 @@ async function runConversationLoop(
   const client = getAnthropicClient();
 
   while (true) {
+    const { tools, mcp, skills } = await getToolDefinitions();
+    const linearSkill = skills.find((s) => s.name === 'linear');
+    const linearHint = linearSkill?.defaultPrompt;
+
     // Redact old tool results before sending the next request to avoid unbounded growth
     // from screenshots/large AX dumps that are no longer needed for model context.
     redactOldToolResults(history);
@@ -245,8 +270,22 @@ async function runConversationLoop(
     const stream = client.messages.stream({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 4096,
-      system:
-        'You are Flux, a macOS AI desktop copilot. You can see the user\'s screen, read window contents, and execute commands. Be concise and helpful. When the user asks about what\'s on their screen, use the read_ax_tree or capture_screen tools.',
+      system: [
+        'You are Flux, a macOS AI desktop copilot. You can see the user\'s screen, read window contents, and execute commands.',
+        'Be concise and helpful.',
+        'When the user asks about what\'s on their screen, use the read_ax_tree or capture_screen tools.',
+        mcp.hasServer('linear')
+          ? [
+              'For Linear work (issues/projects), use the linear__* tools.',
+              linearHint ? `Skill hint: ${linearHint}` : '',
+              'If Linear tools fail due to auth, call linear__setup and explain what to configure.',
+            ]
+              .filter(Boolean)
+              .join(' ')
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
       messages: history,
       tools: tools as Anthropic.Tool[],
     });
@@ -309,8 +348,9 @@ async function runConversationLoop(
     for (const toolUse of toolUseBlocks) {
       console.log(`[${conversationId}] Tool request: ${toolUse.name}`);
 
-      // Send tool request to Swift app and wait for result
-      const result = await requestToolFromSwift(ws, conversationId, toolUse);
+      const result = isNodeTool(toolUse.name, mcp)
+        ? await executeNodeTool(toolUse.name, toolUse.input, mcp)
+        : await requestToolFromSwift(ws, conversationId, toolUse);
       console.log(`[${conversationId}] Tool result for ${toolUse.name}: ${result.substring(0, 100)}...`);
 
       toolResults.push({

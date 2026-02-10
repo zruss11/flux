@@ -16,6 +16,7 @@ final class AgentBridge: @unchecked Sendable {
     private var reconnectWorkItem: DispatchWorkItem?
 
     private let port: Int
+    private var lastSentLinearMcpToken: String = ""
 
     init(port: Int = 7847) {
         self.port = port
@@ -40,6 +41,9 @@ final class AgentBridge: @unchecked Sendable {
         let storedKey = UserDefaults.standard.string(forKey: "anthropicApiKey") ?? ""
         sendApiKey(storedKey)
 
+        // Send MCP auth config proactively; doesn't depend on receiving a message first.
+        sendMcpAuthIfNeeded()
+
         receiveMessage()
     }
 
@@ -55,6 +59,9 @@ final class AgentBridge: @unchecked Sendable {
     }
 
     func sendChatMessage(conversationId: String, content: String) {
+        // Keep sidecar config in sync (user may have edited settings since connect).
+        sendMcpAuthIfNeeded()
+
         let message: [String: Any] = [
             "type": "chat",
             "conversationId": conversationId,
@@ -93,6 +100,20 @@ final class AgentBridge: @unchecked Sendable {
                 self?.handleDisconnect()
             }
         }
+    }
+
+    private func sendMcpAuthIfNeeded() {
+        let token = UserDefaults.standard.string(forKey: "linearMcpToken") ?? ""
+        guard token != lastSentLinearMcpToken else { return }
+
+        lastSentLinearMcpToken = token
+
+        let message: [String: Any] = [
+            "type": "mcp_auth",
+            "serverId": "linear",
+            "token": token
+        ]
+        send(message)
     }
 
     private func receiveMessage() {
