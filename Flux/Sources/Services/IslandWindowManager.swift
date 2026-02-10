@@ -26,6 +26,7 @@ final class IslandWindowManager: ObservableObject {
     private var hostingView: PassThroughHostingView<IslandView>?
     @Published var isExpanded = false
     @Published var isHovering = false
+    @Published var expandedContentSize = CGSize(width: 480, height: 100)
     private var targetScreen: NSScreen?
     private var notchGeometry: NotchGeometry?
 
@@ -142,7 +143,14 @@ final class IslandWindowManager: ObservableObject {
         guard !isExpanded else { return }
         isExpanded = true
         panel?.ignoresMouseEvents = false
-        NSApp.activate(ignoringOtherApps: false)
+        NSApp.activate(ignoringOtherApps: true)
+        panel?.makeKey()
+    }
+
+    /// Ensure the panel is key and app is active (for text field focus)
+    func makeKeyIfNeeded() {
+        guard isExpanded else { return }
+        NSApp.activate(ignoringOtherApps: true)
         panel?.makeKey()
     }
 
@@ -202,8 +210,7 @@ final class IslandWindowManager: ObservableObject {
                     }
                 } else {
                     // Click outside panel → collapse and re-post click
-                    let expandedSize = CGSize(width: 480, height: 540)
-                    if geometry.isPointOutsidePanel(mouseLocation, size: expandedSize) {
+                    if geometry.isPointOutsidePanel(mouseLocation, size: self.expandedContentSize) {
                         self.collapse()
                         self.repostClick(at: mouseLocation)
                     }
@@ -248,8 +255,8 @@ final class IslandWindowManager: ObservableObject {
         let nSize = notchSize
 
         if isExpanded {
-            let expandedWidth: CGFloat = min(screenWidth * 0.5, 520)
-            let expandedHeight: CGFloat = 560
+            let expandedWidth = expandedContentSize.width + 40
+            let expandedHeight = expandedContentSize.height + 20
             let x = (screenWidth - expandedWidth) / 2
             let y = windowHeight - expandedHeight
             return CGRect(x: x, y: y, width: expandedWidth, height: expandedHeight)

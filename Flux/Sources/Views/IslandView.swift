@@ -33,10 +33,24 @@ struct IslandView: View {
     private var closedWidth: CGFloat { notchSize.width }
     private var closedHeight: CGFloat { notchSize.height }
     private var expandedWidth: CGFloat { 480 }
-    private var expandedHeight: CGFloat { 540 }
+    private let maxExpandedHeight: CGFloat = 540
+    private let minExpandedHeight: CGFloat = 100
 
     private var isExpanded: Bool { windowManager.isExpanded }
     private var isHovering: Bool { windowManager.isHovering }
+
+    private var messageCount: Int {
+        conversationStore.activeConversation?.messages.count ?? 0
+    }
+
+    // Height grows with content: starts at minExpandedHeight, each message adds ~60pt
+    private var expandedHeight: CGFloat {
+        if contentType == .settings {
+            return maxExpandedHeight
+        }
+        let contentHeight = minExpandedHeight + CGFloat(messageCount) * 60
+        return min(contentHeight, maxExpandedHeight)
+    }
 
     private var currentWidth: CGFloat { isExpanded ? expandedWidth : closedWidth }
     private var currentHeight: CGFloat { isExpanded ? expandedHeight : closedHeight }
@@ -72,10 +86,13 @@ struct IslandView: View {
                 )
                 .animation(isExpanded ? openAnimation : closeAnimation, value: isExpanded)
                 .animation(.spring(response: 0.38, dampingFraction: 0.8), value: isHovering)
+                .animation(.spring(response: 0.5, dampingFraction: 0.8), value: messageCount)
+                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
+                windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
                 // Content fades in after the shell has finished its bounce
                 withAnimation(
                     reduceMotion
@@ -87,6 +104,16 @@ struct IslandView: View {
             } else {
                 // Content vanishes quickly, then the shell retracts
                 showExpandedContent = false
+            }
+        }
+        .onChange(of: messageCount) { _, _ in
+            if isExpanded {
+                windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
+            }
+        }
+        .onChange(of: contentType) { _, _ in
+            if isExpanded {
+                windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
             }
         }
     }
@@ -219,30 +246,106 @@ struct IslandSettingsView: View {
     @AppStorage("discordWebhookUrl") private var discordWebhookUrl = ""
     @AppStorage("slackWebhookUrl") private var slackWebhookUrl = ""
 
+    @State private var editingField: EditingField?
+    @FocusState private var fieldFocused: Bool
+
+    private enum EditingField: Hashable {
+        case apiKey, discord, slack
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 2) {
-                settingsRow(
-                    icon: "key.fill",
-                    label: "API Key",
-                    trailing: {
-                        AnyView(
-                            Text(apiKey.isEmpty ? "Not set" : "••••\(apiKey.suffix(4))")
-                                .font(.system(size: 12))
-                                .foregroundStyle(apiKey.isEmpty ? .red.opacity(0.8) : .green.opacity(0.8))
-                        )
+                // API Key
+                if editingField == .apiKey {
+                    editableRow(icon: "key.fill", label: "API Key") {
+                        SecureField("sk-ant-...", text: $apiKey)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onSubmit { editingField = nil }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        editingField = nil
                     }
-                )
+                } else {
+                    settingsRow(
+                        icon: "key.fill",
+                        label: "API Key",
+                        trailing: {
+                            AnyView(
+                                Text(apiKey.isEmpty ? "Not set" : "••••\(apiKey.suffix(4))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(apiKey.isEmpty ? .red.opacity(0.8) : .green.opacity(0.8))
+                            )
+                        }
+                    )
+                    .onTapGesture {
+                        editingField = .apiKey
+                    }
+                }
 
                 divider
 
-                settingsRow(icon: "bubble.left.fill", label: "Discord Webhook", trailing: {
-                    AnyView(statusDot(isSet: !discordWebhookUrl.isEmpty))
-                })
+                // Discord Webhook
+                if editingField == .discord {
+                    editableRow(icon: "bubble.left.fill", label: "Discord") {
+                        TextField("https://discord.com/api/webhooks/...", text: $discordWebhookUrl)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onSubmit { editingField = nil }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        editingField = nil
+                    }
+                } else {
+                    settingsRow(icon: "bubble.left.fill", label: "Discord Webhook", trailing: {
+                        AnyView(statusDot(isSet: !discordWebhookUrl.isEmpty))
+                    })
+                    .onTapGesture {
+                        editingField = .discord
+                    }
+                }
 
-                settingsRow(icon: "number", label: "Slack Webhook", trailing: {
-                    AnyView(statusDot(isSet: !slackWebhookUrl.isEmpty))
-                })
+                // Slack Webhook
+                if editingField == .slack {
+                    editableRow(icon: "number", label: "Slack") {
+                        TextField("https://hooks.slack.com/services/...", text: $slackWebhookUrl)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onSubmit { editingField = nil }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        editingField = nil
+                    }
+                } else {
+                    settingsRow(icon: "number", label: "Slack Webhook", trailing: {
+                        AnyView(statusDot(isSet: !slackWebhookUrl.isEmpty))
+                    })
+                    .onTapGesture {
+                        editingField = .slack
+                    }
+                }
 
                 divider
 
@@ -312,6 +415,40 @@ struct IslandSettingsView: View {
         Circle()
             .fill(isSet ? Color.green.opacity(0.8) : Color.white.opacity(0.2))
             .frame(width: 8, height: 8)
+    }
+
+    private func editableRow<Field: View>(
+        icon: String,
+        label: String,
+        @ViewBuilder field: () -> Field,
+        onDone: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+
+                field()
+            }
+
+            Button {
+                onDone()
+            } label: {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.green.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.06)))
     }
 
     private func settingsRow(
