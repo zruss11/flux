@@ -12,9 +12,23 @@ struct IslandView: View {
     @ObservedObject var windowManager: IslandWindowManager
 
     @State private var contentType: IslandContentType = .chat
+    @State private var showExpandedContent = false
 
-    private let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
-    private let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Shell shape animation: slow, bouncy spring — feels alive, like a liquid blob
+    private var openAnimation: Animation {
+        reduceMotion
+            ? .easeInOut(duration: 0.2)
+            : .spring(response: 0.7, dampingFraction: 0.68, blendDuration: 0)
+    }
+
+    // Close retracts fluidly back into the notch
+    private var closeAnimation: Animation {
+        reduceMotion
+            ? .easeInOut(duration: 0.15)
+            : .spring(response: 0.45, dampingFraction: 0.85, blendDuration: 0)
+    }
 
     private var closedWidth: CGFloat { notchSize.width }
     private var closedHeight: CGFloat { notchSize.height }
@@ -30,10 +44,17 @@ struct IslandView: View {
     private var topRadius: CGFloat { isExpanded ? 19 : 6 }
     private var bottomRadius: CGFloat { isExpanded ? 24 : 14 }
 
+    // Hover "breathe" — subtle width bump to hint interactivity
+    private var hoverWidthBoost: CGFloat { (!isExpanded && isHovering) ? 8 : 0 }
+    private var hoverHeightBoost: CGFloat { (!isExpanded && isHovering) ? 2 : 0 }
+
     var body: some View {
         ZStack(alignment: .top) {
             notchContent
-                .frame(maxWidth: currentWidth, maxHeight: currentHeight)
+                .frame(
+                    maxWidth: currentWidth + hoverWidthBoost,
+                    maxHeight: currentHeight + hoverHeightBoost
+                )
                 .padding(.horizontal, isExpanded ? topRadius : bottomRadius)
                 .padding([.horizontal, .bottom], isExpanded ? 12 : 0)
                 .background(.black)
@@ -50,8 +71,24 @@ struct IslandView: View {
                     y: isExpanded ? 8 : 2
                 )
                 .animation(isExpanded ? openAnimation : closeAnimation, value: isExpanded)
+                .animation(.spring(response: 0.38, dampingFraction: 0.8), value: isHovering)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onChange(of: isExpanded) { _, expanded in
+            if expanded {
+                // Content fades in after the shell has finished its bounce
+                withAnimation(
+                    reduceMotion
+                        ? .easeIn(duration: 0.1)
+                        : .smooth(duration: 0.5).delay(0.3)
+                ) {
+                    showExpandedContent = true
+                }
+            } else {
+                // Content vanishes quickly, then the shell retracts
+                showExpandedContent = false
+            }
+        }
     }
 
     @ViewBuilder
@@ -62,7 +99,20 @@ struct IslandView: View {
                     .frame(height: max(24, closedHeight))
 
                 expandedBody
+                    .opacity(showExpandedContent ? 1 : 0)
+                    .scaleEffect(
+                        showExpandedContent ? 1 : 0.96,
+                        anchor: .top
+                    )
             }
+            .transition(
+                .asymmetric(
+                    insertion: .scale(scale: 0.92, anchor: .top)
+                        .combined(with: .opacity)
+                        .animation(.smooth(duration: 0.4)),
+                    removal: .opacity.animation(.easeOut(duration: 0.12))
+                )
+            )
         } else {
             closedHeaderContent
         }
