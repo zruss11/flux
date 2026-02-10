@@ -16,7 +16,12 @@ interface ToolResultMessage {
   toolResult: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage;
+interface SetApiKeyMessage {
+  type: 'set_api_key';
+  apiKey: string;
+}
+
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -53,10 +58,11 @@ const MAX_RETAINED_TEXT_CHARS = 20_000;
 
 let activeClient: WebSocket | null = null;
 let anthropic: Anthropic | null = null;
+let runtimeApiKey: string | null = null;
 
 function getAnthropicClient(): Anthropic {
   if (!anthropic) {
-    anthropic = new Anthropic();
+    anthropic = new Anthropic(runtimeApiKey ? { apiKey: runtimeApiKey } : undefined);
   }
   return anthropic;
 }
@@ -172,6 +178,11 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
       break;
     case 'tool_result':
       handleToolResult(ws, message);
+      break;
+    case 'set_api_key':
+      runtimeApiKey = message.apiKey;
+      anthropic = null; // reset so next call uses the new key
+      console.log('API key updated from Swift app');
       break;
     default:
       console.warn('Unknown message type:', (message as Record<string, unknown>).type);

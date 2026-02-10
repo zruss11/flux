@@ -3,6 +3,7 @@ import SwiftUI
 @preconcurrency import ApplicationServices
 import Speech
 import AVFoundation
+import AppKit
 
 struct OnboardingView: View {
     var onComplete: () -> Void
@@ -10,6 +11,8 @@ struct OnboardingView: View {
     @State private var accessibilityGranted = false
     @State private var screenRecordingGranted = false
     @State private var microphoneGranted = false
+    @State private var didRequestAccessibility = UserDefaults.standard.bool(forKey: "didRequestAccessibility")
+    @State private var didRequestScreenRecording = UserDefaults.standard.bool(forKey: "didRequestScreenRecording")
 
     var allPermissionsGranted: Bool {
         accessibilityGranted && screenRecordingGranted && microphoneGranted
@@ -29,6 +32,20 @@ struct OnboardingView: View {
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+
+#if DEBUG
+                VStack(spacing: 4) {
+                    Text("Bundle: \(Bundle.main.bundleIdentifier ?? "unknown")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text("Path: \(Bundle.main.bundleURL.path)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+#endif
             }
 
             VStack(spacing: 16) {
@@ -41,6 +58,8 @@ struct OnboardingView: View {
                         let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue()
                         let options = [promptKey: true] as CFDictionary
                         _ = AXIsProcessTrustedWithOptions(options)
+                        didRequestAccessibility = true
+                        UserDefaults.standard.set(true, forKey: "didRequestAccessibility")
                     }
                 )
 
@@ -51,6 +70,8 @@ struct OnboardingView: View {
                     isGranted: screenRecordingGranted,
                     onGrant: {
                         CGRequestScreenCaptureAccess()
+                        didRequestScreenRecording = true
+                        UserDefaults.standard.set(true, forKey: "didRequestScreenRecording")
                     }
                 )
 
@@ -60,8 +81,8 @@ struct OnboardingView: View {
                     icon: "mic.fill",
                     isGranted: microphoneGranted,
                     onGrant: {
-                        SFSpeechRecognizer.requestAuthorization { _ in }
-                        AVCaptureDevice.requestAccess(for: .audio) { _ in }
+                        PermissionRequests.requestSpeechAuthorization { _ in }
+                        PermissionRequests.requestMicrophoneAccess { _ in }
                     }
                 )
             }
@@ -74,16 +95,44 @@ struct OnboardingView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             } else {
-                Text("Grant all permissions above to continue")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 8) {
+                    Text("Grant all permissions above to continue")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if didRequestAccessibility && !accessibilityGranted {
+                        Text("macOS may require restarting Flux after enabling Accessibility.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Button("Restart Flux") {
+                            relaunch()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
+                    if didRequestScreenRecording && !screenRecordingGranted {
+                        Text("macOS may require restarting Flux after enabling Screen Recording.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Button("Restart Flux") {
+                            relaunch()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
             }
         }
         .padding(40)
         .frame(width: 500, height: 520)
         .task {
             while !Task.isCancelled {
-                checkPermissions()
+                await MainActor.run {
+                    checkPermissions()
+                }
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -92,7 +141,17 @@ struct OnboardingView: View {
     private func checkPermissions() {
         accessibilityGranted = AXIsProcessTrusted()
         screenRecordingGranted = CGPreflightScreenCaptureAccess()
-        microphoneGranted = SFSpeechRecognizer.authorizationStatus() == .authorized
+        microphoneGranted =
+            SFSpeechRecognizer.authorizationStatus() == .authorized
+            && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
+    private func relaunch() {
+        let appURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in
+            NSApp.terminate(nil)
+        }
     }
 }
 
