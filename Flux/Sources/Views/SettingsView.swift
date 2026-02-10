@@ -4,6 +4,7 @@ struct SettingsView: View {
     @AppStorage("anthropicApiKey") private var apiKey = ""
     @AppStorage("discordWebhookUrl") private var discordWebhookUrl = ""
     @AppStorage("slackWebhookUrl") private var slackWebhookUrl = ""
+    @AppStorage("linearMcpToken") private var linearMcpToken = ""
 
     var body: some View {
         Form {
@@ -14,6 +15,15 @@ struct SettingsView: View {
                 Link("Get API Key",
                      destination: URL(string: "https://console.anthropic.com/settings/keys")!)
                     .font(.caption)
+            }
+
+            Section("MCP") {
+                SecureField("Linear MCP Token", text: $linearMcpToken)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("Used for Linear issue/project tools in the agent sidecar.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Integrations") {
