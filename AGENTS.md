@@ -16,15 +16,18 @@ Flux — a macOS-native AI desktop copilot with a Dynamic Island-style notch ove
 ## Build & Run
 ```bash
 # Build Swift app
-xcodebuild -scheme Flux -configuration Debug build
+cd Flux && xcodebuild -scheme Flux -configuration Debug -destination "platform=macOS" build
 
 # Run Node sidecar
 cd sidecar && npm install && npm start
+
+# Or run both (sidecar + build + launch) via helper script
+./scripts/dev.sh
 ```
 
 ## Test Commands (Backpressure)
 ```bash
-xcodebuild -scheme Flux -configuration Debug build 2>&1 | tail -5
+cd Flux && xcodebuild -scheme Flux -configuration Debug -destination "platform=macOS" build 2>&1 | tail -5
 ```
 
 ## Key References
