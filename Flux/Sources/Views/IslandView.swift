@@ -245,12 +245,13 @@ struct IslandSettingsView: View {
     @AppStorage("anthropicApiKey") private var apiKey = ""
     @AppStorage("discordWebhookUrl") private var discordWebhookUrl = ""
     @AppStorage("slackWebhookUrl") private var slackWebhookUrl = ""
+    @AppStorage("linearMcpToken") private var linearMcpToken = ""
 
     @State private var editingField: EditingField?
     @FocusState private var fieldFocused: Bool
 
     private enum EditingField: Hashable {
-        case apiKey, discord, slack
+        case apiKey, linearToken, discord, slack
     }
 
     var body: some View {
@@ -288,6 +289,43 @@ struct IslandSettingsView: View {
                     )
                     .onTapGesture {
                         editingField = .apiKey
+                    }
+                }
+
+                divider
+
+                // Linear MCP Token
+                if editingField == .linearToken {
+                    editableRow(icon: "rectangle.connected.to.line.below", label: "Linear MCP Token") {
+                        SecureField("...", text: $linearMcpToken)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onSubmit { editingField = nil }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        editingField = nil
+                    }
+                } else {
+                    settingsRow(
+                        icon: "rectangle.connected.to.line.below",
+                        label: "Linear MCP Token",
+                        trailing: {
+                            AnyView(
+                                Text(linearMcpToken.isEmpty ? "Not set" : "••••\(linearMcpToken.suffix(4))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(linearMcpToken.isEmpty ? .red.opacity(0.8) : .green.opacity(0.8))
+                            )
+                        }
+                    )
+                    .onTapGesture {
+                        editingField = .linearToken
                     }
                 }
 
