@@ -36,6 +36,10 @@ final class AgentBridge: @unchecked Sendable {
         self.webSocketTask = task
         task.resume()
 
+        // Send API key immediately on connection (don't wait for first receive)
+        let storedKey = UserDefaults.standard.string(forKey: "anthropicApiKey") ?? ""
+        sendApiKey(storedKey)
+
         receiveMessage()
     }
 
@@ -100,9 +104,6 @@ final class AgentBridge: @unchecked Sendable {
                 Task { @MainActor in
                     if !self.isConnected {
                         self.isConnected = true
-                        // Send stored API key to sidecar on connect
-                        let storedKey = UserDefaults.standard.string(forKey: "anthropicApiKey") ?? ""
-                        self.sendApiKey(storedKey)
                     }
                     self.reconnectDelay = 1.0
                 }

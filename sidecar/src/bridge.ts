@@ -193,6 +193,16 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
   const { conversationId, content } = message;
   console.log(`[${conversationId}] User: ${content}`);
 
+  // Reject if no API key has been provided yet
+  if (!runtimeApiKey) {
+    sendToClient(ws, {
+      type: 'assistant_message',
+      conversationId,
+      content: 'No Anthropic API key configured. Please set your API key in Settings.',
+    });
+    return;
+  }
+
   // Get or create conversation history
   if (!conversationHistories.has(conversationId)) {
     conversationHistories.set(conversationId, []);

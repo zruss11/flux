@@ -18,8 +18,8 @@ struct NotchGeometry: Sendable {
 
     /// The opened panel rect in screen coordinates for a given size
     func openedScreenRect(for size: CGSize) -> CGRect {
-        let width = size.width - 6
-        let height = size.height - 30
+        let width = size.width + 40
+        let height = size.height + 20
         return CGRect(
             x: screenRect.midX - width / 2,
             y: screenRect.maxY - height,

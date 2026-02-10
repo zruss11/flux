@@ -205,6 +205,12 @@ final class IslandWindowManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
                 guard let self else { return }
+
+                // If the click is inside our own panel, don't run collapse logic
+                if event.window === self.panel {
+                    return
+                }
+
                 let mouseLocation = NSEvent.mouseLocation
 
                 if !self.isExpanded {
