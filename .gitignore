@@ -10,5 +10,7 @@ DerivedData/
 node_modules/
 sidecar/dist/
 sidecar/node_modules/
+sidecar/.env
 .env
 .env.local
+Package.resolved

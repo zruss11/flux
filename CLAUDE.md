@@ -26,10 +26,13 @@ Flux is a macOS-native AI desktop copilot. It sees your screen, hears your voice
 ## Build & Run
 ```bash
 # Swift app
-xcodebuild -scheme Flux -configuration Debug build
+cd Flux && xcodebuild -scheme Flux -configuration Debug -destination "platform=macOS" build
 
 # Node sidecar
 cd sidecar && npm install && npm start
+
+# Or run both (sidecar + build + launch)
+./scripts/dev.sh
 ```
 
 ## Key APIs
