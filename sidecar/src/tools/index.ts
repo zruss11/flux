@@ -74,6 +74,39 @@ export const baseTools: ToolDefinition[] = [
       required: ['command'],
     },
   },
+  {
+    name: 'send_slack_message',
+    description:
+      'Send a message to Slack using the configured Slack bot (requires Slack Bot Token + Channel ID in Flux Settings).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Message text to post' },
+        channel: {
+          type: 'string',
+          description: 'Optional override channel ID (e.g. C123...). Defaults to the configured Slack Channel ID.',
+        },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'send_discord_message',
+    description:
+      'Send a message to Discord using the configured Discord bot (requires Discord Bot Token + Channel ID in Flux Settings).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'Message content to send' },
+        channelId: {
+          type: 'string',
+          description:
+            'Optional override Discord channel ID. Defaults to the configured Discord Channel ID in Flux Settings.',
+        },
+      },
+      required: ['content'],
+    },
+  },
 ];
 
 const mcp = new McpManager();
