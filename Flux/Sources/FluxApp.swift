@@ -27,6 +27,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        SecretMigration.migrateUserDefaultsTokensToKeychainIfNeeded()
+
         setupStatusItem()
 
         let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
@@ -164,8 +166,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         case "send_slack_message":
             let text = input["text"] as? String ?? ""
-            let channelOverride = input["channel"] as? String
-            return await sendSlackMessage(text: text, channelOverride: channelOverride)
+            let channelOverride = (input["channelId"] as? String) ?? (input["channel"] as? String)
+            return await sendSlackMessage(text: text, channelIdOverride: channelOverride)
 
         case "send_discord_message":
             let content = input["content"] as? String ?? ""
@@ -177,10 +179,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func sendSlackMessage(text: String, channelOverride: String?) async -> String {
-        let token = (UserDefaults.standard.string(forKey: "slackBotToken") ?? "")
+    private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {
+        let token = (KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let channel = (channelOverride ?? UserDefaults.standard.string(forKey: "slackChannelId") ?? "")
+        let channel = (channelIdOverride ?? UserDefaults.standard.string(forKey: "slackChannelId") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
@@ -214,8 +216,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let ts = json?["ts"] as? String
 
             if status != 200 || ok != true {
+                let rawText = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let raw = rawText.count > 500 ? String(rawText.prefix(500)) + "…" : rawText
                 let detail = error ?? "HTTP \(status)"
-                return "Slack send failed: \(detail)"
+                return "Slack send failed: \(detail)\(raw.isEmpty ? "" : " - \(raw)")"
             }
 
             return "Slack message sent (ts=\(ts ?? "unknown"))."
@@ -225,7 +230,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func sendDiscordMessage(content: String, channelIdOverride: String?) async -> String {
-        let token = (UserDefaults.standard.string(forKey: "discordBotToken") ?? "")
+        let token = (KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let channelId = (channelIdOverride ?? UserDefaults.standard.string(forKey: "discordChannelId") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)

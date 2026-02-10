@@ -264,12 +264,13 @@ struct IslandSettingsView: View {
     var agentBridge: AgentBridge
 
     @AppStorage("anthropicApiKey") private var apiKey = ""
-    @AppStorage("discordBotToken") private var discordBotToken = ""
     @AppStorage("discordChannelId") private var discordChannelId = ""
-    @AppStorage("slackBotToken") private var slackBotToken = ""
     @AppStorage("slackChannelId") private var slackChannelId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
 
+    @State private var discordBotToken = ""
+    @State private var slackBotToken = ""
+    @State private var secretsLoaded = false
     @State private var editingField: EditingField?
     @FocusState private var fieldFocused: Bool
     @State private var permissionRefreshToken: Int = 0
@@ -368,7 +369,10 @@ struct IslandSettingsView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(.white)
                             .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
+                            .onSubmit {
+                                persistDiscordBotToken()
+                                editingField = nil
+                            }
                             .onAppear {
                                 IslandWindowManager.shared.makeKeyIfNeeded()
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -376,6 +380,7 @@ struct IslandSettingsView: View {
                                 }
                             }
                     } onDone: {
+                        persistDiscordBotToken()
                         editingField = nil
                     }
                 } else {
@@ -429,7 +434,10 @@ struct IslandSettingsView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(.white)
                             .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
+                            .onSubmit {
+                                persistSlackBotToken()
+                                editingField = nil
+                            }
                             .onAppear {
                                 IslandWindowManager.shared.makeKeyIfNeeded()
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -437,6 +445,7 @@ struct IslandSettingsView: View {
                                 }
                             }
                     } onDone: {
+                        persistSlackBotToken()
                         editingField = nil
                     }
                 } else {
@@ -547,9 +556,19 @@ struct IslandSettingsView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
         }
+        .onAppear {
+            loadSecretsIfNeeded()
+        }
         .onChange(of: editingField) { old, _ in
-            if old == .apiKey {
+            switch old {
+            case .apiKey:
                 agentBridge.sendApiKey(apiKey)
+            case .discordBotToken:
+                persistDiscordBotToken()
+            case .slackBotToken:
+                persistSlackBotToken()
+            default:
+                break
             }
         }
         .task {
@@ -653,10 +672,34 @@ struct IslandSettingsView: View {
         [
             "Slack bot setup:",
             "1) Create a Slack app (From scratch) with a Bot user.",
-            "2) Under OAuth & Permissions, add scope: chat:write",
+            "2) Under OAuth & Permissions, add scopes: chat:write (+ chat:write.public for public channels without inviting the bot).",
             "3) Install the app to your workspace and copy the Bot User OAuth Token (xoxb-...).",
-            "4) Add the bot to the channel, then copy the channel ID (starts with C or G).",
+            "4) Copy the channel ID (starts with C or G). Invite the bot for private channels.",
         ].joined(separator: "\n")
+    }
+
+    private func loadSecretsIfNeeded() {
+        guard !secretsLoaded else { return }
+        secretsLoaded = true
+
+        discordBotToken = KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? ""
+        slackBotToken = KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? ""
+    }
+
+    private func persistDiscordBotToken() {
+        do {
+            try KeychainService.setString(discordBotToken, forKey: SecretKeys.discordBotToken)
+        } catch {
+            // Best effort; ignore.
+        }
+    }
+
+    private func persistSlackBotToken() {
+        do {
+            try KeychainService.setString(slackBotToken, forKey: SecretKeys.slackBotToken)
+        } catch {
+            // Best effort; ignore.
+        }
     }
 
     private func editableRow<Field: View>(

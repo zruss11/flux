@@ -54,6 +54,7 @@ Ask Flux to send a test message (e.g. "send a message to Discord saying hello").
 1. In the left sidebar, click **OAuth & Permissions**.
 2. Scroll down to **Scopes → Bot Token Scopes**.
 3. Click **Add an OAuth Scope** and add `chat:write`.
+4. (Optional) To post to **public** channels without inviting the bot, also add `chat:write.public`.
 
 ### 3. Install the App and Copy the Token
 
@@ -63,11 +64,13 @@ Ask Flux to send a test message (e.g. "send a message to Discord saying hello").
 
 > Paste this token into **Flux Settings → Slack Bot Token**.
 
-### 4. Add the Bot to a Channel
+### 4. Add the Bot to a Channel (Private Channels)
 
 1. Open Slack and go to the channel you want Flux to post in.
 2. Type `/invite @YourBotName` (use the name you gave the app).
-3. The bot must be in the channel to post messages.
+3. The bot must be in the channel to post messages in **private** channels.
+
+> For **public** channels, you can either invite the bot or grant `chat:write.public` and post without inviting.
 
 ### 5. Get the Channel ID
 
@@ -94,7 +97,7 @@ Ask Flux to send a test message (e.g. "post to Slack saying hello"). The message
 | **"Invalid token"** | Re-copy the token — make sure there are no extra spaces. Discord tokens are opaque strings; Slack tokens start with `xoxb-`. |
 | **Message not appearing** | Make sure the bot has been invited/added to the target channel. |
 | **"Missing permissions"** (Discord) | Re-invite the bot using the OAuth2 URL with `Send Messages` checked. |
-| **"not_in_channel"** (Slack) | Run `/invite @YourBotName` in the channel. |
+| **"not_in_channel"** (Slack) | Run `/invite @YourBotName` in the channel (required for private channels). For public channels, add `chat:write.public` if you want to post without inviting. |
 | **"channel_not_found"** (Slack) | Double-check the Channel ID. Use the `C` or `G` prefixed ID, not the channel name. |
 | **Bot shows offline** (Discord) | Expected — Flux uses the REST API to send messages, not a persistent WebSocket gateway. The bot will appear offline but can still post. |
 
@@ -102,7 +105,7 @@ Ask Flux to send a test message (e.g. "post to Slack saying hello"). The message
 
 ## Where Tokens Are Stored
 
-Tokens are saved locally in macOS UserDefaults (via Flux Settings). They are **never** sent anywhere except the respective Discord/Slack API endpoints when sending a message. The Node.js sidecar does not store tokens — they are passed from the Swift app at runtime.
+Bot tokens are saved locally in macOS Keychain (via Flux Settings). Channel IDs are saved in macOS UserDefaults. Tokens are **never** sent anywhere except the respective Discord/Slack API endpoints when sending a message. The Node.js sidecar does not store tokens — they are passed from the Swift app at runtime.
 
 ---
 

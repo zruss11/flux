@@ -2,11 +2,13 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("anthropicApiKey") private var apiKey = ""
-    @AppStorage("discordBotToken") private var discordBotToken = ""
     @AppStorage("discordChannelId") private var discordChannelId = ""
-    @AppStorage("slackBotToken") private var slackBotToken = ""
     @AppStorage("slackChannelId") private var slackChannelId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
+
+    @State private var discordBotToken = ""
+    @State private var slackBotToken = ""
+    @State private var secretsLoaded = false
 
     var body: some View {
         Form {
@@ -31,6 +33,9 @@ struct SettingsView: View {
             Section("Integrations") {
                 SecureField("Discord Bot Token", text: $discordBotToken)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: discordBotToken) {
+                        persistDiscordBotToken()
+                    }
 
                 TextField("Discord Channel ID", text: $discordChannelId)
                     .textFieldStyle(.roundedBorder)
@@ -38,6 +43,9 @@ struct SettingsView: View {
 
                 SecureField("Slack Bot Token", text: $slackBotToken)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: slackBotToken) {
+                        persistSlackBotToken()
+                    }
 
                 TextField("Slack Channel ID", text: $slackChannelId)
                     .textFieldStyle(.roundedBorder)
@@ -47,6 +55,9 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 450)
         .navigationTitle("Settings")
+        .onAppear {
+            loadSecretsIfNeeded()
+        }
     }
 
     private var discordBotHelp: String {
@@ -57,7 +68,7 @@ struct SettingsView: View {
             "3) Invite the bot to your server with \"Send Messages\" permission.",
             "4) Enable Developer Mode in Discord, then right click a channel -> Copy Channel ID.",
             "",
-            "Full guide: https://github.com/zruss11/flux/blob/main/docs/bot-setup.md",
+            "Full guide: docs/bot-setup.md",
         ].joined(separator: "\n")
     }
 
@@ -65,11 +76,35 @@ struct SettingsView: View {
         [
             "Slack bot setup:",
             "1) Create a Slack app (From scratch) with a Bot user.",
-            "2) Under OAuth & Permissions, add scope: chat:write",
+            "2) Under OAuth & Permissions, add scopes: chat:write (+ chat:write.public for public channels without inviting the bot).",
             "3) Install the app and copy the Bot User OAuth Token (xoxb-...).",
-            "4) Add the bot to the channel, then copy the channel ID (starts with C or G).",
+            "4) Copy the channel ID (starts with C or G). Invite the bot for private channels.",
             "",
-            "Full guide: https://github.com/zruss11/flux/blob/main/docs/bot-setup.md",
+            "Full guide: docs/bot-setup.md",
         ].joined(separator: "\n")
+    }
+
+    private func loadSecretsIfNeeded() {
+        guard !secretsLoaded else { return }
+        secretsLoaded = true
+
+        discordBotToken = KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? ""
+        slackBotToken = KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? ""
+    }
+
+    private func persistDiscordBotToken() {
+        do {
+            try KeychainService.setString(discordBotToken, forKey: SecretKeys.discordBotToken)
+        } catch {
+            // Best effort; ignore.
+        }
+    }
+
+    private func persistSlackBotToken() {
+        do {
+            try KeychainService.setString(slackBotToken, forKey: SecretKeys.slackBotToken)
+        } catch {
+            // Best effort; ignore.
+        }
     }
 }

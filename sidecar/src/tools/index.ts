@@ -77,14 +77,18 @@ export const baseTools: ToolDefinition[] = [
   {
     name: 'send_slack_message',
     description:
-      'Send a message to Slack using the configured Slack bot (requires Slack Bot Token + Channel ID in Flux Settings).',
+      'Send a message to Slack using the configured Slack bot (requires Slack Bot Token + Channel ID in Flux Settings). For posting to public channels without inviting the bot, add the Slack scope chat:write.public.',
     input_schema: {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'Message text to post' },
-        channel: {
+        channelId: {
           type: 'string',
           description: 'Optional override channel ID (e.g. C123...). Defaults to the configured Slack Channel ID.',
+        },
+        channel: {
+          type: 'string',
+          description: '[Deprecated] Alias for channelId.',
         },
       },
       required: ['text'],
