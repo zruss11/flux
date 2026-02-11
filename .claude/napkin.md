@@ -7,6 +7,7 @@
 | 2026-02-11 | me | Used `security find-identity` without limiting keychains in `scripts/dev.sh`, which can trigger repeated admin-password prompts for the System keychain. | Only search user keychains (for example via `security list-keychains -d user`) or require an explicit `FLUX_CODESIGN_IDENTITY`. |
 | 2026-02-11 | me | Used Bash 4-only `mapfile` in a script that may run under macOS's default Bash 3.2. | Use a `while IFS= read -r ...` loop (Bash 3.2-compatible) or explicitly depend on a newer Bash. |
 | 2026-02-11 | me | Accidentally used `require()` inside an ESM TypeScript module (`sidecar/src/skills/loadInstalledSkills.ts`). | In ESM, use `import` and async `fs.stat`/`fs.access` checks instead of `require()`. |
+| 2026-02-11 | me | Posted an in-progress status update in the `final` channel before work was complete. | Use `commentary` for progress updates and reserve `final` for the end-of-turn results summary. |
 
 ## User Preferences
 - (accumulate here as you learn them)
@@ -15,7 +16,8 @@
 - For new agent tools, add the tool definition in `sidecar/src/tools/index.ts` and implement the matching `toolName` case in `Flux/Sources/FluxApp.swift`'s `handleToolRequest` switch.
 - For lightweight macOS tooltips in SwiftUI settings, attach `.help("...")` to an `Image(systemName: "info.circle")` in the row trailing UI.
 - Store third-party bot tokens in macOS Keychain (not `UserDefaults`), and migrate/remove any legacy `UserDefaults` values at app launch.
-- For SpriteKit inside a SwiftUI `SpriteView` hosted in a non-activating `NSPanel`, don’t rely on the per-frame `update(_:)` loop or off-screen spawn; spawn nodes within visible bounds in `didMove`/`didChangeSize` so content renders even if physics/time is throttled.
+- For SpriteKit inside a SwiftUI `SpriteView` hosted in a non-activating `NSPanel`, don't rely on the per-frame `update(_:)` loop or off-screen spawn; spawn nodes within visible bounds in `didMove`/`didChangeSize` so content renders even if physics/time is throttled.
+- For `AVAudioNode.installTap(...)` used from a `@MainActor` type, build the tap block in a `nonisolated` helper. Otherwise the closure inherits `@MainActor` isolation and can SIGTRAP on macOS 26 when CoreAudio invokes it off-main.
 
 ## Patterns That Don't Work
 - (approaches that failed and why)

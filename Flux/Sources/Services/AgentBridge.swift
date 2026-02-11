@@ -7,6 +7,8 @@ final class AgentBridge: @unchecked Sendable {
     var onAssistantMessage: ((String, String) -> Void)?  // conversationId, content
     var onToolRequest: ((String, String, String, [String: Any]) -> Void)?  // conversationId, toolUseId, toolName, input
     var onStreamChunk: ((String, String) -> Void)?  // conversationId, content
+    var onToolUseStart: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, inputSummary
+    var onToolUseComplete: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, resultPreview
 
     private var webSocketTask: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .default)
@@ -174,6 +176,24 @@ final class AgentBridge: @unchecked Sendable {
             if let content = json["content"] as? String {
                 Task { @MainActor in
                     self.onStreamChunk?(conversationId, content)
+                }
+            }
+
+        case "tool_use_start":
+            if let toolUseId = json["toolUseId"] as? String,
+               let toolName = json["toolName"] as? String,
+               let inputSummary = json["inputSummary"] as? String {
+                Task { @MainActor in
+                    self.onToolUseStart?(conversationId, toolUseId, toolName, inputSummary)
+                }
+            }
+
+        case "tool_use_complete":
+            if let toolUseId = json["toolUseId"] as? String,
+               let toolName = json["toolName"] as? String,
+               let resultPreview = json["resultPreview"] as? String {
+                Task { @MainActor in
+                    self.onToolUseComplete?(conversationId, toolUseId, toolName, resultPreview)
                 }
             }
 

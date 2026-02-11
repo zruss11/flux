@@ -26,6 +26,7 @@ struct ChatView: View {
     @State private var selectedSkillDirNames: Set<String> = []
     @State private var skillSearchQuery = ""
     @FocusState private var isInputFocused: Bool
+    @State private var showMicPermissionAlert = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,9 +35,18 @@ struct ChatView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if let conversation = conversationStore.activeConversation {
-                            ForEach(conversation.messages) { message in
-                                MessageBubble(message: message)
-                                    .id(message.id)
+                            ForEach(conversation.displaySegments) { segment in
+                                Group {
+                                    switch segment {
+                                    case .userMessage(let message):
+                                        MessageBubble(message: message)
+                                    case .assistantText(let message):
+                                        MessageBubble(message: message)
+                                    case .toolCallGroup(_, let calls):
+                                        ToolCallGroupView(calls: calls)
+                                    }
+                                }
+                                .id(segment.id)
                             }
                         }
                     }
@@ -44,9 +54,10 @@ struct ChatView: View {
                     .padding(.vertical, 8)
                 }
                 .onChange(of: conversationStore.activeConversation?.messages.count) { _, _ in
-                    if let lastMessage = conversationStore.activeConversation?.messages.last {
+                    if let conversation = conversationStore.activeConversation,
+                       let lastSegment = conversation.displaySegments.last {
                         withAnimation {
-                            scrollProxy.scrollTo(lastMessage.id, anchor: .bottom)
+                            scrollProxy.scrollTo(lastSegment.id, anchor: .bottom)
                         }
                     }
                 }
@@ -56,12 +67,19 @@ struct ChatView: View {
             HStack(spacing: 8) {
                 // Mic button
                 Button {
-                    if voiceInput.isRecording {
-                        voiceInput.stopRecording()
-                    } else {
-                        voiceInput.startRecording { transcript in
-                            inputText = transcript
-                            sendMessage()
+                    Task {
+                        if voiceInput.isRecording {
+                            voiceInput.stopRecording()
+                        } else {
+                            let granted = await voiceInput.ensureMicrophonePermission()
+                            guard granted else {
+                                showMicPermissionAlert = true
+                                return
+                            }
+                            await voiceInput.startRecording { transcript in
+                                inputText = transcript
+                                sendMessage()
+                            }
                         }
                     }
                 } label: {
@@ -165,6 +183,21 @@ struct ChatView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isInputFocused = true
             }
+        }
+        .onChange(of: voiceInput.transcript) { _, newValue in
+            // While recording, show partial (live) transcription as the user speaks.
+            guard voiceInput.isRecording else { return }
+            inputText = newValue
+        }
+        .alert("Microphone Access Required", isPresented: $showMicPermissionAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Flux needs microphone access for voice input. Please enable it in System Settings > Privacy & Security > Microphone.")
         }
     }
 

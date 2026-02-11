@@ -5,6 +5,7 @@ struct SettingsView: View {
     @AppStorage("discordChannelId") private var discordChannelId = ""
     @AppStorage("slackChannelId") private var slackChannelId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
+    @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
@@ -19,6 +20,17 @@ struct SettingsView: View {
                 Link("Get API Key",
                      destination: URL(string: "https://console.anthropic.com/settings/keys")!)
                     .font(.caption)
+
+                Picker("Chat Title Creator", selection: $chatTitleCreatorRaw) {
+                    ForEach(ChatTitleCreator.allCases) { creator in
+                        Text(creator.displayName).tag(creator.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text("Controls how Flux generates titles for new chats.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("MCP") {

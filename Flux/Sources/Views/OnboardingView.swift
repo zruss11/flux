@@ -1,7 +1,6 @@
 import SwiftUI
 @preconcurrency import ScreenCaptureKit
 @preconcurrency import ApplicationServices
-import Speech
 import AVFoundation
 import AppKit
 
@@ -81,7 +80,6 @@ struct OnboardingView: View {
                     icon: "mic.fill",
                     isGranted: microphoneGranted,
                     onGrant: {
-                        PermissionRequests.requestSpeechAuthorization { _ in }
                         PermissionRequests.requestMicrophoneAccess { _ in }
                     }
                 )
@@ -141,9 +139,7 @@ struct OnboardingView: View {
     private func checkPermissions() {
         accessibilityGranted = AXIsProcessTrusted()
         screenRecordingGranted = CGPreflightScreenCaptureAccess()
-        microphoneGranted =
-            SFSpeechRecognizer.authorizationStatus() == .authorized
-            && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
     private func relaunch() {

@@ -102,17 +102,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupBridgeCallbacks() {
         agentBridge.onAssistantMessage = { [weak self] conversationId, content in
             guard let self, let uuid = UUID(uuidString: conversationId) else { return }
-            self.conversationStore.addMessage(to: uuid, role: .assistant, content: content)
+            Task { @MainActor in
+                self.conversationStore.addMessage(to: uuid, role: .assistant, content: content)
+            }
         }
 
         agentBridge.onStreamChunk = { [weak self] conversationId, content in
             guard let self, let uuid = UUID(uuidString: conversationId) else { return }
 
-            if let conversation = self.conversationStore.conversations.first(where: { $0.id == uuid }),
-               conversation.messages.last?.role == .assistant {
-                self.conversationStore.appendToLastAssistantMessage(in: uuid, chunk: content)
-            } else {
-                self.conversationStore.addMessage(to: uuid, role: .assistant, content: content)
+            Task { @MainActor in
+                if let conversation = self.conversationStore.conversations.first(where: { $0.id == uuid }),
+                   conversation.messages.last?.role == .assistant {
+                    self.conversationStore.appendToLastAssistantMessage(in: uuid, chunk: content)
+                } else {
+                    self.conversationStore.addMessage(to: uuid, role: .assistant, content: content)
+                }
             }
         }
 
@@ -129,6 +133,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     toolName: toolName,
                     result: result
                 )
+            }
+        }
+
+        agentBridge.onToolUseStart = { [weak self] conversationId, toolUseId, toolName, inputSummary in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            let info = ToolCallInfo(id: toolUseId, toolName: toolName, inputSummary: inputSummary)
+            Task { @MainActor in
+                self.conversationStore.addToolCall(to: uuid, info: info)
+            }
+        }
+
+        agentBridge.onToolUseComplete = { [weak self] conversationId, toolUseId, _, resultPreview in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                self.conversationStore.completeToolCall(in: uuid, toolUseId: toolUseId, resultPreview: resultPreview)
             }
         }
     }

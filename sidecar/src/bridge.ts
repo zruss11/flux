@@ -44,13 +44,29 @@ interface ToolRequestMessage {
   input: Record<string, unknown>;
 }
 
+interface ToolUseStartMessage {
+  type: 'tool_use_start';
+  conversationId: string;
+  toolUseId: string;
+  toolName: string;
+  inputSummary: string;
+}
+
+interface ToolUseCompleteMessage {
+  type: 'tool_use_complete';
+  conversationId: string;
+  toolUseId: string;
+  toolName: string;
+  resultPreview: string;
+}
+
 interface StreamChunkMessage {
   type: 'stream_chunk';
   conversationId: string;
   content: string;
 }
 
-type OutgoingMessage = AssistantMessage | ToolRequestMessage | StreamChunkMessage;
+type OutgoingMessage = AssistantMessage | ToolRequestMessage | ToolUseStartMessage | ToolUseCompleteMessage | StreamChunkMessage;
 
 type MessageParam = Anthropic.MessageParam;
 type ContentBlockParam = Anthropic.ContentBlockParam;
@@ -349,10 +365,29 @@ async function runConversationLoop(
     for (const toolUse of toolUseBlocks) {
       console.log(`[${conversationId}] Tool request: ${toolUse.name}`);
 
+      // Notify Swift UI that a tool call is starting
+      const inputSummary = summarizeToolInput(toolUse.name, toolUse.input);
+      sendToClient(ws, {
+        type: 'tool_use_start',
+        conversationId,
+        toolUseId: toolUse.id,
+        toolName: toolUse.name,
+        inputSummary,
+      });
+
       const result = isNodeTool(toolUse.name, mcp)
         ? await executeNodeTool(toolUse.name, toolUse.input, mcp)
         : await requestToolFromSwift(ws, conversationId, toolUse);
       console.log(`[${conversationId}] Tool result for ${toolUse.name}: ${result.substring(0, 100)}...`);
+
+      // Notify Swift UI that the tool call is complete
+      sendToClient(ws, {
+        type: 'tool_use_complete',
+        conversationId,
+        toolUseId: toolUse.id,
+        toolName: toolUse.name,
+        resultPreview: result.substring(0, 200),
+      });
 
       toolResults.push({
         type: 'tool_result',
@@ -404,4 +439,28 @@ function handleToolResult(_ws: WebSocket, message: ToolResultMessage): void {
   } else {
     console.warn(`No pending tool result for key: ${key}`);
   }
+}
+
+/**
+ * Produce a short human-readable summary of a tool call's input for display
+ * in the UI (e.g. the file path for read_file, the command for shell, etc.).
+ */
+function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
+  // Try common field names that make good summaries
+  const candidates = ['path', 'file', 'target', 'command', 'script', 'query', 'url', 'text', 'content'];
+  for (const key of candidates) {
+    const val = input[key];
+    if (typeof val === 'string' && val.length > 0) {
+      return val.length > 80 ? val.substring(0, 77) + '...' : val;
+    }
+  }
+
+  // Fallback: show the first string value, or the tool name
+  for (const val of Object.values(input)) {
+    if (typeof val === 'string' && val.length > 0) {
+      return val.length > 80 ? val.substring(0, 77) + '...' : val;
+    }
+  }
+
+  return toolName;
 }

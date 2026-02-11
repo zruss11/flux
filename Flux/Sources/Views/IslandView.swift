@@ -6,6 +6,16 @@ import AppKit
 enum IslandContentType: Equatable {
     case chat
     case settings
+    case history
+    case folderDetail(ChatFolder)
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.chat, .chat), (.settings, .settings), (.history, .history): return true
+        case (.folderDetail(let a), .folderDetail(let b)): return a.id == b.id
+        default: return false
+        }
+    }
 }
 
 struct IslandView: View {
@@ -50,7 +60,10 @@ struct IslandView: View {
 
     private var expandedHeight: CGFloat {
         let effectiveMaxHeight: CGFloat = skillsVisible ? 700 : maxExpandedHeight
-        if contentType == .settings {
+        if contentType == .settings || contentType == .history {
+            return maxExpandedHeight
+        }
+        if case .folderDetail = contentType {
             return maxExpandedHeight
         }
         // No messages yet — compact initial state with just the input row
@@ -190,12 +203,32 @@ struct IslandView: View {
 
     // MARK: - Opened Header
 
+    private var headerTitle: String {
+        switch contentType {
+        case .chat: return "Flux"
+        case .settings: return "Settings"
+        case .history: return "History"
+        case .folderDetail(let folder): return folder.name
+        }
+    }
+
+    private var showBackButton: Bool {
+        contentType != .chat
+    }
+
+    private var backDestination: IslandContentType {
+        switch contentType {
+        case .folderDetail: return .history
+        default: return .chat
+        }
+    }
+
     private var openedHeaderContent: some View {
         HStack(spacing: 10) {
-            if contentType == .settings {
+            if showBackButton {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
-                        contentType = .chat
+                        contentType = backDestination
                     }
                 } label: {
                     Image(systemName: "chevron.left")
@@ -210,21 +243,54 @@ struct IslandView: View {
             Image(systemName: "sparkles")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
-                .padding(.leading, 8)
+                .padding(.leading, showBackButton ? 0 : 8)
 
-            Text(contentType == .settings ? "Settings" : "Flux")
+            Text(headerTitle)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white)
+                .lineLimit(1)
 
             Spacer()
 
             if contentType == .chat {
+                // History button
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        contentType = .history
+                    }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+
+                // Settings button
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         contentType = .settings
                     }
                 } label: {
                     Image(systemName: "gearshape")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if contentType == .history {
+                // New Chat button in history header
+                Button {
+                    conversationStore.startNewConversation()
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        contentType = .chat
+                    }
+                } label: {
+                    Image(systemName: "square.and.pencil")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
@@ -259,6 +325,38 @@ struct IslandView: View {
                     ChatView(conversationStore: conversationStore, agentBridge: agentBridge)
                 case .settings:
                     IslandSettingsView(agentBridge: agentBridge)
+                case .history:
+                    ChatHistoryView(
+                        conversationStore: conversationStore,
+                        onOpenChat: { id in
+                            conversationStore.openConversation(id: id)
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                contentType = .chat
+                            }
+                        },
+                        onNewChat: {
+                            conversationStore.startNewConversation()
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                contentType = .chat
+                            }
+                        },
+                        onOpenFolder: { folder in
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                contentType = .folderDetail(folder)
+                            }
+                        }
+                    )
+                case .folderDetail(let folder):
+                    FolderDetailView(
+                        conversationStore: conversationStore,
+                        folder: folder,
+                        onOpenChat: { id in
+                            conversationStore.openConversation(id: id)
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                contentType = .chat
+                            }
+                        }
+                    )
                 }
             }
             .transition(.opacity.animation(.easeInOut(duration: 0.2)))
@@ -275,6 +373,7 @@ struct IslandSettingsView: View {
     @AppStorage("discordChannelId") private var discordChannelId = ""
     @AppStorage("slackChannelId") private var slackChannelId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
+    @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
@@ -329,6 +428,36 @@ struct IslandSettingsView: View {
                         editingField = .apiKey
                     }
                 }
+
+                divider
+
+                settingsRow(
+                    icon: "text.quote",
+                    label: "Chat Title Creator",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 8) {
+                                Menu {
+                                    ForEach(ChatTitleCreator.allCases) { creator in
+                                        Button(creator.displayName) {
+                                            chatTitleCreatorRaw = creator.rawValue
+                                        }
+                                    }
+                                } label: {
+                                    Text((ChatTitleCreator(rawValue: chatTitleCreatorRaw) ?? .foundationModels).displayName)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.white.opacity(0.75))
+                                }
+                                .menuStyle(.borderlessButton)
+
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.35))
+                                    .help("Controls how Flux generates titles for new chats.")
+                            }
+                        )
+                    }
+                )
 
                 divider
 
