@@ -36,8 +36,11 @@ final class IslandWindowManager: ObservableObject {
     @Published var isExpanded = false
     @Published var isHovering = false
     @Published var expandedContentSize = CGSize(width: 480, height: 100)
+    @Published var hasNotch = true
     private var targetScreen: NSScreen?
     private var notchGeometry: NotchGeometry?
+    /// Distance from screen top to the island (menu bar height on non-notch screens).
+    private(set) var topOffset: CGFloat = 0
 
     private let windowHeight: CGFloat = 850
 
@@ -50,11 +53,12 @@ final class IslandWindowManager: ObservableObject {
 
     var notchSize: CGSize {
         guard let screen = targetScreen ?? preferredNotchScreen() ?? NSScreen.main else {
-            return CGSize(width: 224, height: 38)
+            return CGSize(width: 200, height: 32)
         }
         let safeTop = screen.safeAreaInsets.top
         guard safeTop > 0 else {
-            return CGSize(width: 224, height: 38)
+            // Pill size for non-notch screens
+            return CGSize(width: 200, height: 32)
         }
         let fullWidth = screen.frame.width
         let leftPad = screen.auxiliaryTopLeftArea?.width ?? 0
@@ -67,6 +71,8 @@ final class IslandWindowManager: ObservableObject {
         guard panel == nil else { return }
         guard let screen = preferredNotchScreen() ?? NSScreen.main else { return }
         self.targetScreen = screen
+        self.hasNotch = screen.safeAreaInsets.top > 0
+        self.topOffset = hasNotch ? 0 : (screen.frame.maxY - screen.visibleFrame.maxY)
 
         let screenFrame = screen.frame
         let windowFrame = NSRect(
@@ -87,7 +93,8 @@ final class IslandWindowManager: ObservableObject {
         self.notchGeometry = NotchGeometry(
             deviceNotchRect: deviceNotchRect,
             screenRect: screenFrame,
-            windowHeight: windowHeight
+            windowHeight: windowHeight,
+            topInset: topOffset
         )
 
         let panel = KeyablePanel(
@@ -144,6 +151,8 @@ final class IslandWindowManager: ObservableObject {
         hostingView = nil
         isExpanded = false
         isHovering = false
+        hasNotch = true
+        topOffset = 0
         targetScreen = nil
         notchGeometry = nil
     }
@@ -281,13 +290,13 @@ final class IslandWindowManager: ObservableObject {
             let expandedWidth = expandedContentSize.width + 40
             let expandedHeight = expandedContentSize.height + 20
             let x = (screenWidth - expandedWidth) / 2
-            let y = windowHeight - expandedHeight
+            let y = windowHeight - expandedHeight - topOffset
             return CGRect(x: x, y: y, width: expandedWidth, height: expandedHeight)
         } else {
             let closedWidth = nSize.width + 20
             let closedHeight = nSize.height + 10
             let x = (screenWidth - closedWidth) / 2
-            let y = windowHeight - closedHeight - 5
+            let y = windowHeight - closedHeight - 5 - topOffset
             return CGRect(x: x, y: y, width: closedWidth, height: closedHeight)
         }
     }
