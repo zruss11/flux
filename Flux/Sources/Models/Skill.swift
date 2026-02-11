@@ -51,6 +51,7 @@ struct Skill: Identifiable, Hashable {
         if lower.contains("reminder") { return "bell.fill" }
         if lower.contains("terminal") { return "terminal.fill" }
         if lower.contains("raycast") { return "rays" }
+        if lower.contains("sandbox") || lower.contains("codex") || lower.contains("coding agent") { return "cube.fill" }
         return "sparkle"
     }
 
