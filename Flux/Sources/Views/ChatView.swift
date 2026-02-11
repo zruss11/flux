@@ -145,9 +145,37 @@ struct ChatView: View {
                 )
             }
 
-            SkillsPillButton(isPresented: $showSkills)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
+            // Workspace folder picker + Skills pill on the same line
+            HStack(spacing: 8) {
+                Button {
+                    NotificationCenter.default.post(name: .islandOpenFolderPickerRequested, object: nil)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.6))
+                        Text(conversationStore.workspacePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Select workspace...")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(0.06))
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+
+                SkillsPillButton(isPresented: $showSkills)
+            }
+            .padding(.top, 8)
+            .padding(.bottom, 12)
         }
         .background(
             GeometryReader { geo in

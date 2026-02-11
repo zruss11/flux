@@ -290,7 +290,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         case "run_shell_command":
             let command = input["command"] as? String ?? ""
-            return await toolRunner.executeShellScript(command)
+            return await toolRunner.executeShellScript(command, workingDirectory: conversationStore.workspacePath)
 
         case "send_slack_message":
             let text = input["text"] as? String ?? ""

@@ -61,10 +61,14 @@ final class ToolRunner {
     }
 
     /// Runs a shell script and returns combined stdout/stderr.
-    func executeShellScript(_ script: String) async -> String {
+    func executeShellScript(_ script: String, workingDirectory: String? = nil) async -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-c", script]
+
+        if let dir = workingDirectory {
+            process.currentDirectoryURL = URL(fileURLWithPath: dir)
+        }
 
         let pipe = Pipe()
         process.standardOutput = pipe

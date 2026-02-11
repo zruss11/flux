@@ -46,6 +46,9 @@ final class ConversationStore {
     var activeConversationId: UUID?
     var folders: [ChatFolder] = []
     var summaries: [ConversationSummary] = []
+    var workspacePath: String? {
+        didSet { UserDefaults.standard.set(workspacePath, forKey: "workspacePath") }
+    }
     private var runningConversationIds: Set<UUID> = []
 
     // MARK: - Persistence Paths
@@ -77,6 +80,7 @@ final class ConversationStore {
     // MARK: - Lifecycle
 
     init() {
+        workspacePath = UserDefaults.standard.string(forKey: "workspacePath")
         loadIndex()
     }
 
