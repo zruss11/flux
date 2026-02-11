@@ -4,6 +4,7 @@
 | Date | Source | What Went Wrong | What To Do Instead |
 |------|--------|----------------|-------------------|
 | 2026-02-10 | me | Ran git commands despite an attached review brief saying the full diff/history was already provided. | When a review request includes the full diff/log, review directly from that artifact unless explicitly asked to re-run git commands. |
+| 2026-02-11 | me | Posted an in-progress status update in the `final` channel before work was complete. | Use `commentary` for progress updates and reserve `final` for the end-of-turn results summary. |
 
 ## User Preferences
 - (accumulate here as you learn them)
