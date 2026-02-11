@@ -96,6 +96,7 @@ struct IslandView: View {
 
     private var isExpanded: Bool { windowManager.isExpanded }
     private var isHovering: Bool { windowManager.isHovering }
+    private var hasNotch: Bool { windowManager.hasNotch }
 
     private var messageCount: Int {
         conversationStore.activeConversation?.messages.count ?? 0
@@ -127,6 +128,8 @@ struct IslandView: View {
 
     private var topRadius: CGFloat { isExpanded ? 19 : 6 }
     private var bottomRadius: CGFloat { isExpanded ? 24 : 14 }
+    /// Corner radius used for the pill shape on non-notch screens.
+    private var pillRadius: CGFloat { isExpanded ? 24 : closedHeight / 2 }
 
     // Hover "breathe" — subtle width bump to hint interactivity
     private var hoverWidthBoost: CGFloat { (!isExpanded && isHovering) ? 8 : 0 }
@@ -143,12 +146,24 @@ struct IslandView: View {
                 .padding(.horizontal, isExpanded ? topRadius : bottomRadius)
                 .padding([.horizontal, .bottom], isExpanded ? 12 : 0)
                 .background(.black)
-                .clipShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
+                .clipShape(
+                    hasNotch
+                        ? AnyShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
+                        : AnyShape(RoundedRectangle(cornerRadius: pillRadius, style: .continuous))
+                )
                 .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(.black)
-                        .frame(height: 1)
-                        .padding(.horizontal, topRadius)
+                    if hasNotch {
+                        Rectangle()
+                            .fill(.black)
+                            .frame(height: 1)
+                            .padding(.horizontal, topRadius)
+                    }
+                }
+                .overlay {
+                    if !hasNotch {
+                        RoundedRectangle(cornerRadius: pillRadius, style: .continuous)
+                            .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                    }
                 }
                 .shadow(
                     color: (isExpanded || isHovering) ? .black.opacity(0.7) : .clear,
@@ -161,6 +176,7 @@ struct IslandView: View {
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
                 .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
+                .padding(.top, hasNotch ? 0 : windowManager.topOffset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: isExpanded) { _, expanded in

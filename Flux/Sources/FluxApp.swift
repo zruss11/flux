@@ -114,7 +114,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 self.conversationStore.setConversationRunning(uuid, isRunning: true)
                 if let conversation = self.conversationStore.conversations.first(where: { $0.id == uuid }),
-                   conversation.messages.last?.role == .assistant {
+                   let lastMessage = conversation.messages.last,
+                   lastMessage.role == .assistant,
+                   lastMessage.toolCalls.isEmpty {
                     self.conversationStore.appendToLastAssistantMessage(in: uuid, chunk: content)
                 } else {
                     self.conversationStore.addMessage(to: uuid, role: .assistant, content: content)
