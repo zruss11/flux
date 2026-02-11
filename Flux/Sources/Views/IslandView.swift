@@ -268,13 +268,12 @@ struct IslandView: View {
                     .frame(height: max(24, closedHeight))
 
                 expandedBody
-                    .opacity(showExpandedContent ? 1 : 0)
-                    .scaleEffect(
-                        showExpandedContent ? 1 : 0.96,
-                        anchor: .top
-                    )
             }
-            .opacity(isExpanded ? 1 : 0)
+            .opacity(showExpandedContent ? 1 : 0)
+            .scaleEffect(
+                showExpandedContent ? 1 : 0.96,
+                anchor: .top
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
