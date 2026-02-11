@@ -9,10 +9,11 @@ enum IslandContentType: Equatable {
     case history
     case skills
     case folderDetail(ChatFolder)
+    case folderPicker
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
-        case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills): return true
+        case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills), (.folderPicker, .folderPicker): return true
         case (.folderDetail(let a), .folderDetail(let b)): return a.id == b.id
         default: return false
         }
@@ -104,7 +105,7 @@ struct IslandView: View {
     }
 
     private var expandedHeight: CGFloat {
-        if contentType == .settings || contentType == .history || contentType == .skills {
+        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker {
             return maxExpandedHeight
         }
         if case .folderDetail = contentType {
@@ -252,6 +253,11 @@ struct IslandView: View {
                 contentType = .chat
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .islandOpenFolderPickerRequested)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                contentType = .folderPicker
+            }
+        }
     }
 
     @ViewBuilder
@@ -326,6 +332,7 @@ struct IslandView: View {
         case .history: return "History"
         case .skills: return "Skills"
         case .folderDetail(let folder): return folder.name
+        case .folderPicker: return "Workspace"
         }
     }
 
@@ -500,6 +507,21 @@ struct IslandView: View {
                         folder: folder,
                         onOpenChat: { id in
                             conversationStore.openConversation(id: id)
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                contentType = .chat
+                            }
+                        }
+                    )
+                case .folderPicker:
+                    WorkspaceFolderPickerView(
+                        conversationStore: conversationStore,
+                        onSelect: { url in
+                            conversationStore.workspacePath = url.path
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                contentType = .chat
+                            }
+                        },
+                        onCancel: {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 contentType = .chat
                             }
