@@ -58,6 +58,57 @@ final class AccessibilityReader {
         NSWorkspace.shared.frontmostApplication?.localizedName
     }
 
+    func insertTextAtFocusedField(_ text: String) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let systemWide = AXUIElementCreateSystemWide()
+
+        var focusedElement: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedElement)
+        guard result == .success, let element = focusedElement else { return false }
+        guard CFGetTypeID(element) == AXUIElementGetTypeID() else { return false }
+
+        let axElement = element as! AXUIElement
+
+        // Attempt 1: Set via kAXValueAttribute
+        let valueResult = AXUIElementSetAttributeValue(axElement, kAXValueAttribute as CFString, text as CFTypeRef)
+        if valueResult == .success {
+            return true
+        }
+
+        // Attempt 2: Set via kAXSelectedTextAttribute
+        let selectedResult = AXUIElementSetAttributeValue(axElement, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
+        if selectedResult == .success {
+            return true
+        }
+
+        // Attempt 3: Pasteboard fallback (simulate Cmd+V)
+        let savedPasteboard = NSPasteboard.general.string(forType: .string)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+
+        let source = CGEventSource(stateID: .hidSystemState)
+        let vKeyCode: CGKeyCode = 9
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true)
+        keyDown?.flags = .maskCommand
+        keyDown?.post(tap: .cghidEventTap)
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false)
+        keyUp?.flags = .maskCommand
+        keyUp?.post(tap: .cghidEventTap)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            if let original = savedPasteboard {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(original, forType: .string)
+            }
+        }
+
+        return true
+    }
+
+    func focusedFieldAppName() -> String? {
+        NSWorkspace.shared.frontmostApplication?.localizedName
+    }
+
     func readVisibleWindowsContext(
         maxApps: Int?,
         maxWindowsPerApp: Int?,

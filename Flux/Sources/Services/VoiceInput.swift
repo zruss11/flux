@@ -30,6 +30,7 @@ final class VoiceInput {
     var isRecording = false
     var transcript = ""
     var isTranscriberAvailable = false
+    var audioLevelMeter: AudioLevelMeter?
 
     private var audioEngine: AVAudioEngine?
     private let pcmAccumulator = PCMAccumulator()
@@ -184,11 +185,14 @@ final class VoiceInput {
         converter: AVAudioConverter,
         inputSampleRate: Double,
         targetFormat: AVAudioFormat,
-        accumulator: PCMAccumulator
+        accumulator: PCMAccumulator,
+        meter: AudioLevelMeter?
     ) -> AVAudioNodeTapBlock {
         let ratio = targetSampleRate / inputSampleRate
 
         return { buffer, _ in
+            meter?.update(from: buffer)
+
             let frameCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
             guard frameCapacity > 0 else { return }
 
@@ -244,7 +248,8 @@ final class VoiceInput {
                 converter: converter,
                 inputSampleRate: inputFormat.sampleRate,
                 targetFormat: targetFmt,
-                accumulator: pcmAccumulator
+                accumulator: pcmAccumulator,
+                meter: audioLevelMeter
             )
         )
         tapInstalled = true
@@ -301,7 +306,8 @@ final class VoiceInput {
                 block: LiveSpeechSession.makeTapBlock(
                     analyzerFormat: analyzerFormat,
                     converter: converter,
-                    feeder: session.feeder
+                    feeder: session.feeder,
+                    meter: audioLevelMeter
                 )
             )
             tapInstalled = true
@@ -329,21 +335,31 @@ final class VoiceInput {
 
     @available(macOS 26.0, *)
     private func stopLiveRecording(session: LiveSpeechSession) {
-        audioEngine?.stop()
-        if tapInstalled {
-            audioEngine?.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
+        // Keep the audio engine running so the transcriber can drain
+        // any remaining audio buffers before we tear it down.
+        let engine = audioEngine
+        let hadTap = tapInstalled
+
         isRecording = false
         IslandWindowManager.shared.suppressDeactivationCollapse = false
-        audioEngine = nil
 
         let callback = onComplete
         onComplete = nil
         liveSessionAny = nil
 
         Task { @MainActor in
+            // session.stop() finishes the feeder stream and waits for the
+            // transcriber to flush its final segment.
             let finalText = await session.stop()
+
+            // NOW tear down the audio engine after the session has drained.
+            engine?.stop()
+            if hadTap {
+                engine?.inputNode.removeTap(onBus: 0)
+            }
+            self.tapInstalled = false
+            self.audioEngine = nil
+
             self.transcript = finalText
             if !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 callback?(finalText)

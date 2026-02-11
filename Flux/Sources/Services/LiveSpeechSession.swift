@@ -102,8 +102,19 @@ final class LiveSpeechSession {
     func stop() async -> String {
         feeder.finish()
 
-        // Give the transcriber a brief moment to flush a final segment after finish().
-        try? await Task.sleep(for: .milliseconds(250))
+        // Wait for the results task to finish naturally (the stream should end
+        // once the analyzer drains), but cap at 1.5 s so we never hang.
+        _ = await withTaskGroup(of: Void.self) { group in
+            group.addTask { [resultsTask] in
+                await resultsTask?.value
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(1500))
+            }
+            // Whichever finishes first unblocks us.
+            await group.next()
+            group.cancelAll()
+        }
 
         analyzerTask?.cancel()
         resultsTask?.cancel()
@@ -118,9 +129,12 @@ final class LiveSpeechSession {
     nonisolated static func makeTapBlock(
         analyzerFormat: AVAudioFormat,
         converter: AVAudioConverter?,
-        feeder: Feeder
+        feeder: Feeder,
+        meter: AudioLevelMeter?
     ) -> AVAudioNodeTapBlock {
         return { buffer, _ in
+            meter?.update(from: buffer)
+
             // Convert to analyzer format if necessary.
             let outputBuffer: AVAudioPCMBuffer
 

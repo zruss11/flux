@@ -8,12 +8,14 @@ enum IslandContentType: Equatable {
     case settings
     case history
     case skills
+    case dictationHistory
     case folderDetail(ChatFolder)
     case folderPicker
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
         case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills), (.folderPicker, .folderPicker): return true
+        case (.dictationHistory, .dictationHistory): return true
         case (.folderDetail(let a), .folderDetail(let b)): return a.id == b.id
         default: return false
         }
@@ -56,6 +58,16 @@ struct IslandView: View {
         showClosedActivityIndicators ? (closedActiveWidthBoost / 2) : 0
     }
 
+    private let closedDictationWidthBoost: CGFloat = 80
+
+    private var isDictatingClosed: Bool {
+        !isExpanded && DictationManager.shared.isDictating
+    }
+
+    private var closedDictationSlotWidth: CGFloat {
+        isDictatingClosed ? closedDictationWidthBoost : 0
+    }
+
     private var hasPendingToolCalls: Bool {
         conversationStore.conversations.contains { conversation in
             conversation.messages.contains { message in
@@ -89,7 +101,9 @@ struct IslandView: View {
     }
 
     private var closedWidth: CGFloat {
-        notchSize.width + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
+        notchSize.width
+            + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
+            + (isDictatingClosed ? closedDictationWidthBoost : 0)
     }
     private var closedHeight: CGFloat { notchSize.height }
     private var expandedWidth: CGFloat { 480 }
@@ -105,7 +119,7 @@ struct IslandView: View {
     }
 
     private var expandedHeight: CGFloat {
-        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker {
+        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .dictationHistory {
             return maxExpandedHeight
         }
         if case .folderDetail = contentType {
@@ -174,13 +188,27 @@ struct IslandView: View {
                 )
                 .animation(isExpanded ? openAnimation : closeAnimation, value: isExpanded)
                 .animation(.spring(response: 0.38, dampingFraction: 0.8), value: isHovering)
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: DictationManager.shared.isDictating)
                 .animation(.spring(response: 0.5, dampingFraction: 0.8), value: messageCount)
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
                 .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
                 .padding(.top, hasNotch ? 0 : windowManager.topOffset)
+
+            // Clipboard notification that drops below the island
+            if windowManager.showingClipboardNotification {
+                ClipboardNotificationView()
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity
+                        )
+                    )
+                    .offset(y: currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingClipboardNotification)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 clearClosedIndicatorsWorkItem?.cancel()
@@ -291,6 +319,20 @@ struct IslandView: View {
 
         return HStack(spacing: 0) {
             ZStack {
+                if isDictatingClosed {
+                    HStack(spacing: 4) {
+                        ClosedWaveformBars(
+                            levels: DictationManager.shared.barLevels,
+                            isProcessing: DictationManager.shared.isProcessing
+                        )
+                        ClosedSparklesIndicator(isActive: true)
+                            .frame(width: 22, height: 22)
+                    }
+                }
+            }
+            .frame(width: closedDictationSlotWidth, height: closedHeight, alignment: .leading)
+
+            ZStack {
                 if showActivity {
                     ClosedSparklesIndicator(isActive: isClosedIndicatorAnimating)
                         .frame(width: 22, height: 22)
@@ -321,6 +363,7 @@ struct IslandView: View {
         .clipped()
         .animation(.easeInOut(duration: 0.2), value: isHovering)
         .animation(.easeInOut(duration: 0.2), value: showActivity)
+        .animation(.easeInOut(duration: 0.25), value: isDictatingClosed)
     }
 
     // MARK: - Opened Header
@@ -331,6 +374,7 @@ struct IslandView: View {
         case .settings: return "Settings"
         case .history: return "History"
         case .skills: return "Skills"
+        case .dictationHistory: return "Dictation"
         case .folderDetail(let folder): return folder.name
         case .folderPicker: return "Workspace"
         }
@@ -382,6 +426,20 @@ struct IslandView: View {
                     }
                 } label: {
                     Image(systemName: "puzzlepiece.extension")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+
+                // Dictation History button
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        contentType = .dictationHistory
+                    }
+                } label: {
+                    Image(systemName: "waveform")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
@@ -501,6 +559,8 @@ struct IslandView: View {
                     )
                 case .skills:
                     SkillsMarketplaceView()
+                case .dictationHistory:
+                    DictationHistoryView(historyStore: DictationManager.shared.historyStore)
                 case .folderDetail(let folder):
                     FolderDetailView(
                         conversationStore: conversationStore,
@@ -531,6 +591,31 @@ struct IslandView: View {
             }
             .transition(.opacity.animation(.easeInOut(duration: 0.2)))
         }
+    }
+}
+
+private struct ClipboardNotificationView: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.on.clipboard")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
+
+            Text("Copied to clipboard")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(.black)
+        )
+        .overlay(
+            Capsule()
+                .stroke(.white.opacity(0.15), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
     }
 }
 
@@ -599,6 +684,48 @@ private struct SparkDot: View {
     }
 }
 
+private struct ClosedWaveformBars: View {
+    let levels: [Float]
+    let isProcessing: Bool
+
+    private let barCount = 6
+    private let barWidth: CGFloat = 3
+    private let barSpacing: CGFloat = 2
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            // Use peak level — more responsive than average.
+            let peak = levels.max() ?? 0
+            // Aggressively amplify so any voice drives full-range animation.
+            let energy = min(1.0, Float(peak) * 17)
+
+            HStack(spacing: barSpacing) {
+                ForEach(0..<barCount, id: \.self) { index in
+                    let phase = Double(index) * 1.1
+                    let wave = sin(time * 3.0 + phase) * 0.45
+                        + sin(time * 5.5 + phase * 1.6) * 0.35
+                        + sin(time * 9.0 + phase * 0.7) * 0.2
+                    // Wide range [0.05, 1.0] for dramatic ups and downs.
+                    let modulation = Float((wave + 1.0) / 2.0 * 0.95 + 0.05)
+                    let level = energy * modulation
+
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(.white.opacity(0.9))
+                        .frame(width: barWidth, height: barHeight(for: level))
+                }
+            }
+            .padding(.leading, 8)
+        }
+    }
+
+    private func barHeight(for level: Float) -> CGFloat {
+        let maxH: CGFloat = 20
+        let minH: CGFloat = 3
+        return minH + CGFloat(level) * (maxH - minH)
+    }
+}
+
 // MARK: - In-Island Settings
 
 struct IslandSettingsView: View {
@@ -610,6 +737,8 @@ struct IslandSettingsView: View {
     @AppStorage("telegramChatId") private var telegramChatId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
+    @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
+    @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
@@ -730,6 +859,47 @@ struct IslandSettingsView: View {
                                     .foregroundStyle(.white.opacity(0.35))
                                     .help("Controls how Flux generates titles for new chats.")
                             }
+                        )
+                    }
+                )
+
+                divider
+
+                // Dictation settings
+                settingsRow(
+                    icon: "waveform",
+                    label: "Remove filler words",
+                    trailing: {
+                        AnyView(
+                            Toggle("", isOn: $dictationAutoCleanFillers)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.mini)
+                        )
+                    }
+                )
+
+                settingsRow(
+                    icon: "waveform.badge.magnifyingglass",
+                    label: "Enhancement mode",
+                    trailing: {
+                        AnyView(
+                            Menu {
+                                Button("None") {
+                                    dictationEnhancementMode = "none"
+                                }
+                                Button("Apple Intelligence\(FoundationModelsClient.shared.isAvailable ? "" : " (unavailable)")") {
+                                    dictationEnhancementMode = "foundationModels"
+                                }
+                                Button("Claude") {
+                                    dictationEnhancementMode = "claude"
+                                }
+                            } label: {
+                                Text(dictationEnhancementModeDisplayName)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.75))
+                            }
+                            .menuStyle(.borderlessButton)
                         )
                     }
                 )
@@ -1726,7 +1896,9 @@ struct IslandSettingsView: View {
         let appURL = Bundle.main.bundleURL
         let config = NSWorkspace.OpenConfiguration()
         NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in
-            NSApp.terminate(nil)
+            Task { @MainActor in
+                NSApp.terminate(nil)
+            }
         }
     }
 
@@ -1734,6 +1906,14 @@ struct IslandSettingsView: View {
         Circle()
             .fill(isSet ? Color.green.opacity(0.8) : Color.white.opacity(0.2))
             .frame(width: 8, height: 8)
+    }
+
+    private var dictationEnhancementModeDisplayName: String {
+        switch dictationEnhancementMode {
+        case "foundationModels": return "Apple Intelligence"
+        case "claude": return "Claude"
+        default: return "None"
+        }
     }
 
     private var discordBotHelp: String {
