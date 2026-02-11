@@ -147,12 +147,25 @@ struct SkillPermissionSheet: View {
             permission.openSystemSettings()
 
         case .microphone:
-            AVCaptureDevice.requestAccess(for: .audio) { _ in }
+            Task {
+                _ = await AVCaptureDevice.requestAccess(for: .audio)
+                await MainActor.run {
+                    permission.openSystemSettings()
+                }
+            }
 
         case .reminders:
-            let store = EKEventStore()
-            store.requestFullAccessToReminders { _, _ in }
-            permission.openSystemSettings()
+            Task {
+                let store = EKEventStore()
+                do {
+                    _ = try await store.requestFullAccessToReminders()
+                } catch {
+                    print("[SkillPermissionSheet] Reminders access error: \(error)")
+                }
+                await MainActor.run {
+                    permission.openSystemSettings()
+                }
+            }
         }
     }
 

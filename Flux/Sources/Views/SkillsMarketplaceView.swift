@@ -251,7 +251,7 @@ struct SkillsMarketplaceView: View {
                             )
                     )
 
-                    Text("Use lowercase letters, numbers, and hyphens")
+                    Text("Use letters, numbers, hyphens, and underscores")
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.3))
                         .padding(.leading, 4)

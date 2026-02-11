@@ -5,6 +5,8 @@ import AppKit
 final class ToolRunner {
     private let contextManager = ContextManager()
 
+    /// Executes a custom tool by expanding template variables and running
+    /// each action in-order.
     func executeTool(_ tool: CustomTool, context: ScreenContext) async -> String {
         var prompt = tool.prompt
 
@@ -39,6 +41,7 @@ final class ToolRunner {
         return results.joined(separator: "\n")
     }
 
+    /// Executes a single tool action.
     private func executeAction(_ action: ToolAction) async -> String {
         switch action {
         case .shortcut(let name):
@@ -52,10 +55,12 @@ final class ToolRunner {
         }
     }
 
+    /// Runs an Apple Shortcut by name.
     func executeShortcut(named name: String) async -> String {
         await executeShellScript("/usr/bin/shortcuts run \"\(name)\"")
     }
 
+    /// Runs a shell script and returns combined stdout/stderr.
     func executeShellScript(_ script: String) async -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -75,6 +80,7 @@ final class ToolRunner {
         }
     }
 
+    /// Runs AppleScript via `/usr/bin/osascript` and returns output or an error string.
     func executeAppleScript(_ source: String) async -> String {
         // Run via osascript in a background thread to avoid blocking the main thread.
         // NSAppleScript.executeAndReturnError is synchronous and will freeze the UI
@@ -91,12 +97,15 @@ final class ToolRunner {
 
                 do {
                     try process.run()
-                    process.waitUntilExit()
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
                     let output = String(data: data, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if process.terminationStatus != 0 && !output.isEmpty {
-                        continuation.resume(returning: "AppleScript error: \(output)")
+                    if process.terminationStatus != 0 {
+                        let detail = output.isEmpty
+                            ? "exit code \(process.terminationStatus)"
+                            : output
+                        continuation.resume(returning: "AppleScript error: \(detail)")
                     } else {
                         continuation.resume(returning: output)
                     }

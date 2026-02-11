@@ -21,9 +21,26 @@ enum SkillInstaller {
         case fileWriteFailed(Error)
     }
 
+    /// Installs a catalog skill into the local skills directory.
+    /// Dependencies are resolved before creating files so failed installs
+    /// do not leave partially installed skills behind.
     static func install(directoryName: String) async throws {
         guard let entry = SkillCatalog.recommended.first(where: { $0.directoryName == directoryName }) else {
             throw InstallError.catalogEntryNotFound
+        }
+
+        // Install CLI dependencies (e.g. brew formulas) before creating any local files.
+        for dep in entry.dependencies {
+            let allPresent = dep.bins.allSatisfy { isBinaryOnPath($0) }
+            if allPresent {
+                print("[SkillInstaller] Dependencies for '\(entry.displayName)' already satisfied")
+                continue
+            }
+
+            switch dep.kind {
+            case .brew:
+                try await installBrewDependency(dep)
+            }
         }
 
         // Install into `.agents/skills` (the path the sidecar primarily scans) when a
@@ -43,28 +60,17 @@ enum SkillInstaller {
         do {
             try entry.skillMdContent.write(to: skillMdPath, atomically: true, encoding: .utf8)
         } catch {
+            // Best-effort rollback for partial installs.
+            try? fm.removeItem(at: skillDir)
             throw InstallError.fileWriteFailed(error)
         }
 
         print("[SkillInstaller] Installed skill '\(entry.displayName)' at \(skillDir.path)")
-
-        // Install CLI dependencies (e.g. brew formulas) if the required binaries are missing.
-        for dep in entry.dependencies {
-            let allPresent = dep.bins.allSatisfy { isBinaryOnPath($0) }
-            if allPresent {
-                print("[SkillInstaller] Dependencies for '\(entry.displayName)' already satisfied")
-                continue
-            }
-
-            switch dep.kind {
-            case .brew:
-                try await installBrewDependency(dep)
-            }
-        }
     }
 
     // MARK: - Brew Dependency Installation
 
+    /// Installs a Homebrew dependency for a skill.
     private static func installBrewDependency(_ dep: SkillDependency) async throws {
         guard isBinaryOnPath("brew") else {
             throw InstallError.brewNotFound
@@ -86,6 +92,7 @@ enum SkillInstaller {
         print("[SkillInstaller] Installed brew dependency '\(dep.formula)'")
     }
 
+    /// Returns true when a binary is available on PATH.
     private static func isBinaryOnPath(_ name: String) -> Bool {
         let result = Process()
         result.executableURL = URL(fileURLWithPath: "/usr/bin/which")
@@ -101,6 +108,7 @@ enum SkillInstaller {
         }
     }
 
+    /// Runs a child process and drains combined stdout/stderr while it is executing.
     private static func runProcess(_ path: String, arguments: [String]) async -> (status: Int32, output: String) {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -114,8 +122,8 @@ enum SkillInstaller {
 
                 do {
                     try process.run()
-                    process.waitUntilExit()
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
                     let output = String(data: data, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     continuation.resume(returning: (process.terminationStatus, output))
@@ -126,6 +134,7 @@ enum SkillInstaller {
         }
     }
 
+    /// Uninstalls a skill directory from all known install roots.
     static func uninstall(directoryName: String) async throws {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
@@ -167,6 +176,7 @@ enum SkillInstaller {
         }
     }
 
+    /// Installs a custom skill scaffold with a generated `SKILL.md`.
     static func installCustom(directoryName: String) async throws {
         // Validate directory name: only alphanumeric, hyphens, underscores
         let validChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
@@ -216,8 +226,8 @@ enum SkillInstaller {
         print("[SkillInstaller] Installed custom skill '\(displayName)' at \(skillDir.path)")
     }
 
-    /// Prefer the project `.agents/skills` directory (which the sidecar scans first),
-    /// falling back to `~/.claude/skills` when no project root is discoverable.
+    /// Resolves the preferred install directory for skills by preferring
+    /// project-local `.agents/skills` and falling back to `~/.claude/skills`.
     private static func resolveInstallDir() -> URL {
         let fm = FileManager.default
         let env = ProcessInfo.processInfo.environment
