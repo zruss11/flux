@@ -10,4 +10,10 @@ extension Notification.Name {
     static let automationOpenThreadRequested = Notification.Name("automationOpenThreadRequested")
     static let islandOpenConversationRequested = Notification.Name("islandOpenConversationRequested")
     static let islandOpenFolderPickerRequested = Notification.Name("islandOpenFolderPickerRequested")
+    static let islandOpenImagePickerRequested = Notification.Name("islandOpenImagePickerRequested")
+    static let islandImageFilesSelected = Notification.Name("islandImageFilesSelected")
+}
+
+extension NotificationPayloadKey {
+    static let imageURLs = "imageURLs"
 }

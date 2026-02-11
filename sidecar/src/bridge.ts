@@ -11,6 +11,13 @@ interface ChatMessage {
   type: 'chat';
   conversationId: string;
   content: string;
+  images?: ChatImagePayload[];
+}
+
+interface ChatImagePayload {
+  fileName: string;
+  mediaType: string;
+  data: string;
 }
 
 interface ToolResultMessage {
@@ -92,9 +99,30 @@ type OutgoingMessage =
 
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: string | SDKUserContentBlock[] };
   parent_tool_use_id: null;
   session_id: string;
+}
+
+type SDKUserContentBlock = SDKUserTextContentBlock | SDKUserImageContentBlock;
+
+interface SDKUserTextContentBlock {
+  type: 'text';
+  text: string;
+}
+
+interface SDKUserImageContentBlock {
+  type: 'image';
+  source: {
+    type: 'base64';
+    media_type: string;
+    data: string;
+  };
+}
+
+interface QueuedUserMessage {
+  text: string;
+  images: ChatImagePayload[];
 }
 
 const log = createLogger('bridge');
@@ -123,7 +151,7 @@ interface ConversationSession {
   lastAssistantUuid?: string;
   isRunning: boolean;
   idleTimer?: NodeJS.Timeout;
-  pendingMessages: string[];
+  pendingMessages: QueuedUserMessage[];
   /** Track tool_use content blocks by stream index during streaming */
   toolUseByIndex: Map<number, { id: string; name: string; inputChunks: string[] }>;
   /** Non-MCP tool calls started but not yet completed (toolUseId → toolName) */
@@ -135,11 +163,12 @@ class MessageStream {
   private waiting: (() => void) | null = null;
   private done = false;
 
-  push(text: string): void {
+  push(message: QueuedUserMessage): void {
     if (this.done) return;
+    const content = userMessageContent(message);
     this.queue.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
       session_id: '',
     });
@@ -256,7 +285,10 @@ function handleMcpAuth(message: McpAuthMessage): void {
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
   const { conversationId, content } = message;
-  log.info(`[${conversationId}] User: ${content}`);
+  const images = sanitizeChatImages(message.images);
+  const summary = content.trim().length > 0 ? content : '[image-only message]';
+  const imageSummary = images.length > 0 ? ` (+${images.length} image${images.length === 1 ? '' : 's'})` : '';
+  log.info(`[${conversationId}] User: ${summary}${imageSummary}`);
 
   if (!runtimeApiKey) {
     sendToClient(ws, {
@@ -267,26 +299,78 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
     return;
   }
 
-  enqueueUserMessage(conversationId, content);
+  enqueueUserMessage(conversationId, content, images);
 }
 
-function enqueueUserMessage(conversationId: string, content: string): void {
+function sanitizeChatImages(images: ChatImagePayload[] | undefined): ChatImagePayload[] {
+  if (!Array.isArray(images)) return [];
+  return images
+    .filter((image) => typeof image?.data === 'string' && image.data.length > 0)
+    .map((image) => {
+      const mediaType = image.mediaType?.startsWith('image/') ? image.mediaType : 'image/png';
+      const fileName = typeof image.fileName === 'string' && image.fileName.trim().length > 0
+        ? image.fileName
+        : 'image';
+      return {
+        fileName,
+        mediaType,
+        data: image.data,
+      };
+    });
+}
+
+function userMessageContent(message: QueuedUserMessage): string | SDKUserContentBlock[] {
+  if (message.images.length === 0) {
+    return message.text;
+  }
+
+  const blocks: SDKUserContentBlock[] = [];
+  if (message.text.trim().length > 0) {
+    blocks.push({
+      type: 'text',
+      text: message.text,
+    });
+  }
+
+  for (const image of message.images) {
+    blocks.push({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: image.mediaType,
+        data: image.data,
+      },
+    });
+  }
+
+  if (blocks.length === 0) {
+    blocks.push({
+      type: 'text',
+      text: '',
+    });
+  }
+  return blocks;
+}
+
+function enqueueUserMessage(conversationId: string, content: string, images: ChatImagePayload[] = []): void {
+  if (content.trim().length === 0 && images.length === 0) return;
   const session = getSession(conversationId);
+  const message: QueuedUserMessage = { text: content, images };
 
   if (session.isRunning) {
     if (session.stream && !session.stream.isDone()) {
-      session.stream.push(content);
+      session.stream.push(message);
       touchIdle(session);
     } else {
-      session.pendingMessages.push(content);
+      session.pendingMessages.push(message);
     }
     return;
   }
 
-  startSessionRun(session, [content]);
+  startSessionRun(session, [message]);
 }
 
-function startSessionRun(session: ConversationSession, messages: string[]): void {
+function startSessionRun(session: ConversationSession, messages: QueuedUserMessage[]): void {
   session.stream = new MessageStream();
   for (const msg of messages) {
     session.stream.push(msg);
@@ -844,7 +928,7 @@ async function handleTelegramMessage(chatId: string, threadId: number | undefine
 
   const conversationId = getTelegramConversationId(chatId, threadId);
   telegramConversationMeta.set(conversationId, { chatId, threadId });
-  enqueueUserMessage(conversationId, text);
+  enqueueUserMessage(conversationId, text, []);
 }
 
 function forwardToTelegramIfNeeded(conversationId: string, content: string): void {

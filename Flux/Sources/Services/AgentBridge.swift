@@ -1,6 +1,12 @@
 import Foundation
 import os
 
+struct ChatImagePayload: Codable, Hashable, Sendable {
+    let fileName: String
+    let mediaType: String
+    let data: String
+}
+
 @Observable
 final class AgentBridge: @unchecked Sendable {
     var isConnected = false
@@ -89,18 +95,27 @@ final class AgentBridge: @unchecked Sendable {
         }
     }
 
-    func sendChatMessage(conversationId: String, content: String) {
+    func sendChatMessage(conversationId: String, content: String, images: [ChatImagePayload] = []) {
         setRunStatus(for: conversationId, isWorking: true)
 
         // Keep sidecar config in sync (user may have edited settings since connect).
         sendMcpAuthIfNeeded()
         sendTelegramConfigFromStores()
 
-        let message: [String: Any] = [
+        var message: [String: Any] = [
             "type": "chat",
             "conversationId": conversationId,
             "content": content
         ]
+        if !images.isEmpty {
+            message["images"] = images.map { image in
+                [
+                    "fileName": image.fileName,
+                    "mediaType": image.mediaType,
+                    "data": image.data
+                ]
+            }
+        }
         send(message)
     }
 
