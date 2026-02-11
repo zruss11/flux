@@ -80,6 +80,15 @@ struct ChatView: View {
                     .onSubmit {
                         sendMessage()
                     }
+                    .onKeyPress(.escape) {
+                        if showSkills {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                showSkills = false
+                            }
+                            return .handled
+                        }
+                        return .ignored
+                    }
 
                 Button {
                     sendMessage()
@@ -138,6 +147,13 @@ struct ChatView: View {
                 let afterDollar = String(newValue[newValue.index(after: idx)...])
                 skillSearchQuery = afterDollar.trimmingCharacters(in: .whitespaces)
             }
+
+            // Dismiss skills if the trigger `$` was deleted
+            if showSkills, dollarTriggerActive, !newValue.contains("$") {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    showSkills = false
+                }
+            }
         }
         .onChange(of: showSkills) { _, presented in
             if !presented {
@@ -185,8 +201,10 @@ struct ChatView: View {
         let token = "$\(directoryName) "
 
         if dollarTriggerActive, let idx = inputText.lastIndex(of: "$") {
-            let after = inputText.index(after: idx)
-            inputText = String(inputText[..<idx]) + token + String(inputText[after...])
+            let afterDollar = inputText.index(after: idx)
+            let searchEnd = inputText[afterDollar...].firstIndex(where: { $0.isWhitespace }) ?? inputText.endIndex
+            let remainder = String(inputText[searchEnd...])
+            inputText = String(inputText[..<idx]) + token + remainder
         } else {
             if let last = inputText.last, !last.isWhitespace {
                 inputText.append(" ")

@@ -80,15 +80,6 @@ struct SkillsView: View {
                 loadSkills()
             }
         }
-        .onKeyPress(.escape) {
-            if isPresented {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                    isPresented = false
-                }
-                return .handled
-            }
-            return .ignored
-        }
     }
 
     // MARK: - Skills List
