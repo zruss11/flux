@@ -197,6 +197,14 @@ struct ChatView: View {
             guard voiceInput.isRecording else { return }
             inputText = newValue
         }
+        .onChange(of: conversationStore.activeConversationId) { _, _ in
+            inputText = ""
+            selectedSkillDirNames.removeAll()
+            if showSkills {
+                showSkills = false
+                dollarTriggerActive = false
+            }
+        }
         .alert("Microphone Access Required", isPresented: $showMicPermissionAlert) {
             Button("Open Settings") {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
@@ -217,6 +225,11 @@ struct ChatView: View {
         let lowered = text.lowercased()
         if lowered == "/new" || lowered == "/clear" {
             inputText = ""
+            selectedSkillDirNames.removeAll()
+            if showSkills {
+                showSkills = false
+                dollarTriggerActive = false
+            }
             conversationStore.startNewConversation()
             return
         }
