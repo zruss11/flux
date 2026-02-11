@@ -35,6 +35,36 @@ export const baseTools: ToolDefinition[] = [
     },
   },
   {
+    name: 'read_visible_windows',
+    description:
+      'Read accessibility context for visible windows across apps using AppleScript + System Events. Returns JSON with app/window metadata and sampled UI elements.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        maxApps: {
+          type: 'number',
+          description: 'Maximum number of apps to scan (default: 10, max: 25)',
+        },
+        maxWindowsPerApp: {
+          type: 'number',
+          description: 'Maximum windows to sample per app (default: 4, max: 12)',
+        },
+        maxElementsPerWindow: {
+          type: 'number',
+          description: 'Maximum accessibility elements to sample per window (default: 60, max: 250)',
+        },
+        maxTextLength: {
+          type: 'number',
+          description: 'Maximum character length for each captured field (default: 280, max: 1000)',
+        },
+        includeMinimized: {
+          type: 'boolean',
+          description: 'Whether to include minimized windows (default: false)',
+        },
+      },
+    },
+  },
+  {
     name: 'read_selected_text',
     description: 'Read the currently selected text from the frontmost application.',
     input_schema: {

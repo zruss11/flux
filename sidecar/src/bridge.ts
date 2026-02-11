@@ -78,6 +78,7 @@ type OutgoingMessage = AssistantMessage | ToolRequestMessage | ToolUseStartMessa
 
 type MessageParam = Anthropic.MessageParam;
 type ContentBlockParam = Anthropic.ContentBlockParam;
+type SupportedImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
 
 const conversationHistories = new Map<string, MessageParam[]>();
 const pendingToolResults = new Map<string, (result: string) => void>();
@@ -122,6 +123,82 @@ function redactLargeText(text: string): string {
   return `${head}\n\n[...redacted ${text.length - (head.length + tail.length)} chars...]\n\n${tail}`;
 }
 
+function detectImageMediaType(base64: string): SupportedImageMediaType | null {
+  if (base64.startsWith('iVBOR')) return 'image/png';
+  if (base64.startsWith('/9j/')) return 'image/jpeg';
+  if (base64.startsWith('R0lGOD')) return 'image/gif';
+  if (base64.startsWith('UklGR')) return 'image/webp';
+  return null;
+}
+
+function isSupportedImageMediaType(value: string): value is SupportedImageMediaType {
+  return value === 'image/png' || value === 'image/jpeg' || value === 'image/gif' || value === 'image/webp';
+}
+
+function parseImageToolResult(raw: string): { mediaType: SupportedImageMediaType; data: string } | null {
+  const trimmed = raw.trim();
+  const dataUrlMatch = trimmed.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (dataUrlMatch) {
+    if (!isSupportedImageMediaType(dataUrlMatch[1])) return null;
+    return {
+      mediaType: dataUrlMatch[1],
+      data: dataUrlMatch[2],
+    };
+  }
+
+  const mediaType = detectImageMediaType(trimmed);
+  if (!mediaType) return null;
+  return { mediaType, data: trimmed };
+}
+
+function isLikelyBase64Image(text: string): boolean {
+  return parseImageToolResult(text) !== null;
+}
+
+function toolResultToContentBlock(
+  toolUseId: string,
+  toolName: string,
+  result: string,
+): ContentBlockParam {
+  // Vision payloads must be sent as image blocks, not giant base64 text.
+  if (toolName === 'capture_screen') {
+    const parsed = parseImageToolResult(result);
+    if (parsed) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: parsed.mediaType,
+              data: parsed.data,
+            },
+          },
+        ],
+      };
+    }
+  }
+
+  return {
+    type: 'tool_result',
+    tool_use_id: toolUseId,
+    content: result,
+  };
+}
+
+function toolResultPreview(toolName: string, result: string): string {
+  if (toolName === 'capture_screen') {
+    const parsed = parseImageToolResult(result);
+    if (parsed) {
+      const bytes = Buffer.byteLength(parsed.data, 'utf8');
+      return `[image ${parsed.mediaType}, base64 bytes=${bytes}]`;
+    }
+  }
+  return result.substring(0, 200);
+}
+
 function sanitizeRetainedMessageContent(content: unknown): unknown {
   if (typeof content === 'string') {
     return redactLargeText(content);
@@ -134,13 +211,7 @@ function sanitizeRetainedMessageContent(content: unknown): unknown {
         // Keep small non-image results (truncated), but aggressively redact likely screenshots.
         const text = block.content;
         const bytes = Buffer.byteLength(text, 'utf8');
-
-        const looksLikeBase64Image =
-          bytes > 50_000 &&
-          (text.startsWith('iVBOR') || // PNG
-            text.startsWith('/9j/') || // JPEG
-            text.startsWith('R0lGOD') || // GIF
-            text.startsWith('UklGR')); // WEBP (RIFF)
+        const looksLikeBase64Image = isLikelyBase64Image(text);
 
         return {
           ...block,
@@ -148,6 +219,41 @@ function sanitizeRetainedMessageContent(content: unknown): unknown {
             ? `[tool_result redacted (image): tool_use_id=${block.tool_use_id ?? 'unknown'} bytes=${bytes}]`
             : redactLargeText(text),
         };
+      }
+
+      if (block && typeof block === 'object' && block.type === 'tool_result' && Array.isArray(block.content)) {
+        let redactedAnyImages = false;
+        let updatedAnyText = false;
+        const sanitizedBlocks = block.content.map((inner: any) => {
+          if (
+            inner &&
+            typeof inner === 'object' &&
+            inner.type === 'image' &&
+            inner.source &&
+            typeof inner.source === 'object' &&
+            typeof inner.source.data === 'string'
+          ) {
+            redactedAnyImages = true;
+            const mediaType = typeof inner.source.media_type === 'string' ? inner.source.media_type : 'image/unknown';
+            const bytes = Buffer.byteLength(inner.source.data, 'utf8');
+            return {
+              type: 'text',
+              text: `[tool_result redacted (image): tool_use_id=${block.tool_use_id ?? 'unknown'} media_type=${mediaType} bytes=${bytes}]`,
+            };
+          }
+
+          if (inner && typeof inner === 'object' && typeof inner.text === 'string') {
+            const redactedText = redactLargeText(inner.text);
+            if (redactedText !== inner.text) updatedAnyText = true;
+            return { ...inner, text: redactedText };
+          }
+
+          return inner;
+        });
+
+        if (redactedAnyImages || updatedAnyText) {
+          return { ...block, content: sanitizedBlocks };
+        }
       }
 
       if (block && typeof block === 'object' && typeof block.text === 'string') {
@@ -321,7 +427,7 @@ async function runConversationLoop(
       system: [
         'You are Flux, a macOS AI desktop copilot. You can see the user\'s screen, read window contents, and execute commands.',
         'Be concise and helpful.',
-        'When the user asks about what\'s on their screen, use the read_ax_tree or capture_screen tools.',
+        'When the user asks about what\'s on their screen, use read_visible_windows for multi-window context, read_ax_tree for the frontmost window, or capture_screen for visual details.',
         'Agent SDK skills reference: https://platform.claude.com/docs/en/agent-sdk/skills',
         mcp.hasServer('linear')
           ? [
@@ -419,14 +525,10 @@ async function runConversationLoop(
         conversationId,
         toolUseId: toolUse.id,
         toolName: toolUse.name,
-        resultPreview: result.substring(0, 200),
+        resultPreview: toolResultPreview(toolUse.name, result),
       });
 
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: toolUse.id,
-        content: result,
-      });
+      toolResults.push(toolResultToContentBlock(toolUse.id, toolUse.name, result));
     }
 
     // Add tool results to history

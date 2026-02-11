@@ -81,6 +81,7 @@ struct ToolCallRow: View {
         switch call.toolName {
         case "capture_screen": return "Capture screen"
         case "read_ax_tree": return "Read accessibility tree"
+        case "read_visible_windows": return "Read visible windows"
         case "read_selected_text": return "Read selected text"
         case "execute_applescript": return "AppleScript"
         case "run_shell_command": return "Shell command"
