@@ -11,11 +11,12 @@ enum IslandContentType: Equatable {
     case dictationHistory
     case folderDetail(ChatFolder)
     case folderPicker
+    case imagePicker
     case tour
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
-        case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills), (.folderPicker, .folderPicker): return true
+        case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills), (.folderPicker, .folderPicker), (.imagePicker, .imagePicker): return true
         case (.dictationHistory, .dictationHistory): return true
         case (.tour, .tour): return true
         case (.folderDetail(let a), .folderDetail(let b)): return a.id == b.id
@@ -121,7 +122,7 @@ struct IslandView: View {
     }
 
     private var expandedHeight: CGFloat {
-        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .dictationHistory || contentType == .tour {
+        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .imagePicker || contentType == .dictationHistory || contentType == .tour {
             return maxExpandedHeight
         }
         if case .folderDetail = contentType {
@@ -288,6 +289,11 @@ struct IslandView: View {
                 contentType = .folderPicker
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .islandOpenImagePickerRequested)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                contentType = .imagePicker
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .islandStartTourRequested)) { _ in
             TourManager.shared.start()
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -382,6 +388,7 @@ struct IslandView: View {
         case .dictationHistory: return "Dictation"
         case .folderDetail(let folder): return folder.name
         case .folderPicker: return "Workspace"
+        case .imagePicker: return "Add Images"
         case .tour: return "Tour"
         }
     }
@@ -585,6 +592,28 @@ struct IslandView: View {
                             conversationStore.workspacePath = url.path
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 contentType = .chat
+                            }
+                        },
+                        onCancel: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                contentType = .chat
+                            }
+                        }
+                    )
+                case .imagePicker:
+                    ImageFilePickerView(
+                        onSelect: { urls in
+                            // Switch back to chat first so ChatView is mounted
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                contentType = .chat
+                            }
+                            // Post on next run loop so ChatView's .onReceive is active
+                            DispatchQueue.main.async {
+                                NotificationCenter.default.post(
+                                    name: .islandImageFilesSelected,
+                                    object: nil,
+                                    userInfo: [NotificationPayloadKey.imageURLs: urls]
+                                )
                             }
                         },
                         onCancel: {

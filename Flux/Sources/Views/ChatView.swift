@@ -1,5 +1,7 @@
+import AppKit
 import MarkdownUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 // Preference key to report the chat content's intrinsic height back up the view tree
 struct ChatContentHeightKey: PreferenceKey {
@@ -28,6 +30,14 @@ struct ChatView: View {
     @State private var skillSearchQuery = ""
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
+    @State private var imageImportErrorMessage: String?
+    @State private var pendingImageAttachments: [MessageImageAttachment] = []
+
+    private let maxAttachmentBytes = 10 * 1024 * 1024
+
+    private var canSendMessage: Bool {
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImageAttachments.isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,63 +75,88 @@ struct ChatView: View {
             }
 
             // Input row
-            HStack(spacing: 8) {
-                // Mic button
-                Button {
-                    Task {
-                        if voiceInput.isRecording {
-                            voiceInput.stopRecording()
-                        } else {
-                            let granted = await voiceInput.ensureMicrophonePermission()
-                            guard granted else {
-                                showMicPermissionAlert = true
-                                return
-                            }
-                            await voiceInput.startRecording { transcript in
-                                inputText = transcript
-                                sendMessage()
+            VStack(alignment: .leading, spacing: 8) {
+                if !pendingImageAttachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(pendingImageAttachments) { attachment in
+                                ImageAttachmentPreviewCard(attachment: attachment, isRemovable: true) {
+                                    pendingImageAttachments.removeAll { $0.id == attachment.id }
+                                }
                             }
                         }
+                        .padding(.horizontal, 2)
                     }
-                } label: {
-                    Image(systemName: voiceInput.isRecording ? "mic.fill" : "mic")
-                        .font(.system(size: 14))
-                        .foregroundStyle(voiceInput.isRecording ? .red : .white.opacity(0.5))
-                        .frame(width: 28, height: 28)
                 }
-                .buttonStyle(.plain)
 
-                TextField("Message Flux...  $ for skills", text: $inputText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white)
-                    .focused($isInputFocused)
-                    .onSubmit {
+                HStack(spacing: 8) {
+                    // Mic button
+                    Button {
+                        Task {
+                            if voiceInput.isRecording {
+                                voiceInput.stopRecording()
+                            } else {
+                                let granted = await voiceInput.ensureMicrophonePermission()
+                                guard granted else {
+                                    showMicPermissionAlert = true
+                                    return
+                                }
+                                await voiceInput.startRecording { transcript in
+                                    inputText = transcript
+                                    sendMessage()
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: voiceInput.isRecording ? "mic.fill" : "mic")
+                            .font(.system(size: 14))
+                            .foregroundStyle(voiceInput.isRecording ? .red : .white.opacity(0.5))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+
+                    TextField("Message Flux...  $ for skills", text: $inputText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white)
+                        .focused($isInputFocused)
+                        .onSubmit {
+                            sendMessage()
+                        }
+                        .onKeyPress(.escape) {
+                            if showSkills {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                    showSkills = false
+                                }
+                                return .handled
+                            }
+                            if IslandWindowManager.shared.isExpanded {
+                                IslandWindowManager.shared.collapse()
+                                return .handled
+                            }
+                            return .ignored
+                        }
+
+                    Button {
+                        NotificationCenter.default.post(name: .islandOpenImagePickerRequested, object: nil)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .regular))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
                         sendMessage()
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(canSendMessage ? .white : .white.opacity(0.2))
                     }
-                    .onKeyPress(.escape) {
-                        if showSkills {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                                showSkills = false
-                            }
-                            return .handled
-                        }
-                        if IslandWindowManager.shared.isExpanded {
-                            IslandWindowManager.shared.collapse()
-                            return .handled
-                        }
-                        return .ignored
-                    }
-
-                Button {
-                    sendMessage()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(inputText.isEmpty ? .white.opacity(0.2) : .white)
+                    .buttonStyle(.plain)
+                    .disabled(!canSendMessage)
                 }
-                .buttonStyle(.plain)
-                .disabled(inputText.isEmpty)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -233,9 +268,22 @@ struct ChatView: View {
         .onChange(of: conversationStore.activeConversationId) { _, _ in
             inputText = ""
             selectedSkillDirNames.removeAll()
+            pendingImageAttachments.removeAll()
             if showSkills {
                 showSkills = false
                 dollarTriggerActive = false
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .islandImageFilesSelected)) { notification in
+            guard let urls = notification.userInfo?[NotificationPayloadKey.imageURLs] as? [URL] else { return }
+            for url in urls {
+                do {
+                    let attachment = try loadImageAttachment(from: url)
+                    pendingImageAttachments.append(attachment)
+                } catch {
+                    imageImportErrorMessage = error.localizedDescription
+                    return
+                }
             }
         }
         .alert("Microphone Access Required", isPresented: $showMicPermissionAlert) {
@@ -248,17 +296,30 @@ struct ChatView: View {
         } message: {
             Text("Flux needs microphone access for voice input. Please enable it in System Settings > Privacy & Security > Microphone.")
         }
+        .alert("Image Import Failed", isPresented: Binding(
+            get: { imageImportErrorMessage != nil },
+            set: { shown in
+                if !shown { imageImportErrorMessage = nil }
+            }
+        )) {
+            Button("OK", role: .cancel) {
+                imageImportErrorMessage = nil
+            }
+        } message: {
+            Text(imageImportErrorMessage ?? "Unable to add image.")
+        }
     }
 
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty || !pendingImageAttachments.isEmpty else { return }
 
         // Slash commands
         let lowered = text.lowercased()
-        if lowered == "/new" || lowered == "/clear" {
+        if pendingImageAttachments.isEmpty && (lowered == "/new" || lowered == "/clear") {
             inputText = ""
             selectedSkillDirNames.removeAll()
+            pendingImageAttachments.removeAll()
             if showSkills {
                 showSkills = false
                 dollarTriggerActive = false
@@ -285,12 +346,17 @@ struct ChatView: View {
         }
 
         // Display what the user typed (with `$skill`), but send `/skill` to the sidecar.
-        conversationStore.addMessage(to: conversationId, role: .user, content: text)
+        conversationStore.addMessage(to: conversationId, role: .user, content: text, imageAttachments: pendingImageAttachments)
         conversationStore.setConversationRunning(conversationId, isRunning: true)
-        agentBridge.sendChatMessage(conversationId: conversationId.uuidString, content: outboundText)
+        agentBridge.sendChatMessage(
+            conversationId: conversationId.uuidString,
+            content: outboundText,
+            images: pendingImageAttachments.map(\.chatPayload)
+        )
 
         inputText = ""
         selectedSkillDirNames.removeAll()
+        pendingImageAttachments.removeAll()
     }
 
     private func insertSkillToken(_ directoryName: String) {
@@ -337,6 +403,46 @@ struct ChatView: View {
         }
         return out
     }
+
+    private func loadImageAttachment(from url: URL) throws -> MessageImageAttachment {
+        let startedAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if startedAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let data = try Data(contentsOf: url)
+        guard !data.isEmpty else {
+            throw ImageAttachmentImportError.emptyData
+        }
+        guard data.count <= maxAttachmentBytes else {
+            throw ImageAttachmentImportError.fileTooLarge(maxBytes: maxAttachmentBytes)
+        }
+
+        let fallbackType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "image/png"
+        let mediaType = fallbackType.hasPrefix("image/") ? fallbackType : "image/png"
+        return MessageImageAttachment(
+            fileName: url.lastPathComponent,
+            mediaType: mediaType,
+            base64Data: data.base64EncodedString()
+        )
+    }
+}
+
+private enum ImageAttachmentImportError: LocalizedError {
+    case emptyData
+    case fileTooLarge(maxBytes: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyData:
+            return "The selected image file is empty."
+        case .fileTooLarge(let maxBytes):
+            let maxMB = maxBytes / (1024 * 1024)
+            return "Image is too large. Max size is \(maxMB)MB."
+        }
+    }
 }
 
 struct MessageBubble: View {
@@ -346,10 +452,20 @@ struct MessageBubble: View {
         HStack {
             if message.role == .user { Spacer(minLength: 60) }
 
-            Group {
+            VStack(alignment: .leading, spacing: 8) {
+                if !message.imageAttachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(message.imageAttachments) { attachment in
+                                ImageAttachmentPreviewCard(attachment: attachment, isRemovable: false, onRemove: nil)
+                            }
+                        }
+                    }
+                }
+
                 if message.role == .assistant {
                     MarkdownMessageView(content: message.content)
-                } else {
+                } else if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(message.content)
                         .font(.system(size: 13))
                         .foregroundStyle(.white)
@@ -365,5 +481,74 @@ struct MessageBubble: View {
 
             if message.role == .assistant { Spacer(minLength: 60) }
         }
+    }
+}
+
+private struct ImageAttachmentPreviewCard: View {
+    let attachment: MessageImageAttachment
+    let isRemovable: Bool
+    let onRemove: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                if let image = attachment.nsImage {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .padding(8)
+                }
+            }
+            .frame(width: 42, height: 42)
+            .background(Color.white.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(attachment.fileName)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Text("IMAGE")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .tracking(0.8)
+            }
+
+            if isRemovable {
+                Button {
+                    onRemove?()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
+    }
+}
+
+private extension MessageImageAttachment {
+    var nsImage: NSImage? {
+        guard let data = Data(base64Encoded: base64Data) else { return nil }
+        return NSImage(data: data)
+    }
+
+    var chatPayload: ChatImagePayload {
+        ChatImagePayload(fileName: fileName, mediaType: mediaType, data: base64Data)
     }
 }
