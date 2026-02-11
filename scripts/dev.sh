@@ -10,6 +10,7 @@ mkdir -p "${DERIVED_DATA}"
 
 sidecar_pid=""
 app_pid=""
+transcriber_pid=""
 
 cleanup() {
   set +e
@@ -18,6 +19,9 @@ cleanup() {
   fi
   if [[ -n "${sidecar_pid}" ]]; then
     kill "${sidecar_pid}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${transcriber_pid}" ]]; then
+    kill "${transcriber_pid}" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -69,6 +73,28 @@ for i in $(seq 1 30); do
   fi
   sleep 0.5
 done
+
+# Auto-setup transcriber if venv doesn't exist or requirements changed
+TRANSCRIBER_VENV="${HOME}/.flux/transcriber-venv"
+NEEDS_SETUP=false
+if [[ ! -d "${TRANSCRIBER_VENV}" ]]; then
+  NEEDS_SETUP=true
+  echo "[dev] Transcriber venv not found. Running first-time setup..."
+elif ! diff -q "${ROOT}/transcriber/requirements.txt" "${TRANSCRIBER_VENV}/.requirements-stamp" >/dev/null 2>&1; then
+  NEEDS_SETUP=true
+  echo "[dev] Transcriber requirements changed. Re-running setup..."
+fi
+
+if [[ "${NEEDS_SETUP}" == "true" ]]; then
+  echo "[dev] This will download the Parakeet model (~600MB). This only happens once."
+  if [[ -x "${ROOT}/transcriber/setup.sh" ]]; then
+    bash "${ROOT}/transcriber/setup.sh"
+  else
+    echo "[dev] Warning: transcriber/setup.sh not found or not executable. Voice transcription will be unavailable." >&2
+  fi
+else
+  echo "[dev] Transcriber venv found."
+fi
 
 echo "[dev] Building Flux (Debug)..."
 (

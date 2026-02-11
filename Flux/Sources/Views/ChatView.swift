@@ -14,6 +14,7 @@ struct ChatView: View {
     @State private var inputText = ""
     @State private var voiceInput = VoiceInput()
     @FocusState private var isInputFocused: Bool
+    @State private var showMicPermissionAlert = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,12 +51,19 @@ struct ChatView: View {
             HStack(spacing: 8) {
                 // Mic button
                 Button {
-                    if voiceInput.isRecording {
-                        voiceInput.stopRecording()
-                    } else {
-                        voiceInput.startRecording { transcript in
-                            inputText = transcript
-                            sendMessage()
+                    Task {
+                        if voiceInput.isRecording {
+                            voiceInput.stopRecording()
+                        } else {
+                            let granted = await voiceInput.ensureMicrophonePermission()
+                            guard granted else {
+                                showMicPermissionAlert = true
+                                return
+                            }
+                            await voiceInput.startRecording { transcript in
+                                inputText = transcript
+                                sendMessage()
+                            }
                         }
                     }
                 } label: {
@@ -102,6 +110,21 @@ struct ChatView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isInputFocused = true
             }
+        }
+        .onChange(of: voiceInput.transcript) { _, newValue in
+            // While recording, show partial (live) transcription as the user speaks.
+            guard voiceInput.isRecording else { return }
+            inputText = newValue
+        }
+        .alert("Microphone Access Required", isPresented: $showMicPermissionAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Flux needs microphone access for voice input. Please enable it in System Settings > Privacy & Security > Microphone.")
         }
     }
 
