@@ -34,6 +34,16 @@ xcodebuild -scheme Flux -configuration Debug build
 cd sidecar && npm install && npm start
 ```
 
+## Testing
+
+```bash
+# Swift tests
+swift test --package-path Flux
+
+# Sidecar tests
+cd sidecar && npm install && npm test
+```
+
 ## Architecture
 
 ```

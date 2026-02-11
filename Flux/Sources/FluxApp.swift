@@ -24,6 +24,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
+    private var functionKeyMonitor: EventMonitor?
+    private var isFunctionKeyPressed = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -65,6 +67,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func launchMainApp() {
         setupBridgeCallbacks()
+        setupFunctionKeyMonitor()
         automationService.configureRunner { [weak self] request in
             guard let self else { return false }
             guard self.agentBridge.isConnected else { return false }
@@ -92,6 +95,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        functionKeyMonitor?.stop()
+        functionKeyMonitor = nil
+    }
+
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
@@ -106,6 +114,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         item.menu = menu
         statusItem = item
+    }
+
+    private func setupFunctionKeyMonitor() {
+        functionKeyMonitor?.stop()
+        functionKeyMonitor = EventMonitor(mask: .flagsChanged) { [weak self] event in
+            self?.handleFunctionKeyFlagsChanged(event)
+        }
+        functionKeyMonitor?.start()
+    }
+
+    private func handleFunctionKeyFlagsChanged(_ event: NSEvent) {
+        let isFunctionPressedNow = event.modifierFlags.contains(.function)
+        if isFunctionPressedNow {
+            guard !isFunctionKeyPressed else { return }
+            isFunctionKeyPressed = true
+            openExpandedIslandChatView()
+            return
+        }
+
+        isFunctionKeyPressed = false
+    }
+
+    private func openExpandedIslandChatView() {
+        let islandWasShown = IslandWindowManager.shared.isShown
+        if !islandWasShown {
+            IslandWindowManager.shared.showIsland(
+                conversationStore: conversationStore,
+                agentBridge: agentBridge
+            )
+        }
+
+        let conversationId: UUID
+        if let activeConversationId = conversationStore.activeConversationId {
+            conversationId = activeConversationId
+        } else {
+            conversationId = conversationStore.createConversation().id
+        }
+
+        conversationStore.openConversation(id: conversationId)
+        IslandWindowManager.shared.expand()
+
+        if islandWasShown {
+            NotificationCenter.default.post(
+                name: .islandOpenConversationRequested,
+                object: nil,
+                userInfo: [NotificationPayloadKey.conversationId: conversationId.uuidString]
+            )
+        }
     }
 
     private func setupAutomationThreadObserver() {
