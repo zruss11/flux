@@ -347,13 +347,10 @@ struct IslandView: View {
 
             ZStack {
                 if showActivity {
-                    Image(systemName: "ellipsis.bubble")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.95))
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 22, height: 22)
-                        .background(Circle().fill(.white.opacity(0.14)))
-                        .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 0.8))
-                        .shadow(color: .white.opacity(0.35), radius: 6)
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
