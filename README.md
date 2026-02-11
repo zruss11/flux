@@ -65,6 +65,11 @@ git push origin v0.1.0
 
 Or run manually with `workflow_dispatch` and provide a tag.
 
+Release assets include:
+- `flux-<version>.dmg`
+- `flux-<version>.dmg.sha256`
+- `sidecar-dist.tgz`
+
 ## Architecture
 
 ```

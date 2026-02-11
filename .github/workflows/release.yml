@@ -23,9 +23,12 @@ jobs:
     steps:
       - name: Resolve release metadata
         id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG="${INPUT_TAG}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
@@ -42,6 +45,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.meta.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: sidecar/package-lock.json
 
       - name: Validate release secrets
         env:
@@ -116,6 +125,16 @@ jobs:
             "${APP_BUNDLE}"
           codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
 
+      - name: Build sidecar distribution bundle
+        run: |
+          npm ci --prefix sidecar
+          npm run build --prefix sidecar
+          tar -czf "${RUNNER_TEMP}/sidecar-dist.tgz" \
+            -C sidecar \
+            dist \
+            package.json \
+            package-lock.json
+
       - name: Create, notarize, and staple DMG
         id: dmg
         env:
@@ -153,9 +172,15 @@ jobs:
           xcrun stapler validate "${DMG_PATH}"
           spctl --assess --type open --context context:primary-signature --verbose=2 "${DMG_PATH}"
 
-          shasum -a 256 "${DMG_PATH}" > "${DMG_PATH}.sha256"
+          CHECKSUM_PATH="${RUNNER_TEMP}/${DMG_NAME}.sha256"
+          (
+            cd "${RUNNER_TEMP}"
+            shasum -a 256 "${DMG_NAME}" > "${DMG_NAME}.sha256"
+          )
           echo "name=${DMG_NAME}" >> "${GITHUB_OUTPUT}"
           echo "path=${DMG_PATH}" >> "${GITHUB_OUTPUT}"
+          echo "checksum_path=${CHECKSUM_PATH}" >> "${GITHUB_OUTPUT}"
+          echo "sidecar_path=${RUNNER_TEMP}/sidecar-dist.tgz" >> "${GITHUB_OUTPUT}"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -163,7 +188,8 @@ jobs:
           name: flux-dmg-${{ steps.meta.outputs.version }}
           path: |
             ${{ steps.dmg.outputs.path }}
-            ${{ steps.dmg.outputs.path }}.sha256
+            ${{ steps.dmg.outputs.checksum_path }}
+            ${{ steps.dmg.outputs.sidecar_path }}
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
@@ -173,4 +199,5 @@ jobs:
           generate_release_notes: true
           files: |
             ${{ steps.dmg.outputs.path }}
-            ${{ steps.dmg.outputs.path }}.sha256
+            ${{ steps.dmg.outputs.checksum_path }}
+            ${{ steps.dmg.outputs.sidecar_path }}
