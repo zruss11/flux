@@ -5,12 +5,21 @@ struct NotchGeometry: Sendable {
     let deviceNotchRect: CGRect
     let screenRect: CGRect
     let windowHeight: CGFloat
+    /// Distance from screen top to the island top (menu bar height for non-notch screens).
+    let topInset: CGFloat
 
-    /// The notch rect in screen coordinates (for hit testing with global mouse position)
+    init(deviceNotchRect: CGRect, screenRect: CGRect, windowHeight: CGFloat, topInset: CGFloat = 0) {
+        self.deviceNotchRect = deviceNotchRect
+        self.screenRect = screenRect
+        self.windowHeight = windowHeight
+        self.topInset = topInset
+    }
+
+    /// The notch/pill rect in screen coordinates (for hit testing with global mouse position)
     var notchScreenRect: CGRect {
         CGRect(
             x: screenRect.midX - deviceNotchRect.width / 2,
-            y: screenRect.maxY - deviceNotchRect.height,
+            y: screenRect.maxY - topInset - deviceNotchRect.height,
             width: deviceNotchRect.width,
             height: deviceNotchRect.height
         )
@@ -22,7 +31,7 @@ struct NotchGeometry: Sendable {
         let height = size.height + 20
         return CGRect(
             x: screenRect.midX - width / 2,
-            y: screenRect.maxY - height,
+            y: screenRect.maxY - topInset - height,
             width: width,
             height: height
         )

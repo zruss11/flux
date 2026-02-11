@@ -29,6 +29,16 @@
 - Telegram DM pairing state is shared via `~/.flux/telegram/pairing.json` so both Swift and the sidecar can read/write approvals.
 - For `capture_screen` results in the Anthropic conversation loop, send image payloads as tool-result image blocks (`source: {type: 'base64', media_type, data}`) rather than raw base64 text to avoid token-limit failures.
 - For recurring agent workflows, implement persistence/scheduling in a dedicated Swift service and expose CRUD/run controls via sidecar tool definitions + matching `FluxApp` tool handlers.
+- If using `EKEventStore.requestFullAccessToReminders()`, include `NSRemindersFullAccessUsageDescription` in `Flux/Info.plist` or macOS will terminate the app at runtime.
+- For closed-island background activity indicators, emit explicit sidecar run lifecycle events (e.g. `run_status` true/false) and drive Swift UI from `AgentBridge.isAgentWorking` instead of inferring from hover/tool-call UI state.
+- Keep closed-island activity robust with multiple signals: sidecar `run_status`, `stream_chunk`/`tool_use_*` tracking in `AgentBridge`, plus a UI fallback for any pending tool calls in `ConversationStore`.
+- If closed-island activity still doesn’t render, derive “working” from three independent paths in UI state: bridge run/tool/stream activity, pending tool calls, and whether the active conversation has a newer user message than assistant message.
+- In the closed island, center-clustered icons can look missing; pin activity sparkle to the left edge and the task icon to the right edge for unmistakable visibility.
+- For closed notch layouts that rely on `Spacer()`, use fixed `frame(width:height:)` on the container instead of `maxWidth/maxHeight`; otherwise the view can collapse to intrinsic width and edge indicators appear missing.
+- For closed-notch activity affordances, use explicit left/right slot widths (not spacer distribution) so status icons remain visible whenever the island widens.
+- For closed-island activity UI, keep an independent `ConversationStore` run-state flag (started on send, updated by stream/run-status callbacks) and OR it with bridge state so indicators survive dropped/late WebSocket lifecycle events.
+- In animating notch UIs, pin closed-header content to `.top` during expand/collapse transitions; centered stacks make indicators appear too low and only visible during a brief morph frame.
+- Add a short visibility latch (~1.5s) for closed-state activity indicators so transient state flips do not cause one-frame flashes.
 
 ## Patterns That Don't Work
 - (approaches that failed and why)

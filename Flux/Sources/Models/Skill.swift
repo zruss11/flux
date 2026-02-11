@@ -8,6 +8,7 @@ struct Skill: Identifiable, Hashable {
     let icon: String      // SF Symbol name
     let color: Color
     let isInstalled: Bool
+    var requiredPermissions: Set<SkillPermission> = []
 
     // MARK: - Icon Mapping
 
@@ -42,6 +43,14 @@ struct Skill: Identifiable, Hashable {
         if lower.contains("spotify") { return "music.note" }
         if lower.contains("gmail") { return "envelope.fill" }
         if lower.contains("figma") { return "paintbrush.pointed.fill" }
+        if lower.contains("notion") { return "doc.richtext" }
+        if lower.contains("todoist") || lower.contains("todo") { return "checklist" }
+        if lower.contains("jira") { return "list.bullet.rectangle" }
+        if lower.contains("slack") { return "number" }
+        if lower.contains("discord") { return "bubble.left.and.bubble.right.fill" }
+        if lower.contains("reminder") { return "bell.fill" }
+        if lower.contains("terminal") { return "terminal.fill" }
+        if lower.contains("raycast") { return "rays" }
         return "sparkle"
     }
 

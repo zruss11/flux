@@ -74,7 +74,19 @@ interface StreamChunkMessage {
   content: string;
 }
 
-type OutgoingMessage = AssistantMessage | ToolRequestMessage | ToolUseStartMessage | ToolUseCompleteMessage | StreamChunkMessage;
+interface RunStatusMessage {
+  type: 'run_status';
+  conversationId: string;
+  isWorking: boolean;
+}
+
+type OutgoingMessage =
+  | AssistantMessage
+  | ToolRequestMessage
+  | ToolUseStartMessage
+  | ToolUseCompleteMessage
+  | StreamChunkMessage
+  | RunStatusMessage;
 
 type MessageParam = Anthropic.MessageParam;
 type ContentBlockParam = Anthropic.ContentBlockParam;
@@ -406,142 +418,146 @@ async function runConversationLoop(
   options: RunConversationOptions = {},
 ): Promise<void> {
   const client = getAnthropicClient();
+  sendToClient(ws, { type: 'run_status', conversationId, isWorking: true });
+  try {
+    while (true) {
+      const { tools, mcp, skills } = await getToolDefinitions();
+      const linearSkill = skills.find((s) => s.id === 'linear' || s.name.toLowerCase() === 'linear');
+      const linearHint = linearSkill?.defaultPrompt;
 
-  while (true) {
-    const { tools, mcp, skills } = await getToolDefinitions();
-    const linearSkill = skills.find((s) => s.id === 'linear' || s.name.toLowerCase() === 'linear');
-    const linearHint = linearSkill?.defaultPrompt;
+      // Redact old tool results before sending the next request to avoid unbounded growth
+      // from screenshots/large AX dumps that are no longer needed for model context.
+      redactOldToolResults(history);
 
-    // Redact old tool results before sending the next request to avoid unbounded growth
-    // from screenshots/large AX dumps that are no longer needed for model context.
-    redactOldToolResults(history);
+      // Stream the response
+      let fullText = '';
+      const toolUseBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
+      let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
 
-    // Stream the response
-    let fullText = '';
-    const toolUseBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-    let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
+      const stream = client.beta.messages.stream({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 4096,
+        betas: ['context-management-2025-06-27'],
+        system: [
+          'You are Flux, a macOS AI desktop copilot. You can see the user\'s screen, read window contents, and execute commands.',
+          'Be concise and helpful.',
+          'When the user asks about what\'s on their screen, use read_visible_windows for multi-window context, read_ax_tree for the frontmost window, or capture_screen for visual details.',
+          'Agent SDK skills reference: https://platform.claude.com/docs/en/agent-sdk/skills',
+          'IMPORTANT: ALWAYS VIEW YOUR MEMORY DIRECTORY BEFORE DOING ANYTHING ELSE.',
+          'MEMORY PROTOCOL: 1. Use the `view` command of your `memory` tool to check for earlier progress. 2. As you work, record status, progress, and thoughts in your memory.',
+          'ASSUME INTERRUPTION: Your context window might be reset at any moment, so record progress in memory.',
+          'When editing your memory folder, keep its content up-to-date, coherent and organized. Delete or rename files that are no longer relevant.',
+          mcp.hasServer('linear')
+            ? [
+                'For Linear work (issues/projects), use the linear__* tools.',
+                linearHint ? `Skill hint: ${linearHint}` : '',
+                'If Linear tools fail due to auth, call linear__setup and explain what to configure.',
+              ]
+                .filter(Boolean)
+                .join(' ')
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+        messages: history,
+        tools: [
+          { type: 'memory_20250818' as const, name: 'memory' },
+          ...(tools as any[]),
+        ] as any[],
+      });
 
-    const stream = client.beta.messages.stream({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      betas: ['context-management-2025-06-27'],
-      system: [
-        'You are Flux, a macOS AI desktop copilot. You can see the user\'s screen, read window contents, and execute commands.',
-        'Be concise and helpful.',
-        'When the user asks about what\'s on their screen, use read_visible_windows for multi-window context, read_ax_tree for the frontmost window, or capture_screen for visual details.',
-        'Agent SDK skills reference: https://platform.claude.com/docs/en/agent-sdk/skills',
-        'IMPORTANT: ALWAYS VIEW YOUR MEMORY DIRECTORY BEFORE DOING ANYTHING ELSE.',
-        'MEMORY PROTOCOL: 1. Use the `view` command of your `memory` tool to check for earlier progress. 2. As you work, record status, progress, and thoughts in your memory.',
-        'ASSUME INTERRUPTION: Your context window might be reset at any moment, so record progress in memory.',
-        'When editing your memory folder, keep its content up-to-date, coherent and organized. Delete or rename files that are no longer relevant.',
-        mcp.hasServer('linear')
-          ? [
-              'For Linear work (issues/projects), use the linear__* tools.',
-              linearHint ? `Skill hint: ${linearHint}` : '',
-              'If Linear tools fail due to auth, call linear__setup and explain what to configure.',
-            ]
-              .filter(Boolean)
-              .join(' ')
-          : '',
-      ]
-        .filter(Boolean)
-        .join(' '),
-      messages: history,
-      tools: [
-        { type: 'memory_20250818' as const, name: 'memory' },
-        ...(tools as any[]),
-      ] as any[],
-    });
-
-    for await (const event of stream) {
-      if (event.type === 'content_block_start') {
-        if (event.content_block.type === 'tool_use') {
-          currentToolUse = {
-            id: event.content_block.id,
-            name: event.content_block.name,
-            inputJson: '',
-          };
-        }
-      } else if (event.type === 'content_block_delta') {
-        if (event.delta.type === 'text_delta') {
-          fullText += event.delta.text;
-          sendToClient(ws, {
-            type: 'stream_chunk',
-            conversationId,
-            content: event.delta.text,
-          });
-        } else if (event.delta.type === 'input_json_delta' && currentToolUse) {
-          currentToolUse.inputJson += event.delta.partial_json;
-        }
-      } else if (event.type === 'content_block_stop') {
-        if (currentToolUse) {
-          let input: Record<string, unknown> = {};
-          try {
-            input = JSON.parse(currentToolUse.inputJson || '{}');
-          } catch {
-            // empty input
+      for await (const event of stream) {
+        if (event.type === 'content_block_start') {
+          if (event.content_block.type === 'tool_use') {
+            currentToolUse = {
+              id: event.content_block.id,
+              name: event.content_block.name,
+              inputJson: '',
+            };
           }
-          toolUseBlocks.push({
-            id: currentToolUse.id,
-            name: currentToolUse.name,
-            input,
-          });
-          currentToolUse = null;
+        } else if (event.type === 'content_block_delta') {
+          if (event.delta.type === 'text_delta') {
+            fullText += event.delta.text;
+            sendToClient(ws, {
+              type: 'stream_chunk',
+              conversationId,
+              content: event.delta.text,
+            });
+          } else if (event.delta.type === 'input_json_delta' && currentToolUse) {
+            currentToolUse.inputJson += event.delta.partial_json;
+          }
+        } else if (event.type === 'content_block_stop') {
+          if (currentToolUse) {
+            let input: Record<string, unknown> = {};
+            try {
+              input = JSON.parse(currentToolUse.inputJson || '{}');
+            } catch {
+              // empty input
+            }
+            toolUseBlocks.push({
+              id: currentToolUse.id,
+              name: currentToolUse.name,
+              input,
+            });
+            currentToolUse = null;
+          }
         }
       }
-    }
 
-    const finalMessage = await stream.finalMessage();
+      const finalMessage = await stream.finalMessage();
 
-    // Add assistant message to history
-    history.push({ role: 'assistant', content: finalMessage.content as any });
-    trimHistory(history);
+      // Add assistant message to history
+      history.push({ role: 'assistant', content: finalMessage.content as any });
+      trimHistory(history);
 
-    // If no tool use, we're done
-    if (finalMessage.stop_reason !== 'tool_use' || toolUseBlocks.length === 0) {
-      const assistantText = fullText || extractTextFromContent(finalMessage.content);
-      if (assistantText && assistantText.trim().length > 0) {
-        options.onAssistantFinal?.(assistantText);
+      // If no tool use, we're done
+      if (finalMessage.stop_reason !== 'tool_use' || toolUseBlocks.length === 0) {
+        const assistantText = fullText || extractTextFromContent(finalMessage.content);
+        if (assistantText && assistantText.trim().length > 0) {
+          options.onAssistantFinal?.(assistantText);
+        }
+        break;
       }
-      break;
+
+      // Handle tool use — request execution from Swift app
+      const toolResults: ContentBlockParam[] = [];
+
+      for (const toolUse of toolUseBlocks) {
+        console.log(`[${conversationId}] Tool request: ${toolUse.name}`);
+
+        // Notify Swift UI that a tool call is starting
+        const inputSummary = summarizeToolInput(toolUse.name, toolUse.input);
+        sendToClient(ws, {
+          type: 'tool_use_start',
+          conversationId,
+          toolUseId: toolUse.id,
+          toolName: toolUse.name,
+          inputSummary,
+        });
+
+        const result = isNodeTool(toolUse.name, mcp)
+          ? await executeNodeTool(toolUse.name, toolUse.input, mcp)
+          : await requestToolFromSwift(ws, conversationId, toolUse);
+        console.log(`[${conversationId}] Tool result for ${toolUse.name}: ${result.substring(0, 100)}...`);
+
+        // Notify Swift UI that the tool call is complete
+        sendToClient(ws, {
+          type: 'tool_use_complete',
+          conversationId,
+          toolUseId: toolUse.id,
+          toolName: toolUse.name,
+          resultPreview: toolResultPreview(toolUse.name, result),
+        });
+
+        toolResults.push(toolResultToContentBlock(toolUse.id, toolUse.name, result));
+      }
+
+      // Add tool results to history
+      history.push({ role: 'user', content: toolResults });
+      trimHistory(history);
     }
-
-    // Handle tool use — request execution from Swift app
-    const toolResults: ContentBlockParam[] = [];
-
-    for (const toolUse of toolUseBlocks) {
-      console.log(`[${conversationId}] Tool request: ${toolUse.name}`);
-
-      // Notify Swift UI that a tool call is starting
-      const inputSummary = summarizeToolInput(toolUse.name, toolUse.input);
-      sendToClient(ws, {
-        type: 'tool_use_start',
-        conversationId,
-        toolUseId: toolUse.id,
-        toolName: toolUse.name,
-        inputSummary,
-      });
-
-      const result = isNodeTool(toolUse.name, mcp)
-        ? await executeNodeTool(toolUse.name, toolUse.input, mcp)
-        : await requestToolFromSwift(ws, conversationId, toolUse);
-      console.log(`[${conversationId}] Tool result for ${toolUse.name}: ${result.substring(0, 100)}...`);
-
-      // Notify Swift UI that the tool call is complete
-      sendToClient(ws, {
-        type: 'tool_use_complete',
-        conversationId,
-        toolUseId: toolUse.id,
-        toolName: toolUse.name,
-        resultPreview: toolResultPreview(toolUse.name, result),
-      });
-
-      toolResults.push(toolResultToContentBlock(toolUse.id, toolUse.name, result));
-    }
-
-    // Add tool results to history
-    history.push({ role: 'user', content: toolResults });
-    trimHistory(history);
+  } finally {
+    sendToClient(ws, { type: 'run_status', conversationId, isWorking: false });
   }
 }
 

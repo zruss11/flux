@@ -5,6 +5,8 @@ import AppKit
 final class ToolRunner {
     private let contextManager = ContextManager()
 
+    /// Executes a custom tool by expanding template variables and running
+    /// each action in-order.
     func executeTool(_ tool: CustomTool, context: ScreenContext) async -> String {
         var prompt = tool.prompt
 
@@ -39,6 +41,7 @@ final class ToolRunner {
         return results.joined(separator: "\n")
     }
 
+    /// Executes a single tool action.
     private func executeAction(_ action: ToolAction) async -> String {
         switch action {
         case .shortcut(let name):
@@ -46,16 +49,18 @@ final class ToolRunner {
         case .shell(let script):
             return await executeShellScript(script)
         case .applescript(let script):
-            return executeAppleScript(script)
+            return await executeAppleScript(script)
         case .claude(let instructions):
             return "Claude action: \(instructions)"
         }
     }
 
+    /// Runs an Apple Shortcut by name.
     func executeShortcut(named name: String) async -> String {
         await executeShellScript("/usr/bin/shortcuts run \"\(name)\"")
     }
 
+    /// Runs a shell script and returns combined stdout/stderr.
     func executeShellScript(_ script: String) async -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -75,15 +80,39 @@ final class ToolRunner {
         }
     }
 
-    func executeAppleScript(_ source: String) -> String {
-        var error: NSDictionary?
-        let script = NSAppleScript(source: source)
-        let result = script?.executeAndReturnError(&error)
+    /// Runs AppleScript via `/usr/bin/osascript` and returns output or an error string.
+    func executeAppleScript(_ source: String) async -> String {
+        // Run via osascript in a background thread to avoid blocking the main thread.
+        // NSAppleScript.executeAndReturnError is synchronous and will freeze the UI
+        // when called on the @MainActor.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                process.arguments = ["-e", source]
 
-        if let error {
-            return "AppleScript error: \(error)"
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+
+                do {
+                    try process.run()
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
+                    let output = String(data: data, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if process.terminationStatus != 0 {
+                        let detail = output.isEmpty
+                            ? "exit code \(process.terminationStatus)"
+                            : output
+                        continuation.resume(returning: "AppleScript error: \(detail)")
+                    } else {
+                        continuation.resume(returning: output)
+                    }
+                } catch {
+                    continuation.resume(returning: "Error: \(error.localizedDescription)")
+                }
+            }
         }
-
-        return result?.stringValue ?? ""
     }
 }

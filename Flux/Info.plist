@@ -24,6 +24,10 @@
 	<string>Flux needs microphone access for voice input commands.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Flux uses speech recognition to transcribe voice commands.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Flux uses Automation to control apps like Notes, Messages, Calendar, and Reminders on your behalf via AI skills.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Flux needs full access to Reminders for skills that read and update your tasks.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Flux</string>
 </dict>
