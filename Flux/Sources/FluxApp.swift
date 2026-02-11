@@ -104,6 +104,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let uuid = UUID(uuidString: conversationId) else { return }
             Task { @MainActor in
                 self.conversationStore.addMessage(to: uuid, role: .assistant, content: content)
+                self.conversationStore.setConversationRunning(uuid, isRunning: false)
             }
         }
 
@@ -111,6 +112,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let uuid = UUID(uuidString: conversationId) else { return }
 
             Task { @MainActor in
+                self.conversationStore.setConversationRunning(uuid, isRunning: true)
                 if let conversation = self.conversationStore.conversations.first(where: { $0.id == uuid }),
                    let lastMessage = conversation.messages.last,
                    lastMessage.role == .assistant,
@@ -142,6 +144,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let uuid = UUID(uuidString: conversationId) else { return }
             let info = ToolCallInfo(id: toolUseId, toolName: toolName, inputSummary: inputSummary)
             Task { @MainActor in
+                self.conversationStore.setConversationRunning(uuid, isRunning: true)
                 self.conversationStore.addToolCall(to: uuid, info: info)
             }
         }
@@ -150,6 +153,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let uuid = UUID(uuidString: conversationId) else { return }
             Task { @MainActor in
                 self.conversationStore.completeToolCall(in: uuid, toolUseId: toolUseId, resultPreview: resultPreview)
+            }
+        }
+
+        agentBridge.onRunStatus = { [weak self] conversationId, isWorking in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                self.conversationStore.setConversationRunning(uuid, isRunning: isWorking)
             }
         }
     }

@@ -21,7 +21,7 @@ enum IslandContentType: Equatable {
 
 struct IslandView: View {
     @Bindable var conversationStore: ConversationStore
-    var agentBridge: AgentBridge
+    @Bindable var agentBridge: AgentBridge
     var notchSize: CGSize
     @ObservedObject var windowManager: IslandWindowManager
 
@@ -29,6 +29,8 @@ struct IslandView: View {
     @State private var showExpandedContent = false
     @State private var measuredChatHeight: CGFloat = 0
     @State private var skillsVisible = false
+    @State private var closedIndicatorsLatched = false
+    @State private var clearClosedIndicatorsWorkItem: DispatchWorkItem?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -46,7 +48,48 @@ struct IslandView: View {
             : .spring(response: 0.45, dampingFraction: 0.85, blendDuration: 0)
     }
 
-    private var closedWidth: CGFloat { notchSize.width }
+    private let closedActiveWidthBoost: CGFloat = 72
+    private let closedIndicatorLatchDuration: TimeInterval = 1.6
+
+    private var closedIndicatorSlotWidth: CGFloat {
+        showClosedActivityIndicators ? (closedActiveWidthBoost / 2) : 0
+    }
+
+    private var hasPendingToolCalls: Bool {
+        conversationStore.conversations.contains { conversation in
+            conversation.messages.contains { message in
+                message.toolCalls.contains { $0.status == .pending }
+            }
+        }
+    }
+
+    private var activeConversationAwaitingAssistant: Bool {
+        guard let conversation = conversationStore.activeConversation else { return false }
+        guard let lastUser = conversation.messages.last(where: { $0.role == .user }) else { return false }
+        guard let lastAssistant = conversation.messages.last(where: { $0.role == .assistant }) else { return true }
+        return lastUser.timestamp > lastAssistant.timestamp
+    }
+
+    private var rawShowClosedActivityIndicators: Bool {
+        !isExpanded && (
+            agentBridge.isAgentWorking
+                || conversationStore.hasRunningConversations
+                || hasPendingToolCalls
+                || activeConversationAwaitingAssistant
+        )
+    }
+
+    private var showClosedActivityIndicators: Bool {
+        rawShowClosedActivityIndicators || (!isExpanded && closedIndicatorsLatched)
+    }
+
+    private var isClosedIndicatorAnimating: Bool {
+        !isExpanded && (agentBridge.isAgentWorking || conversationStore.hasRunningConversations)
+    }
+
+    private var closedWidth: CGFloat {
+        notchSize.width + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
+    }
     private var closedHeight: CGFloat { notchSize.height }
     private var expandedWidth: CGFloat { 480 }
     private let maxExpandedHeight: CGFloat = 540
@@ -54,6 +97,7 @@ struct IslandView: View {
 
     private var isExpanded: Bool { windowManager.isExpanded }
     private var isHovering: Bool { windowManager.isHovering }
+    private var hasNotch: Bool { windowManager.hasNotch }
 
     private var messageCount: Int {
         conversationStore.activeConversation?.messages.count ?? 0
@@ -85,6 +129,8 @@ struct IslandView: View {
 
     private var topRadius: CGFloat { isExpanded ? 19 : 6 }
     private var bottomRadius: CGFloat { isExpanded ? 24 : 14 }
+    /// Corner radius used for the pill shape on non-notch screens.
+    private var pillRadius: CGFloat { isExpanded ? 24 : closedHeight / 2 }
 
     // Hover "breathe" — subtle width bump to hint interactivity
     private var hoverWidthBoost: CGFloat { (!isExpanded && isHovering) ? 8 : 0 }
@@ -94,19 +140,31 @@ struct IslandView: View {
         ZStack(alignment: .top) {
             notchContent
                 .frame(
-                    maxWidth: currentWidth + hoverWidthBoost,
-                    maxHeight: currentHeight + hoverHeightBoost,
+                    width: currentWidth + hoverWidthBoost,
+                    height: currentHeight + hoverHeightBoost,
                     alignment: .top
                 )
                 .padding(.horizontal, isExpanded ? topRadius : bottomRadius)
                 .padding([.horizontal, .bottom], isExpanded ? 12 : 0)
                 .background(.black)
-                .clipShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
+                .clipShape(
+                    hasNotch
+                        ? AnyShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
+                        : AnyShape(RoundedRectangle(cornerRadius: pillRadius, style: .continuous))
+                )
                 .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(.black)
-                        .frame(height: 1)
-                        .padding(.horizontal, topRadius)
+                    if hasNotch {
+                        Rectangle()
+                            .fill(.black)
+                            .frame(height: 1)
+                            .padding(.horizontal, topRadius)
+                    }
+                }
+                .overlay {
+                    if !hasNotch {
+                        RoundedRectangle(cornerRadius: pillRadius, style: .continuous)
+                            .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                    }
                 }
                 .shadow(
                     color: (isExpanded || isHovering) ? .black.opacity(0.7) : .clear,
@@ -119,10 +177,14 @@ struct IslandView: View {
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
                 .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
+                .padding(.top, hasNotch ? 0 : windowManager.topOffset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
+                clearClosedIndicatorsWorkItem?.cancel()
+                clearClosedIndicatorsWorkItem = nil
+                closedIndicatorsLatched = false
                 windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
                 // Content fades in after the shell has finished its bounce
                 withAnimation(
@@ -136,6 +198,22 @@ struct IslandView: View {
                 // Content vanishes quickly, then the shell retracts
                 showExpandedContent = false
             }
+        }
+        .onChange(of: rawShowClosedActivityIndicators) { _, isActive in
+            if isActive {
+                clearClosedIndicatorsWorkItem?.cancel()
+                clearClosedIndicatorsWorkItem = nil
+                closedIndicatorsLatched = true
+                return
+            }
+
+            clearClosedIndicatorsWorkItem?.cancel()
+            let workItem = DispatchWorkItem {
+                closedIndicatorsLatched = false
+                clearClosedIndicatorsWorkItem = nil
+            }
+            clearClosedIndicatorsWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + closedIndicatorLatchDuration, execute: workItem)
         }
         .onChange(of: messageCount) { _, _ in
             if isExpanded {
@@ -167,10 +245,11 @@ struct IslandView: View {
 
     @ViewBuilder
     private var notchContent: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             // Closed state — centered in the notch
             closedHeaderContent
                 .opacity(isExpanded ? 0 : 1)
+                .frame(maxWidth: .infinity, alignment: .top)
 
             // Expanded state — header + body
             VStack(alignment: .leading, spacing: 0) {
@@ -186,22 +265,46 @@ struct IslandView: View {
             }
             .opacity(isExpanded ? 1 : 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Closed Header (inside the notch)
 
     private var closedHeaderContent: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(isHovering ? 0.9 : 0.0))
+        let showActivity = showClosedActivityIndicators
+
+        return HStack(spacing: 0) {
+            ZStack {
+                if showActivity {
+                    ClosedSparklesIndicator(isActive: isClosedIndicatorAnimating)
+                        .frame(width: 22, height: 22)
+                }
+            }
+            .frame(width: closedIndicatorSlotWidth, height: closedHeight)
 
             Text("Flux")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(isHovering ? 0.8 : 0.0))
+                .foregroundStyle(.white.opacity(showActivity ? 0.92 : (isHovering ? 0.8 : 0.0)))
+                .frame(width: notchSize.width, height: closedHeight)
+
+            ZStack {
+                if showActivity {
+                    Image(systemName: "ellipsis.bubble")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(.white.opacity(0.14)))
+                        .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 0.8))
+                        .shadow(color: .white.opacity(0.35), radius: 6)
+                }
+            }
+            .frame(width: closedIndicatorSlotWidth, height: closedHeight)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: closedWidth, height: closedHeight)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .clipped()
         .animation(.easeInOut(duration: 0.2), value: isHovering)
+        .animation(.easeInOut(duration: 0.2), value: showActivity)
     }
 
     // MARK: - Opened Header
@@ -396,6 +499,71 @@ struct IslandView: View {
             }
             .transition(.opacity.animation(.easeInOut(duration: 0.2)))
         }
+    }
+}
+
+private struct ClosedSparklesIndicator: View {
+    let isActive: Bool
+
+    @State private var pulse = false
+    @State private var twinkle = false
+
+    var body: some View {
+        ZStack {
+            // Main sparkles icon — gentle breathing pulse with soft glow
+            Image(systemName: "sparkles")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white.opacity(isActive ? 1 : 0.6))
+                .scaleEffect(pulse ? 1.08 : 0.92)
+                .offset(y: pulse ? -0.5 : 0.5)
+                .rotationEffect(.degrees(pulse ? 4 : -4))
+                .shadow(color: .white.opacity(isActive ? 0.7 : 0), radius: isActive ? 6 : 0)
+                .shadow(color: .white.opacity(isActive ? 0.3 : 0), radius: isActive ? 12 : 0)
+
+            // Twinkling particle dots at staggered offsets
+            SparkDot(isActive: isActive, twinkle: twinkle, offset: CGPoint(x: 7, y: -5), delay: 0)
+            SparkDot(isActive: isActive, twinkle: twinkle, offset: CGPoint(x: -5, y: -7), delay: 0.3)
+            SparkDot(isActive: isActive, twinkle: twinkle, offset: CGPoint(x: 6, y: 5), delay: 0.6)
+        }
+        .animation(
+            isActive ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true) : .easeOut(duration: 0.15),
+            value: pulse
+        )
+        .animation(
+            isActive ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .easeOut(duration: 0.15),
+            value: twinkle
+        )
+        .onAppear { setAnimationState(active: isActive) }
+        .onChange(of: isActive) { _, active in
+            setAnimationState(active: active)
+        }
+    }
+
+    private func setAnimationState(active: Bool) {
+        pulse = active
+        twinkle = active
+    }
+}
+
+private struct SparkDot: View {
+    let isActive: Bool
+    let twinkle: Bool
+    let offset: CGPoint
+    let delay: Double
+
+    var body: some View {
+        Circle()
+            .fill(.white)
+            .frame(width: 2, height: 2)
+            .opacity(isActive ? (twinkle ? 0.9 : 0.1) : 0)
+            .scaleEffect(twinkle ? 1.2 : 0.4)
+            .offset(x: offset.x, y: offset.y)
+            .animation(
+                isActive
+                    ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true).delay(delay)
+                    : .easeOut(duration: 0.1),
+                value: twinkle
+            )
     }
 }
 
