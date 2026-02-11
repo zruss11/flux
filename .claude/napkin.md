@@ -11,6 +11,8 @@
 | 2026-02-11 | me | Typed a Unicode comparison symbol (`≥`) in source while editing AppleScript in Swift raw strings. | Keep source edits ASCII-only unless Unicode is explicitly required; use `>=` style operators in embedded scripts. |
 | 2026-02-11 | me | Used `>=` inside AppleScript and caused parse errors (`Expected end of line but found identifier`). | In AppleScript use textual comparisons (`is greater than or equal to`) or valid AppleScript operators. |
 | 2026-02-11 | user | Needed to keep working on existing branch `zruss11/all-window-context`, but I renamed away from it. | Keep the current task branch stable when user says to continue existing work; only rename when explicitly needed. |
+| 2026-02-11 | me | Used `process.chdir()` inside Vitest tests, which fails in worker threads. | Avoid `process.chdir()` in Vitest; create fixtures under the repo/root or run tests in forks/single-thread mode. |
+| 2026-02-11 | me | Added a mutable static test override in a nonisolated type, triggering Swift concurrency-safety errors. | Prefer environment-driven overrides or isolate overrides on an actor to satisfy concurrency rules. |
 
 ## User Preferences
 - (accumulate here as you learn them)

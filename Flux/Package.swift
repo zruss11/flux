@@ -14,6 +14,11 @@ let package = Package(
                 .product(name: "MarkdownUI", package: "swift-markdown-ui")
             ],
             path: "Sources"
+        ),
+        .testTarget(
+            name: "FluxTests",
+            dependencies: ["Flux"],
+            path: "Tests"
         )
     ]
 )

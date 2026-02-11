@@ -39,6 +39,10 @@ enum DisplaySegment: Identifiable {
 @MainActor
 @Observable
 final class ConversationStore {
+    #if DEBUG
+    /// Override history directory for tests.
+    static var overrideHistoryDirectory: URL?
+    #endif
     var conversations: [Conversation] = []
     var activeConversationId: UUID?
     var folders: [ChatFolder] = []
@@ -48,6 +52,11 @@ final class ConversationStore {
     // MARK: - Persistence Paths
 
     private static var historyDirectory: URL {
+        #if DEBUG
+        if let overrideHistoryDirectory {
+            return overrideHistoryDirectory
+        }
+        #endif
         let home = FileManager.default.homeDirectoryForCurrentUser
         return home.appendingPathComponent(".flux/history", isDirectory: true)
     }
