@@ -114,7 +114,7 @@ final class VoiceInput {
 
         let permitted = await ensureMicrophonePermission()
         guard permitted else {
-            print("Microphone permission not granted")
+            Log.voice.warning("Microphone permission not granted")
             return
         }
 
@@ -151,7 +151,7 @@ final class VoiceInput {
         audioEngine = nil
 
         guard !pcmData.isEmpty else {
-            print("No audio data recorded")
+            Log.voice.warning("No audio data recorded")
             cleanUp()
             return
         }
@@ -171,7 +171,7 @@ final class VoiceInput {
                     callback?(transcribedText)
                 }
             } catch {
-                print("Transcription error: \(error)")
+                Log.voice.error("Transcription error: \(error)")
             }
         }
     }
@@ -225,7 +225,7 @@ final class VoiceInput {
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
-            print("No audio input available")
+            Log.voice.error("No audio input available")
             cleanUp()
             return
         }
@@ -233,7 +233,7 @@ final class VoiceInput {
         let targetFmt = VoiceInput.targetFormat
 
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFmt) else {
-            print("Failed to create audio converter")
+            Log.voice.error("Failed to create audio converter")
             cleanUp()
             return
         }
@@ -261,7 +261,7 @@ final class VoiceInput {
             isRecording = true
             transcript = ""
         } catch {
-            print("Audio engine start error: \(error)")
+            Log.voice.error("Audio engine start error: \(error)")
             if tapInstalled {
                 engine.inputNode.removeTap(onBus: 0)
                 tapInstalled = false
@@ -279,7 +279,7 @@ final class VoiceInput {
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
-            print("No audio input available")
+            Log.voice.error("No audio input available")
             cleanUp()
             return false
         }
@@ -322,7 +322,7 @@ final class VoiceInput {
             transcript = ""
             return true
         } catch {
-            print("Live transcription start error: \(error)")
+            Log.voice.error("Live transcription start error: \(error)")
             if tapInstalled {
                 engine.inputNode.removeTap(onBus: 0)
                 tapInstalled = false

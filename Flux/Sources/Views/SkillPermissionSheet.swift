@@ -2,6 +2,7 @@ import SwiftUI
 @preconcurrency import ApplicationServices
 import AVFoundation
 import EventKit
+import os
 
 struct SkillPermissionSheet: View {
     let skill: Skill
@@ -160,7 +161,7 @@ struct SkillPermissionSheet: View {
                 do {
                     _ = try await store.requestFullAccessToReminders()
                 } catch {
-                    print("[SkillPermissionSheet] Reminders access error: \(error)")
+                    Log.ui.error("Reminders access error: \(error)")
                 }
                 await MainActor.run {
                     permission.openSystemSettings()

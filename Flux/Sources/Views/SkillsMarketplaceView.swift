@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import os
 
 struct SkillsMarketplaceView: View {
     @State private var skills: [Skill] = []
@@ -502,7 +503,7 @@ struct SkillsMarketplaceView: View {
                     }
                 }
             } catch {
-                print("[SkillsMarketplace] Failed to install skill: \(error)")
+                Log.ui.error("Failed to install skill: \(error)")
                 await MainActor.run { installingSkillId = nil }
             }
         }
@@ -524,7 +525,7 @@ struct SkillsMarketplaceView: View {
                     }
                 }
             } catch {
-                print("[SkillsMarketplace] Failed to uninstall skill: \(error)")
+                Log.ui.error("Failed to uninstall skill: \(error)")
                 await MainActor.run { uninstallingSkillId = nil }
             }
         }

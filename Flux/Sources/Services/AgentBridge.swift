@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 @Observable
 final class AgentBridge: @unchecked Sendable {
@@ -48,6 +49,7 @@ final class AgentBridge: @unchecked Sendable {
     }
 
     func connect() {
+        Log.bridge.info("Connecting to sidecar on port \(self.port)")
         clearRunState()
         shouldReconnect = true
         reconnectWorkItem?.cancel()
@@ -75,6 +77,7 @@ final class AgentBridge: @unchecked Sendable {
     }
 
     func disconnect() {
+        Log.bridge.info("Disconnecting from sidecar")
         shouldReconnect = false
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
@@ -127,7 +130,7 @@ final class AgentBridge: @unchecked Sendable {
 
         webSocketTask?.send(.string(string)) { [weak self] error in
             if let error {
-                print("WebSocket send error: \(error)")
+                Log.bridge.error("WebSocket send error: \(error)")
                 self?.handleDisconnect()
             }
         }
@@ -193,7 +196,7 @@ final class AgentBridge: @unchecked Sendable {
                 self.receiveMessage()
 
             case .failure(let error):
-                print("WebSocket receive error: \(error)")
+                Log.bridge.error("WebSocket receive error: \(error)")
                 self.handleDisconnect()
             }
         }
@@ -264,7 +267,7 @@ final class AgentBridge: @unchecked Sendable {
             }
 
         default:
-            print("Unknown message type: \(type)")
+            Log.bridge.warning("Unknown message type: \(type)")
         }
     }
 
@@ -285,7 +288,7 @@ final class AgentBridge: @unchecked Sendable {
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.shouldReconnect else { return }
             self.reconnectWorkItem = nil
-            print("Reconnecting in \(delay)s...")
+            Log.bridge.info("Reconnecting in \(delay)s...")
             self.connect()
         }
         reconnectWorkItem = item

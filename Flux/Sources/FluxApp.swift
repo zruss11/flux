@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import os
 
 @main
 struct FluxApp: App {
@@ -29,6 +30,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isFunctionKeyPressed = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Log.app.info("Flux launching — build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "dev", privacy: .public)")
         NSApp.setActivationPolicy(.accessory)
 
         SecretMigration.migrateUserDefaultsTokensToKeychainIfNeeded()
@@ -67,6 +69,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func launchMainApp() {
+        Log.app.info("Launching main app — connecting bridge")
         setupBridgeCallbacks()
         setupFunctionKeyMonitor()
         automationService.configureRunner { [weak self] request in
@@ -99,6 +102,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        Log.app.info("Flux terminating")
         functionKeyMonitor?.stop()
         functionKeyMonitor = nil
         dictationManager.stop()
@@ -350,7 +354,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         case "run_shell_command":
             let command = input["command"] as? String ?? ""
-            return await toolRunner.executeShellScript(command)
+            return await toolRunner.executeShellScript(command, workingDirectory: conversationStore.workspacePath)
 
         case "send_slack_message":
             let text = input["text"] as? String ?? ""
