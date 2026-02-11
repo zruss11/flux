@@ -50,6 +50,8 @@ final class ConversationStore {
         didSet { UserDefaults.standard.set(workspacePath, forKey: "workspacePath") }
     }
     private var runningConversationIds: Set<UUID> = []
+    private(set) var scrollRevision: Int = 0
+    private(set) var lastScrollConversationId: UUID?
 
     // MARK: - Persistence Paths
 
@@ -180,6 +182,8 @@ final class ConversationStore {
 
         saveConversation(conversations[index])
         saveIndex()
+        lastScrollConversationId = conversationId
+        scrollRevision &+= 1
     }
 
     func updateLastAssistantMessage(in conversationId: UUID, content: String) {
@@ -194,6 +198,8 @@ final class ConversationStore {
               let lastIndex = conversations[index].messages.lastIndex(where: { $0.role == .assistant }) else { return }
         conversations[index].messages[lastIndex].content.append(chunk)
         debouncedSave(conversations[index])
+        lastScrollConversationId = conversationId
+        scrollRevision &+= 1
     }
 
     // MARK: - Tool Call Tracking
@@ -209,6 +215,8 @@ final class ConversationStore {
             message.toolCalls.append(info)
             conversations[index].messages.append(message)
         }
+        lastScrollConversationId = conversationId
+        scrollRevision &+= 1
     }
 
     func completeToolCall(in conversationId: UUID, toolUseId: String, resultPreview: String?) {
@@ -219,6 +227,8 @@ final class ConversationStore {
                 conversations[convIndex].messages[msgIndex].toolCalls[tcIndex].status = .complete
                 conversations[convIndex].messages[msgIndex].toolCalls[tcIndex].resultPreview = resultPreview
                 saveConversation(conversations[convIndex])
+                lastScrollConversationId = conversationId
+                scrollRevision &+= 1
                 return
             }
         }

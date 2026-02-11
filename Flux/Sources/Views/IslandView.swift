@@ -12,11 +12,13 @@ enum IslandContentType: Equatable {
     case folderDetail(ChatFolder)
     case folderPicker
     case imagePicker
+    case tour
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
         case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills), (.folderPicker, .folderPicker), (.imagePicker, .imagePicker): return true
         case (.dictationHistory, .dictationHistory): return true
+        case (.tour, .tour): return true
         case (.folderDetail(let a), .folderDetail(let b)): return a.id == b.id
         default: return false
         }
@@ -120,7 +122,7 @@ struct IslandView: View {
     }
 
     private var expandedHeight: CGFloat {
-        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .imagePicker || contentType == .dictationHistory {
+        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .imagePicker || contentType == .dictationHistory || contentType == .tour {
             return maxExpandedHeight
         }
         if case .folderDetail = contentType {
@@ -292,6 +294,12 @@ struct IslandView: View {
                 contentType = .imagePicker
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .islandStartTourRequested)) { _ in
+            TourManager.shared.start()
+            withAnimation(.easeInOut(duration: 0.2)) {
+                contentType = .tour
+            }
+        }
     }
 
     @ViewBuilder
@@ -353,13 +361,10 @@ struct IslandView: View {
 
             ZStack {
                 if showActivity {
-                    Image(systemName: "ellipsis.bubble")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.95))
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 22, height: 22)
-                        .background(Circle().fill(.white.opacity(0.14)))
-                        .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 0.8))
-                        .shadow(color: .white.opacity(0.35), radius: 6)
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
@@ -384,11 +389,12 @@ struct IslandView: View {
         case .folderDetail(let folder): return folder.name
         case .folderPicker: return "Workspace"
         case .imagePicker: return "Add Images"
+        case .tour: return "Tour"
         }
     }
 
     private var showBackButton: Bool {
-        contentType != .chat
+        contentType != .chat && contentType != .tour
     }
 
     private var backDestination: IslandContentType {
@@ -616,6 +622,12 @@ struct IslandView: View {
                             }
                         }
                     )
+                case .tour:
+                    TourView {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            contentType = .chat
+                        }
+                    }
                 }
             }
             .transition(.opacity.animation(.easeInOut(duration: 0.2)))
@@ -1310,6 +1322,17 @@ struct IslandSettingsView: View {
                 settingsRow(icon: "arrow.triangle.2.circlepath", label: "Launch at Login", trailing: {
                     AnyView(EmptyView())
                 })
+
+                settingsRow(icon: "questionmark.circle", label: "Replay App Tour", trailing: {
+                    AnyView(
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.5))
+                    )
+                })
+                .onTapGesture {
+                    NotificationCenter.default.post(name: .islandStartTourRequested, object: nil)
+                }
 
                 divider
 

@@ -99,6 +99,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         dictationManager.start(accessibilityReader: accessibilityReader)
+
+        // Auto-start tour on first launch after permissions are granted
+        if !UserDefaults.standard.bool(forKey: "hasCompletedTour") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                IslandWindowManager.shared.expand()
+                NotificationCenter.default.post(name: .islandStartTourRequested, object: nil)
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
