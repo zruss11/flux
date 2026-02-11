@@ -351,13 +351,17 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
   } finally {
     clearIdle(session);
     session.isRunning = false;
+    session.stream = null;
     sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: false });
 
     if (session.pendingMessages.length > 0) {
       const next = [...session.pendingMessages];
       session.pendingMessages = [];
       startSessionRun(session, next);
+      return;
     }
+
+    touchIdle(session);
   }
 }
 
@@ -521,12 +525,21 @@ function getSession(conversationId: string): ConversationSession {
 }
 
 function touchIdle(session: ConversationSession): void {
+  if (sessions.get(session.conversationId) !== session) return;
+
   clearIdle(session);
   session.idleTimer = setTimeout(() => {
-    if (session.stream && !session.stream.isDone()) {
-      session.stream.end();
-    }
+    if (sessions.get(session.conversationId) !== session) return;
+
     session.idleTimer = undefined;
+    if (session.isRunning) {
+      if (session.stream && !session.stream.isDone()) {
+        session.stream.end();
+      }
+      touchIdle(session);
+      return;
+    }
+    evictSession(session.conversationId);
   }, AGENT_IDLE_TIMEOUT_MS);
 }
 
@@ -534,6 +547,31 @@ function clearIdle(session: ConversationSession): void {
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
     session.idleTimer = undefined;
+  }
+}
+
+function evictSession(conversationId: string, reason = 'Session expired due to inactivity.'): void {
+  const session = sessions.get(conversationId);
+  if (!session) return;
+
+  clearIdle(session);
+
+  if (session.stream && !session.stream.isDone()) {
+    session.stream.end();
+  }
+  session.stream = null;
+  session.pendingMessages = [];
+  session.toolUseByIndex.clear();
+  flushPendingToolCompletions(session);
+  clearPendingToolCallsForConversation(conversationId, reason);
+
+  sessions.delete(conversationId);
+  telegramConversationMeta.delete(conversationId);
+
+  for (const [key, value] of telegramSessionMap.entries()) {
+    if (value === conversationId) {
+      telegramSessionMap.delete(key);
+    }
   }
 }
 
@@ -738,6 +776,28 @@ function cleanupBridgeSocket(ws: WebSocket): void {
   }
 }
 
+function clearPendingToolCallsForConversation(conversationId: string, reason: string): void {
+  for (const [toolUseId, pending] of pendingToolCalls.entries()) {
+    if (pending.conversationId !== conversationId) continue;
+
+    clearTimeout(pending.timeout);
+    sendBridgeResponse(pending.ws, {
+      type: 'tool_response',
+      toolUseId,
+      result: reason,
+      isError: true,
+    });
+    sendToClient(activeClient, {
+      type: 'tool_use_complete',
+      conversationId,
+      toolUseId,
+      toolName: pending.toolName,
+      resultPreview: reason,
+    });
+    pendingToolCalls.delete(toolUseId);
+  }
+}
+
 function flushPendingToolCalls(reason: string): void {
   for (const [toolUseId, pending] of pendingToolCalls.entries()) {
     clearTimeout(pending.timeout);
@@ -803,8 +863,8 @@ function toolResultPreview(toolName: string, result: string): string {
   if (toolName === 'capture_screen') {
     const parsed = parseImageToolResult(result);
     if (parsed) {
-      const bytes = Buffer.byteLength(parsed.data, 'utf8');
-      return `[image ${parsed.mediaType}, base64 bytes=${bytes}]`;
+      const decodedBytes = Buffer.from(parsed.data, 'base64').length;
+      return `[image ${parsed.mediaType}, decoded bytes=${decodedBytes}]`;
     }
   }
   return result.substring(0, 200);

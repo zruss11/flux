@@ -110,6 +110,7 @@ const allTools: ToolDefinition[] = [...baseTools, ...helperTools, ...remoteTools
 
 class BridgeClient {
   private socket: WebSocket | null = null;
+  private connectPromise: Promise<void> | null = null;
   private pending = new Map<
     string,
     { resolve: (value: ToolBridgeResponse) => void; reject: (err: Error) => void; timeout: NodeJS.Timeout }
@@ -117,28 +118,45 @@ class BridgeClient {
   private connected = false;
 
   async connect(): Promise<void> {
-    if (this.connected && this.socket) return;
+    if (this.connected && this.socket?.readyState === WebSocket.OPEN) return;
+    if (this.connectPromise) return this.connectPromise;
 
-    this.socket = new WebSocket(BRIDGE_URL);
+    this.connectPromise = this.doConnect();
+    return this.connectPromise;
+  }
 
-    await new Promise<void>((resolve, reject) => {
-      const onOpen = () => {
-        this.connected = true;
-        this.socket?.send(JSON.stringify({ type: 'hello', conversationId, runId }));
-        resolve();
-      };
+  private async doConnect(): Promise<void> {
+    const socket = new WebSocket(BRIDGE_URL);
+    this.socket = socket;
 
-      const onError = (err: Error) => {
-        reject(err);
-      };
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onOpen = () => {
+          this.connected = true;
+          socket.send(JSON.stringify({ type: 'hello', conversationId, runId }));
+          resolve();
+        };
 
-      this.socket?.once('open', onOpen);
-      this.socket?.once('error', onError);
-    });
+        const onError = (err: Error) => {
+          reject(err);
+        };
 
-    this.socket.on('message', (data) => this.handleMessage(data.toString()));
-    this.socket.on('close', () => this.handleClose());
-    this.socket.on('error', () => this.handleClose());
+        socket.once('open', onOpen);
+        socket.once('error', onError);
+      });
+
+      socket.on('message', (data) => this.handleMessage(data.toString()));
+      socket.on('close', () => this.handleClose(socket));
+      socket.on('error', () => this.handleClose(socket));
+    } catch (err) {
+      if (this.socket === socket) {
+        this.socket = null;
+      }
+      this.connected = false;
+      throw err;
+    } finally {
+      this.connectPromise = null;
+    }
   }
 
   private handleMessage(raw: string): void {
@@ -155,8 +173,13 @@ class BridgeClient {
     }
   }
 
-  private handleClose(): void {
+  private handleClose(socket: WebSocket): void {
+    if (this.socket && this.socket !== socket) return;
+
     this.connected = false;
+    this.socket = null;
+    this.connectPromise = null;
+
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new Error('Bridge connection closed'));
@@ -165,7 +188,12 @@ class BridgeClient {
   }
 
   async requestTool(toolName: string, input: Record<string, unknown>): Promise<ToolBridgeResponse> {
-    await this.connect();
+    try {
+      await this.connect();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Bridge connection failed';
+      return { type: 'tool_response', toolUseId: 'unknown', result: message, isError: true };
+    }
 
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return { type: 'tool_response', toolUseId: 'unknown', result: 'Bridge not connected', isError: true };

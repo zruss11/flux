@@ -47,6 +47,7 @@
 - In animating notch UIs, pin closed-header content to `.top` during expand/collapse transitions; centered stacks make indicators appear too low and only visible during a brief morph frame.
 - Add a short visibility latch (~1.5s) for closed-state activity indicators so transient state flips do not cause one-frame flashes.
 - For a global "hold fn" gesture on macOS, listen to `.flagsChanged`, check `.function` in modifier flags, and gate with a `wasPressed` latch so the action fires once per hold.
+- In sidecar session maps, tie idle timers to actual eviction (not just ending streams) and clean up related Telegram/pending-tool state so long-lived processes do not leak memory.
 
 ## Patterns That Don't Work
 - (approaches that failed and why)
