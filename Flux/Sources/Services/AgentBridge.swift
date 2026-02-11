@@ -3,6 +3,9 @@ import Foundation
 @Observable
 final class AgentBridge: @unchecked Sendable {
     var isConnected = false
+    var isWorking = false
+    
+    private var activeToolCount = 0
 
     var onAssistantMessage: ((String, String) -> Void)?  // conversationId, content
     var onToolRequest: ((String, String, String, [String: Any]) -> Void)?  // conversationId, toolUseId, toolName, input
@@ -223,6 +226,8 @@ final class AgentBridge: @unchecked Sendable {
                let toolName = json["toolName"] as? String,
                let inputSummary = json["inputSummary"] as? String {
                 Task { @MainActor in
+                    self.activeToolCount += 1
+                    self.isWorking = true
                     self.onToolUseStart?(conversationId, toolUseId, toolName, inputSummary)
                 }
             }
@@ -232,6 +237,8 @@ final class AgentBridge: @unchecked Sendable {
                let toolName = json["toolName"] as? String,
                let resultPreview = json["resultPreview"] as? String {
                 Task { @MainActor in
+                    self.activeToolCount = max(0, self.activeToolCount - 1)
+                    self.isWorking = self.activeToolCount > 0
                     self.onToolUseComplete?(conversationId, toolUseId, toolName, resultPreview)
                 }
             }

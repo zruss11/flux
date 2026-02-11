@@ -44,7 +44,7 @@ struct IslandView: View {
             : .spring(response: 0.45, dampingFraction: 0.85, blendDuration: 0)
     }
 
-    private var closedWidth: CGFloat { notchSize.width }
+    private var closedWidth: CGFloat { notchSize.width + 20 }
     private var closedHeight: CGFloat { notchSize.height }
     private var expandedWidth: CGFloat { 480 }
     private let maxExpandedHeight: CGFloat = 540
@@ -178,6 +178,12 @@ struct IslandView: View {
 
     private var closedHeaderContent: some View {
         HStack(spacing: 8) {
+            // Working indicator - appears on left when agent is working and island is closed
+            if !isExpanded && agentBridge.isWorking {
+                WorkingIndicatorView()
+                    .transition(.opacity.combined(with: .scale))
+            }
+
             Image(systemName: "sparkles")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(isHovering ? 0.9 : 0.0))
@@ -188,6 +194,7 @@ struct IslandView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.2), value: isHovering)
+        .animation(.easeInOut(duration: 0.3), value: agentBridge.isWorking)
     }
 
     // MARK: - Opened Header
