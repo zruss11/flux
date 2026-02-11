@@ -54,7 +54,7 @@ struct ChatView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
-                .onChange(of: conversationStore.activeConversation?.messages.count) { _, _ in
+                .onChange(of: conversationStore.scrollRevision) { _, _ in
                     if let conversation = conversationStore.activeConversation,
                        let lastSegment = conversation.displaySegments.last {
                         withAnimation {
