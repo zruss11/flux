@@ -1,3 +1,4 @@
+import MarkdownUI
 import SwiftUI
 
 // Preference key to report the chat content's intrinsic height back up the view tree
@@ -312,16 +313,22 @@ struct MessageBubble: View {
         HStack {
             if message.role == .user { Spacer(minLength: 60) }
 
-            Text(message.content)
-                .font(.system(size: 13))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background {
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(message.role == .user ? Color.blue.opacity(0.5) : Color.white.opacity(0.08))
+            Group {
+                if message.role == .assistant {
+                    MarkdownMessageView(content: message.content)
+                } else {
+                    Text(message.content)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white)
+                        .textSelection(.enabled)
                 }
-                .textSelection(.enabled)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(message.role == .user ? Color.blue.opacity(0.5) : Color.white.opacity(0.08))
+            }
 
             if message.role == .assistant { Spacer(minLength: 60) }
         }
