@@ -1,8 +1,9 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import crypto from 'crypto';
-import Anthropic from '@anthropic-ai/sdk';
-import { getToolDefinitions } from './tools/index.js';
-import { executeNodeTool, isNodeTool } from './tools/nodeRouter.js';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import { createTelegramBot } from './telegram/bot.js';
 
 interface ChatMessage {
@@ -88,22 +89,79 @@ type OutgoingMessage =
   | StreamChunkMessage
   | RunStatusMessage;
 
-type MessageParam = Anthropic.MessageParam;
-type ContentBlockParam = Anthropic.ContentBlockParam;
-type SupportedImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+interface SDKUserMessage {
+  type: 'user';
+  message: { role: 'user'; content: string };
+  parent_tool_use_id: null;
+  session_id: string;
+}
 
-const conversationHistories = new Map<string, MessageParam[]>();
-const pendingToolResults = new Map<string, (result: string) => void>();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const AGENT_IDLE_TIMEOUT_MS = 120_000;
+const TOOL_TIMEOUT_MS = 60_000;
+
+process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
+
+const sessions = new Map<string, ConversationSession>();
 const telegramSessionMap = new Map<string, string>();
-
-// Guardrails: tool results like screenshots (base64) can be enormous.
-// Keep tool results only long enough for the *next* model call, then redact them.
-const MAX_HISTORY_MESSAGES = 40;
-const MAX_RETAINED_TEXT_CHARS = 20_000;
+const telegramConversationMeta = new Map<string, { chatId: string; threadId?: number }>();
+const mcpAuthTokens = new Map<string, string>();
 
 let activeClient: WebSocket | null = null;
-let anthropic: Anthropic | null = null;
-let runtimeApiKey: string | null = null;
+let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
+let mcpBridgeUrl = '';
+
+interface ConversationSession {
+  conversationId: string;
+  stream: MessageStream | null;
+  sessionId?: string;
+  lastAssistantUuid?: string;
+  isRunning: boolean;
+  idleTimer?: NodeJS.Timeout;
+  pendingMessages: string[];
+}
+
+class MessageStream {
+  private queue: SDKUserMessage[] = [];
+  private waiting: (() => void) | null = null;
+  private done = false;
+
+  push(text: string): void {
+    if (this.done) return;
+    this.queue.push({
+      type: 'user',
+      message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+      session_id: '',
+    });
+    this.waiting?.();
+  }
+
+  end(): void {
+    if (this.done) return;
+    this.done = true;
+    this.waiting?.();
+  }
+
+  isDone(): boolean {
+    return this.done;
+  }
+
+  async *[Symbol.asyncIterator](): AsyncGenerator<SDKUserMessage> {
+    while (true) {
+      while (this.queue.length > 0) {
+        yield this.queue.shift()!;
+      }
+      if (this.done) return;
+      await new Promise<void>((resolve) => {
+        this.waiting = resolve;
+      });
+      this.waiting = null;
+    }
+  }
+}
 
 const telegramBot = createTelegramBot({
   onMessage: async (msg) => {
@@ -116,189 +174,9 @@ const telegramBot = createTelegramBot({
   },
 });
 
-function getAnthropicClient(): Anthropic {
-  if (!anthropic) {
-    anthropic = new Anthropic(runtimeApiKey ? { apiKey: runtimeApiKey } : undefined);
-  }
-  return anthropic;
-}
-
-function trimHistory(history: MessageParam[]): void {
-  if (history.length <= MAX_HISTORY_MESSAGES) return;
-  history.splice(0, history.length - MAX_HISTORY_MESSAGES);
-}
-
-function redactLargeText(text: string): string {
-  if (text.length <= MAX_RETAINED_TEXT_CHARS) return text;
-  const head = text.slice(0, 2000);
-  const tail = text.slice(-500);
-  return `${head}\n\n[...redacted ${text.length - (head.length + tail.length)} chars...]\n\n${tail}`;
-}
-
-function detectImageMediaType(base64: string): SupportedImageMediaType | null {
-  if (base64.startsWith('iVBOR')) return 'image/png';
-  if (base64.startsWith('/9j/')) return 'image/jpeg';
-  if (base64.startsWith('R0lGOD')) return 'image/gif';
-  if (base64.startsWith('UklGR')) return 'image/webp';
-  return null;
-}
-
-function isSupportedImageMediaType(value: string): value is SupportedImageMediaType {
-  return value === 'image/png' || value === 'image/jpeg' || value === 'image/gif' || value === 'image/webp';
-}
-
-function parseImageToolResult(raw: string): { mediaType: SupportedImageMediaType; data: string } | null {
-  const trimmed = raw.trim();
-  const dataUrlMatch = trimmed.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-  if (dataUrlMatch) {
-    if (!isSupportedImageMediaType(dataUrlMatch[1])) return null;
-    return {
-      mediaType: dataUrlMatch[1],
-      data: dataUrlMatch[2],
-    };
-  }
-
-  const mediaType = detectImageMediaType(trimmed);
-  if (!mediaType) return null;
-  return { mediaType, data: trimmed };
-}
-
-function isLikelyBase64Image(text: string): boolean {
-  return parseImageToolResult(text) !== null;
-}
-
-function toolResultToContentBlock(
-  toolUseId: string,
-  toolName: string,
-  result: string,
-): ContentBlockParam {
-  // Vision payloads must be sent as image blocks, not giant base64 text.
-  if (toolName === 'capture_screen') {
-    const parsed = parseImageToolResult(result);
-    if (parsed) {
-      return {
-        type: 'tool_result',
-        tool_use_id: toolUseId,
-        content: [
-          {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: parsed.mediaType,
-              data: parsed.data,
-            },
-          },
-        ],
-      };
-    }
-  }
-
-  return {
-    type: 'tool_result',
-    tool_use_id: toolUseId,
-    content: result,
-  };
-}
-
-function toolResultPreview(toolName: string, result: string): string {
-  if (toolName === 'capture_screen') {
-    const parsed = parseImageToolResult(result);
-    if (parsed) {
-      const bytes = Buffer.byteLength(parsed.data, 'utf8');
-      return `[image ${parsed.mediaType}, base64 bytes=${bytes}]`;
-    }
-  }
-  return result.substring(0, 200);
-}
-
-function sanitizeRetainedMessageContent(content: unknown): unknown {
-  if (typeof content === 'string') {
-    return redactLargeText(content);
-  }
-
-  if (Array.isArray(content)) {
-    return content.map((block: any) => {
-      if (block && typeof block === 'object' && block.type === 'tool_result' && typeof block.content === 'string') {
-        // Tool results are the main source of memory blow-ups (screenshots/base64, big AX dumps).
-        // Keep small non-image results (truncated), but aggressively redact likely screenshots.
-        const text = block.content;
-        const bytes = Buffer.byteLength(text, 'utf8');
-        const looksLikeBase64Image = isLikelyBase64Image(text);
-
-        return {
-          ...block,
-          content: looksLikeBase64Image
-            ? `[tool_result redacted (image): tool_use_id=${block.tool_use_id ?? 'unknown'} bytes=${bytes}]`
-            : redactLargeText(text),
-        };
-      }
-
-      if (block && typeof block === 'object' && block.type === 'tool_result' && Array.isArray(block.content)) {
-        let redactedAnyImages = false;
-        let updatedAnyText = false;
-        const sanitizedBlocks = block.content.map((inner: any) => {
-          if (
-            inner &&
-            typeof inner === 'object' &&
-            inner.type === 'image' &&
-            inner.source &&
-            typeof inner.source === 'object' &&
-            typeof inner.source.data === 'string'
-          ) {
-            redactedAnyImages = true;
-            const mediaType = typeof inner.source.media_type === 'string' ? inner.source.media_type : 'image/unknown';
-            const bytes = Buffer.byteLength(inner.source.data, 'utf8');
-            return {
-              type: 'text',
-              text: `[tool_result redacted (image): tool_use_id=${block.tool_use_id ?? 'unknown'} media_type=${mediaType} bytes=${bytes}]`,
-            };
-          }
-
-          if (inner && typeof inner === 'object' && typeof inner.text === 'string') {
-            const redactedText = redactLargeText(inner.text);
-            if (redactedText !== inner.text) updatedAnyText = true;
-            return { ...inner, text: redactedText };
-          }
-
-          return inner;
-        });
-
-        if (redactedAnyImages || updatedAnyText) {
-          return { ...block, content: sanitizedBlocks };
-        }
-      }
-
-      if (block && typeof block === 'object' && typeof block.text === 'string') {
-        // Future-proofing: some SDK variants use { type: 'text', text: '...' } blocks.
-        return { ...block, text: redactLargeText(block.text) };
-      }
-
-      return block;
-    });
-  }
-
-  return content;
-}
-
-function redactOldToolResults(history: MessageParam[]): void {
-  // Keep the most recent message as-is (it may be the just-produced tool_result the model still needs).
-  const keepIndex = history.length - 1;
-  for (let i = 0; i < history.length; i++) {
-    if (i === keepIndex) continue;
-    const msg: any = history[i];
-    if (!msg || typeof msg !== 'object') continue;
-    msg.content = sanitizeRetainedMessageContent(msg.content);
-  }
-}
-
-function sendToClient(ws: WebSocket, message: OutgoingMessage): void {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(message));
-  }
-}
-
 export function startBridge(port: number): void {
   const wss = new WebSocketServer({ port });
+  startMcpBridge(port + 1);
 
   console.log(`WebSocket server listening on port ${port}`);
 
@@ -321,10 +199,8 @@ export function startBridge(port: number): void {
         activeClient = null;
       }
 
-      // Free memory aggressively on disconnect; the Swift app can reconnect and rebuild context.
-      conversationHistories.clear();
-      pendingToolResults.clear();
-      telegramSessionMap.clear();
+      // Fail any pending tool calls waiting on Swift.
+      flushPendingToolCalls('Flux is offline. Open the app to reconnect.');
     });
 
     ws.on('error', (error) => {
@@ -339,11 +215,13 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
       handleChat(ws, message);
       break;
     case 'tool_result':
-      handleToolResult(ws, message);
+      handleToolResult(message);
       break;
     case 'set_api_key':
       runtimeApiKey = message.apiKey;
-      anthropic = null; // reset so next call uses the new key
+      if (runtimeApiKey) {
+        process.env.ANTHROPIC_API_KEY = runtimeApiKey;
+      }
       console.log('API key updated from Swift app');
       break;
     case 'mcp_auth':
@@ -361,21 +239,18 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
 }
 
 function handleMcpAuth(message: McpAuthMessage): void {
-  // Token may be empty (clear). Persist in-memory for subsequent MCP tool calls.
-  // We set it on the shared MCP manager instance that `getToolDefinitions()` returns.
-  // Note: `getToolDefinitions()` creates/returns a stable manager instance.
-  getToolDefinitions()
-    .then(({ mcp }) => mcp.setAuthToken(message.serverId, message.token))
-    .catch((err) => {
-      console.error('Failed to apply MCP auth update:', err);
-    });
+  const token = message.token ?? '';
+  if (token.trim().length === 0) {
+    mcpAuthTokens.delete(message.serverId);
+  } else {
+    mcpAuthTokens.set(message.serverId, token);
+  }
 }
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
   const { conversationId, content } = message;
   console.log(`[${conversationId}] User: ${content}`);
 
-  // Reject if no API key has been provided yet
   if (!runtimeApiKey) {
     sendToClient(ws, {
       type: 'assistant_message',
@@ -385,219 +260,384 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
     return;
   }
 
-  // Get or create conversation history
-  if (!conversationHistories.has(conversationId)) {
-    conversationHistories.set(conversationId, []);
+  enqueueUserMessage(conversationId, content);
+}
+
+function enqueueUserMessage(conversationId: string, content: string): void {
+  const session = getSession(conversationId);
+
+  if (session.isRunning) {
+    if (session.stream && !session.stream.isDone()) {
+      session.stream.push(content);
+      touchIdle(session);
+    } else {
+      session.pendingMessages.push(content);
+    }
+    return;
   }
-  const history = conversationHistories.get(conversationId)!;
 
-  // Add user message
-  history.push({ role: 'user', content });
-  trimHistory(history);
+  startSessionRun(session, [content]);
+}
 
-  try {
-    await runConversationLoop(ws, conversationId, history);
-  } catch (error) {
-    console.error('Claude API error:', error);
-    sendToClient(ws, {
+function startSessionRun(session: ConversationSession, messages: string[]): void {
+  session.stream = new MessageStream();
+  for (const msg of messages) {
+    session.stream.push(msg);
+  }
+  session.isRunning = true;
+  touchIdle(session);
+
+  void runAgentSession(session).catch((error) => {
+    console.error('Agent run error:', error);
+    sendToClient(activeClient, {
       type: 'assistant_message',
-      conversationId,
+      conversationId: session.conversationId,
       content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
     });
-  }
-}
-
-type RunConversationOptions = {
-  onAssistantFinal?: (text: string) => void;
-};
-
-async function runConversationLoop(
-  ws: WebSocket,
-  conversationId: string,
-  history: MessageParam[],
-  options: RunConversationOptions = {},
-): Promise<void> {
-  const client = getAnthropicClient();
-  sendToClient(ws, { type: 'run_status', conversationId, isWorking: true });
-  try {
-    while (true) {
-      const { tools, mcp, skills } = await getToolDefinitions();
-      const linearSkill = skills.find((s) => s.id === 'linear' || s.name.toLowerCase() === 'linear');
-      const linearHint = linearSkill?.defaultPrompt;
-
-      // Redact old tool results before sending the next request to avoid unbounded growth
-      // from screenshots/large AX dumps that are no longer needed for model context.
-      redactOldToolResults(history);
-
-      // Stream the response
-      let fullText = '';
-      const toolUseBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-      let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
-
-      const stream = client.beta.messages.stream({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4096,
-        betas: ['context-management-2025-06-27'],
-        system: [
-          'You are Flux, a macOS AI desktop copilot. You can see the user\'s screen, read window contents, and execute commands.',
-          'Be concise and helpful.',
-          'When the user asks about what\'s on their screen, use read_visible_windows for multi-window context, read_ax_tree for the frontmost window, or capture_screen for visual details.',
-          'Agent SDK skills reference: https://platform.claude.com/docs/en/agent-sdk/skills',
-          'IMPORTANT: ALWAYS VIEW YOUR MEMORY DIRECTORY BEFORE DOING ANYTHING ELSE.',
-          'MEMORY PROTOCOL: 1. Use the `view` command of your `memory` tool to check for earlier progress. 2. As you work, record status, progress, and thoughts in your memory.',
-          'ASSUME INTERRUPTION: Your context window might be reset at any moment, so record progress in memory.',
-          'When editing your memory folder, keep its content up-to-date, coherent and organized. Delete or rename files that are no longer relevant.',
-          mcp.hasServer('linear')
-            ? [
-                'For Linear work (issues/projects), use the linear__* tools.',
-                linearHint ? `Skill hint: ${linearHint}` : '',
-                'If Linear tools fail due to auth, call linear__setup and explain what to configure.',
-              ]
-                .filter(Boolean)
-                .join(' ')
-            : '',
-        ]
-          .filter(Boolean)
-          .join(' '),
-        messages: history,
-        tools: [
-          { type: 'memory_20250818' as const, name: 'memory' },
-          ...(tools as any[]),
-        ] as any[],
-      });
-
-      for await (const event of stream) {
-        if (event.type === 'content_block_start') {
-          if (event.content_block.type === 'tool_use') {
-            currentToolUse = {
-              id: event.content_block.id,
-              name: event.content_block.name,
-              inputJson: '',
-            };
-          }
-        } else if (event.type === 'content_block_delta') {
-          if (event.delta.type === 'text_delta') {
-            fullText += event.delta.text;
-            sendToClient(ws, {
-              type: 'stream_chunk',
-              conversationId,
-              content: event.delta.text,
-            });
-          } else if (event.delta.type === 'input_json_delta' && currentToolUse) {
-            currentToolUse.inputJson += event.delta.partial_json;
-          }
-        } else if (event.type === 'content_block_stop') {
-          if (currentToolUse) {
-            let input: Record<string, unknown> = {};
-            try {
-              input = JSON.parse(currentToolUse.inputJson || '{}');
-            } catch {
-              // empty input
-            }
-            toolUseBlocks.push({
-              id: currentToolUse.id,
-              name: currentToolUse.name,
-              input,
-            });
-            currentToolUse = null;
-          }
-        }
-      }
-
-      const finalMessage = await stream.finalMessage();
-
-      // Add assistant message to history
-      history.push({ role: 'assistant', content: finalMessage.content as any });
-      trimHistory(history);
-
-      // If no tool use, we're done
-      if (finalMessage.stop_reason !== 'tool_use' || toolUseBlocks.length === 0) {
-        const assistantText = fullText || extractTextFromContent(finalMessage.content);
-        if (assistantText && assistantText.trim().length > 0) {
-          options.onAssistantFinal?.(assistantText);
-        }
-        break;
-      }
-
-      // Handle tool use — request execution from Swift app
-      const toolResults: ContentBlockParam[] = [];
-
-      for (const toolUse of toolUseBlocks) {
-        console.log(`[${conversationId}] Tool request: ${toolUse.name}`);
-
-        // Notify Swift UI that a tool call is starting
-        const inputSummary = summarizeToolInput(toolUse.name, toolUse.input);
-        sendToClient(ws, {
-          type: 'tool_use_start',
-          conversationId,
-          toolUseId: toolUse.id,
-          toolName: toolUse.name,
-          inputSummary,
-        });
-
-        const result = isNodeTool(toolUse.name, mcp)
-          ? await executeNodeTool(toolUse.name, toolUse.input, mcp)
-          : await requestToolFromSwift(ws, conversationId, toolUse);
-        console.log(`[${conversationId}] Tool result for ${toolUse.name}: ${result.substring(0, 100)}...`);
-
-        // Notify Swift UI that the tool call is complete
-        sendToClient(ws, {
-          type: 'tool_use_complete',
-          conversationId,
-          toolUseId: toolUse.id,
-          toolName: toolUse.name,
-          resultPreview: toolResultPreview(toolUse.name, result),
-        });
-
-        toolResults.push(toolResultToContentBlock(toolUse.id, toolUse.name, result));
-      }
-
-      // Add tool results to history
-      history.push({ role: 'user', content: toolResults });
-      trimHistory(history);
-    }
-  } finally {
-    sendToClient(ws, { type: 'run_status', conversationId, isWorking: false });
-  }
-}
-
-function requestToolFromSwift(
-  ws: WebSocket,
-  conversationId: string,
-  toolUse: { id: string; name: string; input: Record<string, unknown> },
-): Promise<string> {
-  return new Promise((resolve) => {
-    const key = `${conversationId}:${toolUse.id}`;
-    pendingToolResults.set(key, resolve);
-
-    sendToClient(ws, {
-      type: 'tool_request',
-      conversationId,
-      toolUseId: toolUse.id,
-      toolName: toolUse.name,
-      input: toolUse.input,
-    });
-
-    // Timeout after 30 seconds
-    setTimeout(() => {
-      if (pendingToolResults.has(key)) {
-        pendingToolResults.delete(key);
-        resolve('Tool execution timed out');
-      }
-    }, 30000);
   });
 }
 
-function handleToolResult(_ws: WebSocket, message: ToolResultMessage): void {
-  const key = `${message.conversationId}:${message.toolUseId}`;
-  const resolve = pendingToolResults.get(key);
+async function runAgentSession(session: ConversationSession): Promise<void> {
+  if (!session.stream) return;
 
-  if (resolve) {
-    pendingToolResults.delete(key);
-    resolve(message.toolResult);
-  } else {
-    console.warn(`No pending tool result for key: ${key}`);
+  sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: true });
+
+  const runId = crypto.randomUUID();
+  const mcpServerConfig = resolveMcpServerConfig(session.conversationId, runId);
+
+  try {
+    for await (const message of query({
+      prompt: session.stream,
+      options: {
+        cwd: process.cwd(),
+        resume: session.sessionId,
+        resumeSessionAt: session.lastAssistantUuid,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        settingSources: ['project', 'user'],
+        allowedTools: [
+          'WebSearch',
+          'WebFetch',
+          'ToolSearch',
+          'TodoWrite',
+          'Task',
+          'TaskOutput',
+          'TaskStop',
+          'TeamCreate',
+          'TeamDelete',
+          'SendMessage',
+          'Skill',
+          'NotebookEdit',
+          'mcp__flux__*',
+        ],
+        mcpServers: {
+          flux: mcpServerConfig,
+        },
+        model: 'claude-sonnet-4-20250514',
+        systemPrompt: {
+          type: 'preset',
+          preset: 'claude_code',
+          append: buildFluxSystemPrompt(),
+        },
+      },
+    })) {
+      handleAgentMessage(session, message as any);
+    }
+  } finally {
+    clearIdle(session);
+    session.isRunning = false;
+    sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: false });
+
+    if (session.pendingMessages.length > 0) {
+      const next = [...session.pendingMessages];
+      session.pendingMessages = [];
+      startSessionRun(session, next);
+    }
   }
+}
+
+function handleAgentMessage(session: ConversationSession, message: any): void {
+  const msgType = message.type === 'system' ? `system/${message.subtype}` : message.type;
+  console.log(`[agent] ${session.conversationId} message=${msgType}`);
+
+  if (message.type === 'assistant' && message.uuid) {
+    session.lastAssistantUuid = message.uuid;
+  }
+
+  if (message.type === 'system' && message.subtype === 'init') {
+    session.sessionId = message.session_id;
+  }
+
+  if (message.type === 'system' && message.subtype === 'task_notification') {
+    const summary = message.summary ? ` (${message.summary})` : '';
+    console.log(`[agent] task_notification: ${message.status}${summary}`);
+    touchIdle(session);
+    return;
+  }
+
+  if (message.type === 'result') {
+    const textResult = typeof message.result === 'string'
+      ? message.result
+      : message.result != null
+        ? JSON.stringify(message.result)
+        : '';
+    if (textResult.trim().length > 0) {
+      sendToClient(activeClient, {
+        type: 'stream_chunk',
+        conversationId: session.conversationId,
+        content: textResult,
+      });
+      forwardToTelegramIfNeeded(session.conversationId, textResult);
+      touchIdle(session);
+    }
+  }
+}
+
+function buildFluxSystemPrompt(): string {
+  return [
+    'You are Flux, a macOS AI desktop copilot.',
+    'Use Flux tools to read the screen and act on the desktop.',
+    'Screen context tools: mcp__flux__read_visible_windows (multi-window), mcp__flux__read_ax_tree (frontmost), mcp__flux__capture_screen (visual), mcp__flux__read_selected_text (selection).',
+    'Action tools: mcp__flux__execute_applescript, mcp__flux__run_shell_command, mcp__flux__send_slack_message, mcp__flux__send_discord_message, mcp__flux__send_telegram_message.',
+    'For complex tasks, spin up a small agent team with TeamCreate and delegate research or planning.',
+    'Be concise and helpful. Ask clarifying questions when needed.',
+  ].join('\n');
+}
+
+function getSession(conversationId: string): ConversationSession {
+  let session = sessions.get(conversationId);
+  if (!session) {
+    session = {
+      conversationId,
+      stream: null,
+      isRunning: false,
+      pendingMessages: [],
+    };
+    sessions.set(conversationId, session);
+  }
+  return session;
+}
+
+function touchIdle(session: ConversationSession): void {
+  clearIdle(session);
+  session.idleTimer = setTimeout(() => {
+    if (session.stream && !session.stream.isDone()) {
+      session.stream.end();
+    }
+    session.idleTimer = undefined;
+  }, AGENT_IDLE_TIMEOUT_MS);
+}
+
+function clearIdle(session: ConversationSession): void {
+  if (session.idleTimer) {
+    clearTimeout(session.idleTimer);
+    session.idleTimer = undefined;
+  }
+}
+
+function resolveMcpServerConfig(conversationId: string, runId: string): { command: string; args: string[]; env: Record<string, string> } {
+  const jsPath = path.resolve(__dirname, 'mcp', 'flux-stdio.js');
+  const tsPath = path.resolve(__dirname, 'mcp', 'flux-stdio.ts');
+  let command = process.execPath;
+  let args: string[] = [];
+
+  if (fs.existsSync(jsPath)) {
+    args = [jsPath];
+  } else {
+    const tsxPath = path.resolve(__dirname, '../node_modules/.bin/tsx');
+    if (!fs.existsSync(tsxPath) || !fs.existsSync(tsPath)) {
+      throw new Error('Unable to locate flux MCP server entrypoint.');
+    }
+    command = tsxPath;
+    args = [tsPath];
+  }
+
+  const env: Record<string, string> = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([, value]) => typeof value === 'string')),
+    FLUX_MCP_BRIDGE_URL: mcpBridgeUrl,
+    FLUX_CONVERSATION_ID: conversationId,
+    FLUX_RUN_ID: runId,
+  };
+
+  for (const [serverId, token] of mcpAuthTokens.entries()) {
+    if (!token) continue;
+    env[`MCP_${serverId.toUpperCase()}_TOKEN`] = token;
+  }
+
+  return { command, args, env };
+}
+
+function startMcpBridge(port: number): void {
+  mcpBridgeUrl = `ws://127.0.0.1:${port}`;
+  const wss = new WebSocketServer({ port, host: '127.0.0.1' });
+
+  wss.on('connection', (ws) => {
+    ws.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString()) as BridgeMessage;
+        handleMcpBridgeMessage(ws, message);
+      } catch (error) {
+        console.error('Failed to parse MCP bridge message:', error);
+      }
+    });
+
+    ws.on('close', () => {
+      cleanupBridgeSocket(ws);
+    });
+  });
+
+  console.log(`MCP bridge listening on ${mcpBridgeUrl}`);
+}
+
+interface BridgeHello {
+  type: 'hello';
+  conversationId: string;
+  runId: string;
+}
+
+interface BridgeToolRequest {
+  type: 'tool_request';
+  conversationId: string;
+  runId: string;
+  toolUseId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+interface BridgeToolResponse {
+  type: 'tool_response';
+  toolUseId: string;
+  result: string;
+  isError?: boolean;
+}
+
+type BridgeMessage = BridgeHello | BridgeToolRequest;
+
+interface PendingToolCall {
+  ws: WebSocket;
+  conversationId: string;
+  toolName: string;
+  timeout: NodeJS.Timeout;
+}
+
+const pendingToolCalls = new Map<string, PendingToolCall>();
+
+function handleMcpBridgeMessage(ws: WebSocket, message: BridgeMessage): void {
+  if (message.type === 'hello') {
+    return;
+  }
+
+  if (message.type !== 'tool_request') return;
+
+  if (!activeClient || activeClient.readyState !== WebSocket.OPEN) {
+    sendBridgeResponse(ws, {
+      type: 'tool_response',
+      toolUseId: message.toolUseId,
+      result: 'Flux is offline. Open the app to reconnect.',
+      isError: true,
+    });
+    return;
+  }
+
+  const timeout = setTimeout(() => {
+    pendingToolCalls.delete(message.toolUseId);
+    sendBridgeResponse(ws, {
+      type: 'tool_response',
+      toolUseId: message.toolUseId,
+      result: 'Tool execution timed out',
+      isError: true,
+    });
+  }, TOOL_TIMEOUT_MS);
+
+  pendingToolCalls.set(message.toolUseId, {
+    ws,
+    conversationId: message.conversationId,
+    toolName: message.toolName,
+    timeout,
+  });
+
+  const session = sessions.get(message.conversationId);
+  if (session) {
+    touchIdle(session);
+  }
+
+  sendToClient(activeClient, {
+    type: 'tool_request',
+    conversationId: message.conversationId,
+    toolUseId: message.toolUseId,
+    toolName: message.toolName,
+    input: message.input,
+  });
+
+  sendToClient(activeClient, {
+    type: 'tool_use_start',
+    conversationId: message.conversationId,
+    toolUseId: message.toolUseId,
+    toolName: message.toolName,
+    inputSummary: summarizeToolInput(message.toolName, message.input),
+  });
+}
+
+function handleToolResult(message: ToolResultMessage): void {
+  const pending = pendingToolCalls.get(message.toolUseId);
+  if (!pending) {
+    console.warn(`No pending tool result for toolUseId=${message.toolUseId}`);
+    return;
+  }
+
+  pendingToolCalls.delete(message.toolUseId);
+  clearTimeout(pending.timeout);
+
+  sendBridgeResponse(pending.ws, {
+    type: 'tool_response',
+    toolUseId: message.toolUseId,
+    result: message.toolResult,
+  });
+
+  sendToClient(activeClient, {
+    type: 'tool_use_complete',
+    conversationId: message.conversationId,
+    toolUseId: message.toolUseId,
+    toolName: message.toolName,
+    resultPreview: toolResultPreview(message.toolName, message.toolResult),
+  });
+
+  const session = sessions.get(message.conversationId);
+  if (session) {
+    touchIdle(session);
+  }
+}
+
+function sendBridgeResponse(ws: WebSocket, message: BridgeToolResponse): void {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify(message));
+}
+
+function cleanupBridgeSocket(ws: WebSocket): void {
+  for (const [toolUseId, pending] of pendingToolCalls.entries()) {
+    if (pending.ws === ws) {
+      clearTimeout(pending.timeout);
+      pendingToolCalls.delete(toolUseId);
+    }
+  }
+}
+
+function flushPendingToolCalls(reason: string): void {
+  for (const [toolUseId, pending] of pendingToolCalls.entries()) {
+    clearTimeout(pending.timeout);
+    sendBridgeResponse(pending.ws, {
+      type: 'tool_response',
+      toolUseId,
+      result: reason,
+      isError: true,
+    });
+    pendingToolCalls.delete(toolUseId);
+  }
+}
+
+function sendToClient(ws: WebSocket | null, message: OutgoingMessage): void {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify(message));
 }
 
 async function handleTelegramMessage(chatId: string, threadId: number | undefined, text: string): Promise<void> {
@@ -616,29 +656,14 @@ async function handleTelegramMessage(chatId: string, threadId: number | undefine
   }
 
   const conversationId = getTelegramConversationId(chatId, threadId);
-  if (!conversationHistories.has(conversationId)) {
-    conversationHistories.set(conversationId, []);
-  }
-  const history = conversationHistories.get(conversationId)!;
-  history.push({ role: 'user', content: text });
-  trimHistory(history);
+  telegramConversationMeta.set(conversationId, { chatId, threadId });
+  enqueueUserMessage(conversationId, text);
+}
 
-  let finalText = '';
-  try {
-    await runConversationLoop(activeClient, conversationId, history, {
-      onAssistantFinal: (msg) => {
-        finalText = msg;
-      },
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    await telegramBot.sendMessage(`Error: ${message}`, chatId, threadId);
-    return;
-  }
-
-  if (finalText.trim().length > 0) {
-    await telegramBot.sendMessage(finalText, chatId, threadId);
-  }
+function forwardToTelegramIfNeeded(conversationId: string, content: string): void {
+  const meta = telegramConversationMeta.get(conversationId);
+  if (!meta) return;
+  void telegramBot.sendMessage(content, meta.chatId, meta.threadId);
 }
 
 function getTelegramConversationId(chatId: string, threadId?: number): string {
@@ -651,19 +676,32 @@ function getTelegramConversationId(chatId: string, threadId?: number): string {
   return conversationId;
 }
 
-/**
- * Produce a short human-readable summary of a tool call's input for display
- * in the UI (e.g. the file path for read_file, the command for shell, etc.).
- */
-function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
-  // Memory tool: show "command path" (e.g. "view /memories")
-  if (toolName === 'memory') {
-    const cmd = (input.command as string) ?? '';
-    const p = (input.path as string) ?? (input.old_path as string) ?? '';
-    return `${cmd} ${p}`.trim() || 'memory';
+function toolResultPreview(toolName: string, result: string): string {
+  if (toolName === 'capture_screen') {
+    const parsed = parseImageToolResult(result);
+    if (parsed) {
+      const bytes = Buffer.byteLength(parsed.data, 'utf8');
+      return `[image ${parsed.mediaType}, base64 bytes=${bytes}]`;
+    }
+  }
+  return result.substring(0, 200);
+}
+
+function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
+  const trimmed = raw.trim();
+  const dataUrlMatch = trimmed.match(/^data:(image\/[^;]+);base64,(.+)$/);
+  if (dataUrlMatch) {
+    return { mediaType: dataUrlMatch[1], data: dataUrlMatch[2] };
   }
 
-  // Try common field names that make good summaries
+  if (trimmed.startsWith('iVBOR')) return { mediaType: 'image/png', data: trimmed };
+  if (trimmed.startsWith('/9j/')) return { mediaType: 'image/jpeg', data: trimmed };
+  if (trimmed.startsWith('R0lGOD')) return { mediaType: 'image/gif', data: trimmed };
+  if (trimmed.startsWith('UklGR')) return { mediaType: 'image/webp', data: trimmed };
+  return null;
+}
+
+function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
   const candidates = ['path', 'file', 'target', 'command', 'script', 'query', 'url', 'text', 'content'];
   for (const key of candidates) {
     const val = input[key];
@@ -672,7 +710,6 @@ function summarizeToolInput(toolName: string, input: Record<string, unknown>): s
     }
   }
 
-  // Fallback: show the first string value, or the tool name
   for (const val of Object.values(input)) {
     if (typeof val === 'string' && val.length > 0) {
       return val.length > 80 ? val.substring(0, 77) + '...' : val;
@@ -680,18 +717,4 @@ function summarizeToolInput(toolName: string, input: Record<string, unknown>): s
   }
 
   return toolName;
-}
-
-function extractTextFromContent(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (block && typeof block === 'object' && (block as any).type === 'text') {
-      const text = (block as any).text;
-      if (typeof text === 'string') parts.push(text);
-    }
-  }
-  return parts.join('');
 }
