@@ -1,5 +1,6 @@
 import type { CompatibilityCallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpManager } from '../mcp/manager.js';
+import { MEMORY_TOOL_NAME, executeMemoryCommand } from './memory.js';
 
 function callToolResultToText(result: CompatibilityCallToolResult): string {
   const blocks = (result as any).content as Array<any> | undefined;
@@ -27,6 +28,7 @@ function callToolResultToText(result: CompatibilityCallToolResult): string {
 }
 
 export function isNodeTool(toolName: string, mcp: McpManager): boolean {
+  if (toolName === MEMORY_TOOL_NAME) return true;
   if (toolName === 'linear__setup') return true;
   if (toolName === 'linear__mcp_list_tools') return true;
   return mcp.parseAnthropicToolName(toolName) !== null;
@@ -37,6 +39,10 @@ export async function executeNodeTool(
   input: Record<string, unknown>,
   mcp: McpManager,
 ): Promise<string> {
+  if (toolName === MEMORY_TOOL_NAME) {
+    return executeMemoryCommand(input);
+  }
+
   if (toolName === 'linear__setup') {
     return [
       'Linear tools are available via the Linear MCP server, but require an access token.',
