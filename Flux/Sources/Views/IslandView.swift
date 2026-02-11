@@ -11,11 +11,13 @@ enum IslandContentType: Equatable {
     case dictationHistory
     case folderDetail(ChatFolder)
     case folderPicker
+    case tour
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
         case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills), (.folderPicker, .folderPicker): return true
         case (.dictationHistory, .dictationHistory): return true
+        case (.tour, .tour): return true
         case (.folderDetail(let a), .folderDetail(let b)): return a.id == b.id
         default: return false
         }
@@ -119,7 +121,7 @@ struct IslandView: View {
     }
 
     private var expandedHeight: CGFloat {
-        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .dictationHistory {
+        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .dictationHistory || contentType == .tour {
             return maxExpandedHeight
         }
         if case .folderDetail = contentType {
@@ -286,6 +288,12 @@ struct IslandView: View {
                 contentType = .folderPicker
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .islandStartTourRequested)) { _ in
+            TourManager.shared.start()
+            withAnimation(.easeInOut(duration: 0.2)) {
+                contentType = .tour
+            }
+        }
     }
 
     @ViewBuilder
@@ -377,11 +385,12 @@ struct IslandView: View {
         case .dictationHistory: return "Dictation"
         case .folderDetail(let folder): return folder.name
         case .folderPicker: return "Workspace"
+        case .tour: return "Tour"
         }
     }
 
     private var showBackButton: Bool {
-        contentType != .chat
+        contentType != .chat && contentType != .tour
     }
 
     private var backDestination: IslandContentType {
@@ -587,6 +596,12 @@ struct IslandView: View {
                             }
                         }
                     )
+                case .tour:
+                    TourView {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            contentType = .chat
+                        }
+                    }
                 }
             }
             .transition(.opacity.animation(.easeInOut(duration: 0.2)))
@@ -1281,6 +1296,17 @@ struct IslandSettingsView: View {
                 settingsRow(icon: "arrow.triangle.2.circlepath", label: "Launch at Login", trailing: {
                     AnyView(EmptyView())
                 })
+
+                settingsRow(icon: "questionmark.circle", label: "Replay App Tour", trailing: {
+                    AnyView(
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.5))
+                    )
+                })
+                .onTapGesture {
+                    NotificationCenter.default.post(name: .islandStartTourRequested, object: nil)
+                }
 
                 divider
 
