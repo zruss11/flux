@@ -157,6 +157,100 @@ export const baseTools: ToolDefinition[] = [
       required: ['text'],
     },
   },
+  {
+    name: 'create_automation',
+    description:
+      'Create a recurring automation. Provide the instruction prompt and a 5-field schedule expression (`minute hour day month weekday`, e.g. `0 9 * * 1-5`).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Optional short name for the automation.' },
+        prompt: { type: 'string', description: 'Instruction that should run each time the automation triggers.' },
+        scheduleExpression: {
+          type: 'string',
+          description: '5-field schedule expression (`minute hour day month weekday`). Example: `0 9 * * 1-5`.',
+        },
+        timezone: {
+          type: 'string',
+          description: 'Optional IANA timezone (for example `America/Los_Angeles`). Defaults to local timezone.',
+        },
+      },
+      required: ['prompt', 'scheduleExpression'],
+    },
+  },
+  {
+    name: 'list_automations',
+    description: 'List all configured automations and their status/next run.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'update_automation',
+    description: 'Update an automation by id (name, prompt, schedule expression, or timezone).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Automation id.' },
+        name: { type: 'string', description: 'Optional new automation name.' },
+        prompt: { type: 'string', description: 'Optional new instruction prompt.' },
+        scheduleExpression: {
+          type: 'string',
+          description: 'Optional new 5-field schedule expression (`minute hour day month weekday`).',
+        },
+        timezone: {
+          type: 'string',
+          description: 'Optional new IANA timezone (for example `America/Los_Angeles`).',
+        },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'pause_automation',
+    description: 'Pause an automation so it no longer runs on schedule.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Automation id.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'resume_automation',
+    description: 'Resume a paused automation and schedule its next run.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Automation id.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_automation',
+    description: 'Delete an automation permanently.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Automation id.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'run_automation_now',
+    description: 'Trigger an automation immediately without waiting for its next schedule.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Automation id.' },
+      },
+      required: ['id'],
+    },
+  },
 ];
 
 const mcp = new McpManager();

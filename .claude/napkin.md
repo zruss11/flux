@@ -13,10 +13,14 @@
 | 2026-02-11 | user | Needed to keep working on existing branch `zruss11/all-window-context`, but I renamed away from it. | Keep the current task branch stable when user says to continue existing work; only rename when explicitly needed. |
 | 2026-02-11 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
 | 2026-02-11 | me | Used `z.record(z.any())` with Zod v4 and hit a TS overload error. | Use `z.record(z.string(), z.any())` for passthrough maps. |
+| 2026-02-11 | me | Announced that I was using/reading the napkin skill in user-facing status text. | Apply napkin silently; do not mention reading it in updates. |
+| 2026-02-11 | me | Added block-based NotificationCenter observer on a `@MainActor` app delegate and hit Swift 6 Sendable/data-race compiler errors. | Prefer selector-based observers (or main-actor isolated async hops) when notification payloads would otherwise cross actor boundaries unsafely. |
 
 ## User Preferences
 - (accumulate here as you learn them)
 - For screen understanding, prefer global visible-window context instead of only frontmost-window AX tree when the task involves multiple apps/windows.
+- In UI copy, label scheduled work as "Automations" and avoid "cron/crons" wording.
+- Automation runs should live in dedicated chat threads, with thread targeting implicit in the UI.
 
 ## Patterns That Work
 - For new agent tools, add the tool definition in `sidecar/src/tools/index.ts` and implement the matching `toolName` case in `Flux/Sources/FluxApp.swift`'s `handleToolRequest` switch.
@@ -26,6 +30,7 @@
 - For `AVAudioNode.installTap(...)` used from a `@MainActor` type, build the tap block in a `nonisolated` helper. Otherwise the closure inherits `@MainActor` isolation and can SIGTRAP on macOS 26 when CoreAudio invokes it off-main.
 - Telegram DM pairing state is shared via `~/.flux/telegram/pairing.json` so both Swift and the sidecar can read/write approvals.
 - For `capture_screen` results in the Anthropic conversation loop, send image payloads as tool-result image blocks (`source: {type: 'base64', media_type, data}`) rather than raw base64 text to avoid token-limit failures.
+- For recurring agent workflows, implement persistence/scheduling in a dedicated Swift service and expose CRUD/run controls via sidecar tool definitions + matching `FluxApp` tool handlers.
 - If using `EKEventStore.requestFullAccessToReminders()`, include `NSRemindersFullAccessUsageDescription` in `Flux/Info.plist` or macOS will terminate the app at runtime.
 - For closed-island background activity indicators, emit explicit sidecar run lifecycle events (e.g. `run_status` true/false) and drive Swift UI from `AgentBridge.isAgentWorking` instead of inferring from hover/tool-call UI state.
 - Keep closed-island activity robust with multiple signals: sidecar `run_status`, `stream_chunk`/`tool_use_*` tracking in `AgentBridge`, plus a UI fallback for any pending tool calls in `ConversationStore`.

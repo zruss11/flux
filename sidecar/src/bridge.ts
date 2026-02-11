@@ -702,7 +702,21 @@ function parseImageToolResult(raw: string): { mediaType: string; data: string } 
 }
 
 function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
-  const candidates = ['path', 'file', 'target', 'command', 'script', 'query', 'url', 'text', 'content'];
+  const candidates = [
+    'path',
+    'file',
+    'target',
+    'command',
+    'script',
+    'query',
+    'url',
+    'text',
+    'content',
+    'id',
+    'name',
+    'scheduleExpression',
+    'schedule',
+  ];
   for (const key of candidates) {
     const val = input[key];
     if (typeof val === 'string' && val.length > 0) {
