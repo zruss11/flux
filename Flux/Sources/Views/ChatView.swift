@@ -130,11 +130,18 @@ struct ChatView: View {
             )
             .padding(.horizontal, 10)
 
-            // Skills dropdown stays above the input (so it doesn't get cut off),
-            // but the Skills pill lives below the input row.
-            SkillsView(isPresented: $showSkills, searchQuery: $skillSearchQuery, showsPill: false) { skill in
-                insertSkillToken(skill.directoryName)
-                isInputFocused = true
+            // Skills list appears below the input, expanding the window downward
+            if showSkills {
+                SkillsView(isPresented: $showSkills, searchQuery: $skillSearchQuery, showsPill: false) { skill in
+                    insertSkillToken(skill.directoryName)
+                    isInputFocused = true
+                }
+                .transition(
+                    .asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .top)),
+                        removal: .opacity
+                    )
+                )
             }
 
             SkillsPillButton(isPresented: $showSkills)
@@ -149,13 +156,14 @@ struct ChatView: View {
         )
         .preference(key: SkillsVisibleKey.self, value: showSkills)
         .onChange(of: inputText) { oldValue, newValue in
-            // Detect a freshly typed `$` to open skills
-            if !showSkills,
-               newValue.count - oldValue.count == 1,
+            // Detect a freshly typed `$` to open skills (or re-activate search if already open)
+            if newValue.count - oldValue.count == 1,
                newValue.filter({ $0 == "$" }).count > oldValue.filter({ $0 == "$" }).count {
                 dollarTriggerActive = true
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
-                    showSkills = true
+                if !showSkills {
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+                        showSkills = true
+                    }
                 }
                 skillSearchQuery = ""
             }
@@ -234,10 +242,18 @@ struct ChatView: View {
         let token = "$\(directoryName) "
 
         if dollarTriggerActive, let idx = inputText.lastIndex(of: "$") {
+            // Remove the `$` plus any query text typed after it so the full
+            // token replaces the entire `$query` fragment.
             let afterDollar = inputText.index(after: idx)
             let searchEnd = inputText[afterDollar...].firstIndex(where: { $0.isWhitespace }) ?? inputText.endIndex
             let remainder = String(inputText[searchEnd...])
-            inputText = String(inputText[..<idx]) + token + remainder
+            inputText = String(inputText[..<idx]) + token + remainder.trimmingCharacters(in: .init(charactersIn: " "))
+            if !remainder.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Ensure a space between the token and any trailing text.
+                if !inputText.hasSuffix(" ") {
+                    inputText += " "
+                }
+            }
         } else {
             if let last = inputText.last, !last.isWhitespace {
                 inputText.append(" ")
@@ -261,7 +277,8 @@ struct ChatView: View {
             let pattern = "(^|\\s)\\$" + escaped + "(?=\\s|$)"
             guard let re = try? NSRegularExpression(pattern: pattern) else { continue }
             let range = NSRange(out.startIndex..<out.endIndex, in: out)
-            out = re.stringByReplacingMatches(in: out, range: range, withTemplate: "$1/\(dir)")
+            let safeDir = NSRegularExpression.escapedTemplate(for: dir)
+            out = re.stringByReplacingMatches(in: out, range: range, withTemplate: "$1/\(safeDir)")
         }
         return out
     }

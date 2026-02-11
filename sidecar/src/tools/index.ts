@@ -120,7 +120,7 @@ const SKILLS_CACHE_TTL_MS = 2_000;
 
 async function refreshSkillsIfNeeded(): Promise<void> {
   const now = Date.now();
-  if (installedSkills.length > 0 && now - skillsLoadedAtMs < SKILLS_CACHE_TTL_MS) return;
+  if (skillsLoadedAtMs > 0 && now - skillsLoadedAtMs < SKILLS_CACHE_TTL_MS) return;
   installedSkills = await loadInstalledSkills();
   mcp.registerFromSkills(installedSkills);
   skillsLoadedAtMs = now;

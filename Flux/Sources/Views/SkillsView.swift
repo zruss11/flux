@@ -54,18 +54,10 @@ struct SkillsView: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            if isPresented {
-                skillsList
-                    .transition(
-                        .asymmetric(
-                            insertion: .opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)),
-                            removal: .opacity
-                        )
-                    )
-                    .onAppear {
-                        loadSkills()
-                    }
-            }
+            skillsList
+                .onAppear {
+                    loadSkills()
+                }
 
             if showsPill {
                 SkillsPillButton(isPresented: $isPresented)

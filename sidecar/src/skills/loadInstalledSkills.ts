@@ -145,7 +145,8 @@ export async function loadInstalledSkills(): Promise<InstalledSkill[]> {
     repoSkills,
     globalClaudeSkills,
     globalAgentsSkills,
-  ].filter((p): p is string => Boolean(p));
+  ].filter((p): p is string => Boolean(p))
+    .filter((p, i, arr) => arr.indexOf(p) === i);
 
   const seenIds = new Set<string>();
   const out: InstalledSkill[] = [];

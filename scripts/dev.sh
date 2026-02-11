@@ -147,11 +147,13 @@ if [[ -z "${SIGN_IDENTITY}" ]]; then
 
   # Filter to keychains that exist on disk, to avoid noisy errors.
   EXISTING_USER_KEYCHAINS=()
-  for kc in "${USER_KEYCHAINS[@]}"; do
-    if [[ -f "${kc}" ]]; then
-      EXISTING_USER_KEYCHAINS+=("${kc}")
-    fi
-  done
+  if [[ ${#USER_KEYCHAINS[@]} -gt 0 ]]; then
+    for kc in "${USER_KEYCHAINS[@]}"; do
+      if [[ -f "${kc}" ]]; then
+        EXISTING_USER_KEYCHAINS+=("${kc}")
+      fi
+    done
+  fi
 
   if [[ "${#EXISTING_USER_KEYCHAINS[@]}" -eq 0 ]]; then
     # Fallback: the default login keychain path on modern macOS.
@@ -165,7 +167,7 @@ if [[ -z "${SIGN_IDENTITY}" ]]; then
   IDENTITIES=""
   if [[ "${#EXISTING_USER_KEYCHAINS[@]}" -gt 0 ]]; then
     IDENTITIES="$(
-      security find-identity -p codesigning -v "${EXISTING_USER_KEYCHAINS[@]}" 2>/dev/null || true
+      security find-identity -p codesigning -v ${EXISTING_USER_KEYCHAINS[@]+"${EXISTING_USER_KEYCHAINS[@]}"} 2>/dev/null || true
     )"
   fi
 

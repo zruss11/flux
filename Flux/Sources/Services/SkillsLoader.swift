@@ -141,7 +141,8 @@ enum SkillsLoader {
             ))
         }
 
-        return installed + recommended.sorted {
+        // Unified alphabetical sort across installed and recommended skills.
+        return (installed + recommended).sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
     }

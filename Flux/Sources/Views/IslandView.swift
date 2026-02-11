@@ -59,7 +59,6 @@ struct IslandView: View {
     }
 
     private var expandedHeight: CGFloat {
-        let effectiveMaxHeight: CGFloat = skillsVisible ? 700 : maxExpandedHeight
         if contentType == .settings || contentType == .history {
             return maxExpandedHeight
         }
@@ -74,7 +73,10 @@ struct IslandView: View {
         // Header ~36pt, input row ~52pt, divider + padding ~20pt
         let overhead: CGFloat = 108
         let desired = measuredChatHeight + overhead
-        return min(max(desired, minExpandedHeight + 80), effectiveMaxHeight)
+        // When skills are visible the list is in the VStack flow, so measuredChatHeight
+        // already includes it. Allow a larger cap so the full list can display.
+        let cap: CGFloat = skillsVisible ? 700 : maxExpandedHeight
+        return min(max(desired, minExpandedHeight + 80), cap)
     }
 
     private var currentWidth: CGFloat { isExpanded ? expandedWidth : closedWidth }
