@@ -272,7 +272,7 @@ struct IslandView: View {
 
             ZStack {
                 if showActivity {
-                    Image(systemName: "square.and.pencil")
+                    Image(systemName: "ellipsis.bubble")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.95))
                         .frame(width: 22, height: 22)

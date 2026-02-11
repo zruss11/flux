@@ -305,6 +305,9 @@ final class AgentBridge: @unchecked Sendable {
 
     private func clearRunState() {
         Task { @MainActor in
+            for conversationId in self.activeRunConversationIds {
+                self.onRunStatus?(conversationId, false)
+            }
             self.activeRunConversationIds.removeAll()
             self.activeToolUseIds.removeAll()
             self.activeStreamConversationIds.removeAll()
