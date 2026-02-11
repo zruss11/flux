@@ -55,11 +55,11 @@ struct ChatView: View {
                     .padding(.vertical, 8)
                 }
                 .onChange(of: conversationStore.scrollRevision) { _, _ in
-                    if let conversation = conversationStore.activeConversation,
-                       let lastSegment = conversation.displaySegments.last {
-                        withAnimation {
-                            scrollProxy.scrollTo(lastSegment.id, anchor: .bottom)
-                        }
+                    guard conversationStore.lastScrollConversationId == conversationStore.activeConversationId,
+                          let conversation = conversationStore.activeConversation,
+                          let lastSegment = conversation.displaySegments.last else { return }
+                    withAnimation {
+                        scrollProxy.scrollTo(lastSegment.id, anchor: .bottom)
                     }
                 }
             }
