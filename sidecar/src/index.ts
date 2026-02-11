@@ -14,11 +14,18 @@ const port = parseInt(process.env.WEBSOCKET_PORT || '7847', 10);
 let transcriberProcess: ChildProcess | null = null;
 
 const venvPython = path.join(os.homedir(), '.flux', 'transcriber-venv', 'bin', 'python3');
+const hfHome = process.env.HF_HOME || path.join(os.homedir(), '.flux', 'hf');
 
 if (fs.existsSync(venvPython)) {
   const serverScript = path.resolve(__dirname, '../../transcriber/server.py');
   transcriberProcess = spawn(venvPython, [serverScript], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      HF_HOME: hfHome,
+      HF_HUB_DISABLE_PROGRESS_BARS: '1',
+      TOKENIZERS_PARALLELISM: 'false',
+    },
   });
 
   transcriberProcess.stdout?.on('data', (data: Buffer) => {

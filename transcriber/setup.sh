@@ -5,6 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 VENV_DIR="$HOME/.flux/transcriber-venv"
+export HF_HOME="${HF_HOME:-$HOME/.flux/hf}"
+export HF_HUB_DISABLE_PROGRESS_BARS=1
+export TOKENIZERS_PARALLELISM=false
 
 echo "==> Creating virtual environment at ${VENV_DIR} ..."
 python3 -m venv "${VENV_DIR}"

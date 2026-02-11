@@ -9,11 +9,32 @@ MODEL_NAME = "nvidia/parakeet-ctc-0.6b"
 HOST = "127.0.0.1"
 PORT = 7848
 
+# Keep model cache stable and avoid re-downloading across runs.
+os.environ.setdefault("HF_HOME", os.path.join(os.path.expanduser("~"), ".flux", "hf"))
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 # Load model once at startup
 print(f"Loading ASR model: {MODEL_NAME} ...")
 from transformers import pipeline
+from transformers.utils import logging as tlogging
 
-pipe = pipeline("automatic-speech-recognition", model=MODEL_NAME, device="cpu")
+tlogging.disable_progress_bar()
+
+try:
+    # Prevent any runtime downloads; `transcriber/setup.sh` pre-downloads the model.
+    pipe = pipeline(
+        "automatic-speech-recognition",
+        model=MODEL_NAME,
+        device="cpu",
+        model_kwargs={"local_files_only": True},
+    )
+except Exception as exc:
+    print(
+        "Failed to load ASR model from local cache. Run transcriber/setup.sh to download it.\n"
+        f"Error: {exc}"
+    )
+    raise
 print("Model loaded successfully.")
 
 
