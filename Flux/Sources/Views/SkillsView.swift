@@ -41,6 +41,7 @@ struct SkillsView: View {
 
     @State private var skills: [Skill] = []
     @State private var installingSkillId: UUID?
+    @State private var permissionSheetSkill: Skill?
 
     private var filteredSkills: [Skill] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -72,6 +73,21 @@ struct SkillsView: View {
                 loadSkills()
             }
         }
+        .overlay {
+            if let skill = permissionSheetSkill {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .onTapGesture { permissionSheetSkill = nil }
+
+                SkillPermissionSheet(skill: skill) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        permissionSheetSkill = nil
+                    }
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: permissionSheetSkill != nil)
     }
 
     // MARK: - Skills List
@@ -184,6 +200,9 @@ struct SkillsView: View {
                 await MainActor.run {
                     skills = reloaded
                     installingSkillId = nil
+                    if !skill.requiredPermissions.isEmpty {
+                        permissionSheetSkill = skill
+                    }
                 }
             } catch {
                 print("[SkillsView] Failed to install skill: \(error)")

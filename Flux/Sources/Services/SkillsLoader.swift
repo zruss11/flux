@@ -105,6 +105,9 @@ enum SkillsLoader {
                 let description = frontmatter["description"]
 
                 seen.insert(dirName)
+                let permissions = SkillCatalog.recommended
+                    .first { $0.directoryName == dirName }?
+                    .requiredPermissions ?? []
                 skills.append(Skill(
                     id: UUID(),
                     name: name,
@@ -112,7 +115,8 @@ enum SkillsLoader {
                     description: description,
                     icon: Skill.iconForName(name),
                     color: Skill.colorForName(dirName),
-                    isInstalled: true
+                    isInstalled: true,
+                    requiredPermissions: permissions
                 ))
             }
         }
@@ -137,7 +141,8 @@ enum SkillsLoader {
                 description: entry.description,
                 icon: Skill.iconForName(entry.displayName),
                 color: Skill.colorForName(entry.directoryName),
-                isInstalled: false
+                isInstalled: false,
+                requiredPermissions: entry.requiredPermissions
             ))
         }
 

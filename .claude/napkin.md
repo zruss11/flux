@@ -24,6 +24,7 @@
 - For `AVAudioNode.installTap(...)` used from a `@MainActor` type, build the tap block in a `nonisolated` helper. Otherwise the closure inherits `@MainActor` isolation and can SIGTRAP on macOS 26 when CoreAudio invokes it off-main.
 - Telegram DM pairing state is shared via `~/.flux/telegram/pairing.json` so both Swift and the sidecar can read/write approvals.
 - For `capture_screen` results in the Anthropic conversation loop, send image payloads as tool-result image blocks (`source: {type: 'base64', media_type, data}`) rather than raw base64 text to avoid token-limit failures.
+- If using `EKEventStore.requestFullAccessToReminders()`, include `NSRemindersFullAccessUsageDescription` in `Flux/Info.plist` or macOS will terminate the app at runtime.
 - For closed-island background activity indicators, emit explicit sidecar run lifecycle events (e.g. `run_status` true/false) and drive Swift UI from `AgentBridge.isAgentWorking` instead of inferring from hover/tool-call UI state.
 - Keep closed-island activity robust with multiple signals: sidecar `run_status`, `stream_chunk`/`tool_use_*` tracking in `AgentBridge`, plus a UI fallback for any pending tool calls in `ConversationStore`.
 - If closed-island activity still doesn’t render, derive “working” from three independent paths in UI state: bridge run/tool/stream activity, pending tool calls, and whether the active conversation has a newer user message than assistant message.

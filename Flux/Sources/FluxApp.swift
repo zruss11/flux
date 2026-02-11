@@ -216,7 +216,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         case "execute_applescript":
             let script = input["script"] as? String ?? ""
-            return toolRunner.executeAppleScript(script)
+            return await toolRunner.executeAppleScript(script)
 
         case "run_shell_command":
             let command = input["command"] as? String ?? ""
