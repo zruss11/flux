@@ -13,6 +13,9 @@
 | 2026-02-11 | user | Needed to keep working on existing branch `zruss11/all-window-context`, but I renamed away from it. | Keep the current task branch stable when user says to continue existing work; only rename when explicitly needed. |
 | 2026-02-11 | me | Used `process.chdir()` inside Vitest tests, which fails in worker threads. | Avoid `process.chdir()` in Vitest; create fixtures under the repo/root or run tests in forks/single-thread mode. |
 | 2026-02-11 | me | Added a mutable static test override in a nonisolated type, triggering Swift concurrency-safety errors. | Prefer environment-driven overrides or isolate overrides on an actor to satisfy concurrency rules. |
+| 2026-02-11 | me | Put `ConversationStore.overrideHistoryDirectory` behind `#if DEBUG`, which broke `swift test -c release` compilation. | Keep test hooks needed by test targets compiled in release too, or gate tests and hooks consistently. |
+| 2026-02-11 | me | Left GitHub macOS workflows on `macos-latest` while code used macOS 26 Speech APIs unavailable on the macOS 15 image. | Pin workflows to `macos-26` when builds depend on macOS 26 SDK/runtime features. |
+| 2026-02-11 | me | Switched to `.macOS(.v26)` in `Package.swift` without bumping tools version, causing manifest parse failures. | Use `// swift-tools-version: 6.2` (or newer) when targeting `.macOS(.v26)` in SwiftPM manifests. |
 
 ## User Preferences
 - (accumulate here as you learn them)
