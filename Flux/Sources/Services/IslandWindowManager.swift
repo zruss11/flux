@@ -37,6 +37,7 @@ final class IslandWindowManager: ObservableObject {
     @Published var isHovering = false
     @Published var expandedContentSize = CGSize(width: 480, height: 100)
     @Published var hasNotch = true
+    @Published var showingClipboardNotification = false
     private var targetScreen: NSScreen?
     private var notchGeometry: NotchGeometry?
     /// Distance from screen top to the island (menu bar height on non-notch screens).
@@ -46,6 +47,7 @@ final class IslandWindowManager: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private var hoverTimer: DispatchWorkItem?
+    private var clipboardNotificationDismissWorkItem: DispatchWorkItem?
 
     private init() {}
 
@@ -181,6 +183,17 @@ final class IslandWindowManager: ObservableObject {
 
     func preferredScreen() -> NSScreen? {
         targetScreen ?? preferredNotchScreen() ?? NSScreen.main
+    }
+
+    func showClipboardNotification() {
+        clipboardNotificationDismissWorkItem?.cancel()
+        showingClipboardNotification = true
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.showingClipboardNotification = false
+        }
+        clipboardNotificationDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: workItem)
     }
 
     // MARK: - Event Monitors
