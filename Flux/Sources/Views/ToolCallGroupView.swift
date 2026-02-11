@@ -88,6 +88,13 @@ struct ToolCallRow: View {
         case "send_slack_message": return "Send Slack message"
         case "send_discord_message": return "Send Discord message"
         case "send_telegram_message": return "Send Telegram message"
+        case "create_automation": return "Create automation"
+        case "list_automations": return "List automations"
+        case "update_automation": return "Update automation"
+        case "pause_automation": return "Pause automation"
+        case "resume_automation": return "Resume automation"
+        case "delete_automation": return "Delete automation"
+        case "run_automation_now": return "Run automation now"
         case "memory": return "Memory"
         default:
             // Convert snake_case to Title Case, handle MCP-style names (e.g. linear__list_issues)

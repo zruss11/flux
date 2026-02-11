@@ -15,6 +15,8 @@ struct SettingsView: View {
     @State private var telegramPairingCode = ""
     @State private var telegramPending: [TelegramPairingRequest] = []
     @State private var pairingError: String?
+    @State private var automationService = AutomationService.shared
+    @State private var showAutomationsManager = false
 
     var body: some View {
         Form {
@@ -45,6 +47,26 @@ struct SettingsView: View {
                 Text("Used for Linear issue/project tools in the agent sidecar.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Automations") {
+                HStack {
+                    Text("Configured")
+                    Spacer()
+                    Text("\(automationService.automations.count)")
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Text("Active")
+                    Spacer()
+                    Text("\(automationService.activeCount)")
+                        .foregroundStyle(.secondary)
+                }
+
+                Button("Manage Automations") {
+                    showAutomationsManager = true
+                }
             }
 
             Section("Integrations") {
@@ -128,6 +150,9 @@ struct SettingsView: View {
         .onAppear {
             loadSecretsIfNeeded()
             loadPendingPairings()
+        }
+        .sheet(isPresented: $showAutomationsManager) {
+            AutomationsManagerView()
         }
     }
 
