@@ -255,6 +255,19 @@ struct IslandView: View {
             Spacer()
 
             if contentType == .chat {
+                // New Chat button
+                Button {
+                    conversationStore.startNewConversation()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("n", modifiers: .command)
+
                 // History button
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
