@@ -505,6 +505,7 @@ function buildFluxSystemPrompt(): string {
     'Action tools: mcp__flux__execute_applescript, mcp__flux__run_shell_command, mcp__flux__send_slack_message, mcp__flux__send_discord_message, mcp__flux__send_telegram_message.',
     'For complex tasks, spin up a small agent team with TeamCreate and delegate research or planning.',
     'Be concise and helpful. Ask clarifying questions when needed.',
+    'Keep memory usage silent; apply it without announcing the skill.',
   ].join('\n');
 }
 
