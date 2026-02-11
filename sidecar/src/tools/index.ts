@@ -114,14 +114,16 @@ export const baseTools: ToolDefinition[] = [
 ];
 
 const mcp = new McpManager();
-let skillsLoadedOnce = false;
 let installedSkills: InstalledSkill[] = [];
+let skillsLoadedAtMs = 0;
+const SKILLS_CACHE_TTL_MS = 2_000;
 
-async function ensureSkillsLoaded(): Promise<void> {
-  if (skillsLoadedOnce) return;
+async function refreshSkillsIfNeeded(): Promise<void> {
+  const now = Date.now();
+  if (installedSkills.length > 0 && now - skillsLoadedAtMs < SKILLS_CACHE_TTL_MS) return;
   installedSkills = await loadInstalledSkills();
   mcp.registerFromSkills(installedSkills);
-  skillsLoadedOnce = true;
+  skillsLoadedAtMs = now;
 }
 
 function linearHelperTools(): ToolDefinition[] {
@@ -144,7 +146,7 @@ export async function getToolDefinitions(): Promise<{
   mcp: McpManager;
   skills: InstalledSkill[];
 }> {
-  await ensureSkillsLoaded();
+  await refreshSkillsIfNeeded();
 
   const all: ToolDefinition[] = [...baseTools];
 

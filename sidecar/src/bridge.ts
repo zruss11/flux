@@ -255,7 +255,7 @@ async function runConversationLoop(
 
   while (true) {
     const { tools, mcp, skills } = await getToolDefinitions();
-    const linearSkill = skills.find((s) => s.name === 'linear');
+    const linearSkill = skills.find((s) => s.id === 'linear' || s.name.toLowerCase() === 'linear');
     const linearHint = linearSkill?.defaultPrompt;
 
     // Redact old tool results before sending the next request to avoid unbounded growth
@@ -274,6 +274,7 @@ async function runConversationLoop(
         'You are Flux, a macOS AI desktop copilot. You can see the user\'s screen, read window contents, and execute commands.',
         'Be concise and helpful.',
         'When the user asks about what\'s on their screen, use the read_ax_tree or capture_screen tools.',
+        'Agent SDK skills reference: https://platform.claude.com/docs/en/agent-sdk/skills',
         mcp.hasServer('linear')
           ? [
               'For Linear work (issues/projects), use the linear__* tools.',

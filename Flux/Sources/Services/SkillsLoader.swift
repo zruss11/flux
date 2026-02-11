@@ -3,12 +3,61 @@ import SwiftUI
 
 enum SkillsLoader {
 
+    // Resolve project skills by searching for a `.agents/skills` directory near likely project roots.
+    // This is primarily for Debug/Xcode runs where repo skills are not bundled into the app resources.
+    private static func discoverProjectSkillsDir() -> URL? {
+        let fm = FileManager.default
+
+        var candidates: [URL] = []
+
+        let env = ProcessInfo.processInfo.environment
+        for key in ["FLUX_PROJECT_ROOT", "FLUX_REPO_ROOT", "SRCROOT", "PROJECT_DIR"] {
+            if let p = env[key], !p.isEmpty {
+                candidates.append(URL(fileURLWithPath: p, isDirectory: true))
+            }
+        }
+
+        candidates.append(URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true))
+
+        // Walk upward from each candidate until we find `.agents/skills`.
+        // This keeps the behavior flexible even if the working directory is a subfolder.
+        for start in candidates {
+            var cur = start
+            var seen = Set<String>()
+            while true {
+                let path = cur.standardizedFileURL.path
+                if seen.contains(path) { break }
+                seen.insert(path)
+
+                let skillsDir = cur.appendingPathComponent(".agents/skills")
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: skillsDir.path, isDirectory: &isDir), isDir.boolValue {
+                    print("[SkillsLoader] Discovered project skills dir at \(skillsDir.path)")
+                    return skillsDir
+                }
+
+                let parent = cur.deletingLastPathComponent()
+                if parent.path == cur.path { break }
+                cur = parent
+            }
+        }
+
+        return nil
+    }
+
     static func loadSkills() async -> [Skill] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        var searchDirs = [
+        var searchDirs: [URL] = []
+
+        if let projectSkills = discoverProjectSkillsDir() {
+            // Prefer project skills over global ones when directory names collide.
+            searchDirs.append(projectSkills)
+        }
+
+        searchDirs.append(contentsOf: [
             home.appendingPathComponent(".claude/skills"),
             home.appendingPathComponent(".agents/skills"),
-        ]
+        ])
 
         // Dev/prod convenience: if the app bundle contains packaged skills, include them.
         // `scripts/dev.sh` copies repo `.agents/skills` into `Contents/Resources/agents/skills`.
