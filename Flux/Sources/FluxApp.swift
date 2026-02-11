@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let screenCapture = ScreenCapture()
     private let toolRunner = ToolRunner()
     private let automationService = AutomationService.shared
+    private let dictationManager = DictationManager.shared
 
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
@@ -93,11 +94,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             conversationStore: conversationStore,
             agentBridge: agentBridge
         )
+
+        dictationManager.start(accessibilityReader: accessibilityReader)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         functionKeyMonitor?.stop()
         functionKeyMonitor = nil
+        dictationManager.stop()
     }
 
     private func setupStatusItem() {

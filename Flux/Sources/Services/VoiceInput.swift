@@ -30,6 +30,7 @@ final class VoiceInput {
     var isRecording = false
     var transcript = ""
     var isTranscriberAvailable = false
+    var audioLevelMeter: AudioLevelMeter?
 
     private var audioEngine: AVAudioEngine?
     private let pcmAccumulator = PCMAccumulator()
@@ -184,11 +185,14 @@ final class VoiceInput {
         converter: AVAudioConverter,
         inputSampleRate: Double,
         targetFormat: AVAudioFormat,
-        accumulator: PCMAccumulator
+        accumulator: PCMAccumulator,
+        meter: AudioLevelMeter?
     ) -> AVAudioNodeTapBlock {
         let ratio = targetSampleRate / inputSampleRate
 
         return { buffer, _ in
+            meter?.update(from: buffer)
+
             let frameCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
             guard frameCapacity > 0 else { return }
 
@@ -244,7 +248,8 @@ final class VoiceInput {
                 converter: converter,
                 inputSampleRate: inputFormat.sampleRate,
                 targetFormat: targetFmt,
-                accumulator: pcmAccumulator
+                accumulator: pcmAccumulator,
+                meter: audioLevelMeter
             )
         )
         tapInstalled = true
@@ -301,7 +306,8 @@ final class VoiceInput {
                 block: LiveSpeechSession.makeTapBlock(
                     analyzerFormat: analyzerFormat,
                     converter: converter,
-                    feeder: session.feeder
+                    feeder: session.feeder,
+                    meter: audioLevelMeter
                 )
             )
             tapInstalled = true

@@ -8,11 +8,13 @@ enum IslandContentType: Equatable {
     case settings
     case history
     case skills
+    case dictationHistory
     case folderDetail(ChatFolder)
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
         case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills): return true
+        case (.dictationHistory, .dictationHistory): return true
         case (.folderDetail(let a), .folderDetail(let b)): return a.id == b.id
         default: return false
         }
@@ -55,6 +57,16 @@ struct IslandView: View {
         showClosedActivityIndicators ? (closedActiveWidthBoost / 2) : 0
     }
 
+    private let closedDictationWidthBoost: CGFloat = 80
+
+    private var isDictatingClosed: Bool {
+        !isExpanded && DictationManager.shared.isDictating
+    }
+
+    private var closedDictationSlotWidth: CGFloat {
+        isDictatingClosed ? closedDictationWidthBoost : 0
+    }
+
     private var hasPendingToolCalls: Bool {
         conversationStore.conversations.contains { conversation in
             conversation.messages.contains { message in
@@ -88,7 +100,9 @@ struct IslandView: View {
     }
 
     private var closedWidth: CGFloat {
-        notchSize.width + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
+        notchSize.width
+            + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
+            + (isDictatingClosed ? closedDictationWidthBoost : 0)
     }
     private var closedHeight: CGFloat { notchSize.height }
     private var expandedWidth: CGFloat { 480 }
@@ -104,7 +118,7 @@ struct IslandView: View {
     }
 
     private var expandedHeight: CGFloat {
-        if contentType == .settings || contentType == .history || contentType == .skills {
+        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .dictationHistory {
             return maxExpandedHeight
         }
         if case .folderDetail = contentType {
@@ -173,6 +187,7 @@ struct IslandView: View {
                 )
                 .animation(isExpanded ? openAnimation : closeAnimation, value: isExpanded)
                 .animation(.spring(response: 0.38, dampingFraction: 0.8), value: isHovering)
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: DictationManager.shared.isDictating)
                 .animation(.spring(response: 0.5, dampingFraction: 0.8), value: messageCount)
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
@@ -285,6 +300,16 @@ struct IslandView: View {
 
         return HStack(spacing: 0) {
             ZStack {
+                if isDictatingClosed {
+                    ClosedWaveformBars(
+                        levels: DictationManager.shared.barLevels,
+                        isProcessing: DictationManager.shared.isProcessing
+                    )
+                }
+            }
+            .frame(width: closedDictationSlotWidth, height: closedHeight)
+
+            ZStack {
                 if showActivity {
                     ClosedSparklesIndicator(isActive: isClosedIndicatorAnimating)
                         .frame(width: 22, height: 22)
@@ -315,6 +340,7 @@ struct IslandView: View {
         .clipped()
         .animation(.easeInOut(duration: 0.2), value: isHovering)
         .animation(.easeInOut(duration: 0.2), value: showActivity)
+        .animation(.easeInOut(duration: 0.25), value: isDictatingClosed)
     }
 
     // MARK: - Opened Header
@@ -325,6 +351,7 @@ struct IslandView: View {
         case .settings: return "Settings"
         case .history: return "History"
         case .skills: return "Skills"
+        case .dictationHistory: return "Dictation"
         case .folderDetail(let folder): return folder.name
         }
     }
@@ -375,6 +402,20 @@ struct IslandView: View {
                     }
                 } label: {
                     Image(systemName: "puzzlepiece.extension")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+
+                // Dictation History button
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        contentType = .dictationHistory
+                    }
+                } label: {
+                    Image(systemName: "waveform")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
@@ -494,6 +535,8 @@ struct IslandView: View {
                     )
                 case .skills:
                     SkillsMarketplaceView()
+                case .dictationHistory:
+                    DictationHistoryView(historyStore: DictationManager.shared.historyStore)
                 case .folderDetail(let folder):
                     FolderDetailView(
                         conversationStore: conversationStore,
@@ -577,6 +620,39 @@ private struct SparkDot: View {
     }
 }
 
+private struct ClosedWaveformBars: View {
+    let levels: [Float]
+    let isProcessing: Bool
+
+    private let barCount = 8
+    private let barWidth: CGFloat = 2.5
+    private let barSpacing: CGFloat = 1.5
+
+    var body: some View {
+        HStack(spacing: barSpacing) {
+            ForEach(0..<barCount, id: \.self) { index in
+                let sourceIndex = index * 2
+                let level = sourceIndex < levels.count ? levels[sourceIndex] : Float(0)
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(.white.opacity(isProcessing ? 0.5 : 0.9))
+                    .frame(width: barWidth, height: barHeight(for: level))
+                    .animation(
+                        .spring(response: 0.15, dampingFraction: 0.6),
+                        value: level
+                    )
+            }
+        }
+    }
+
+    private func barHeight(for level: Float) -> CGFloat {
+        let maxH: CGFloat = 18
+        let minH: CGFloat = 3
+        // Raw speech RMS is typically 0.01–0.15; amplify to fill the visual range.
+        let amplified = min(1.0, CGFloat(level) * 10)
+        return minH + amplified * (maxH - minH)
+    }
+}
+
 // MARK: - In-Island Settings
 
 struct IslandSettingsView: View {
@@ -588,6 +664,8 @@ struct IslandSettingsView: View {
     @AppStorage("telegramChatId") private var telegramChatId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
+    @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
+    @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
@@ -708,6 +786,47 @@ struct IslandSettingsView: View {
                                     .foregroundStyle(.white.opacity(0.35))
                                     .help("Controls how Flux generates titles for new chats.")
                             }
+                        )
+                    }
+                )
+
+                divider
+
+                // Dictation settings
+                settingsRow(
+                    icon: "waveform",
+                    label: "Remove filler words",
+                    trailing: {
+                        AnyView(
+                            Toggle("", isOn: $dictationAutoCleanFillers)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.mini)
+                        )
+                    }
+                )
+
+                settingsRow(
+                    icon: "waveform.badge.magnifyingglass",
+                    label: "Enhancement mode",
+                    trailing: {
+                        AnyView(
+                            Menu {
+                                Button("None") {
+                                    dictationEnhancementMode = "none"
+                                }
+                                Button("Apple Intelligence\(FoundationModelsClient.shared.isAvailable ? "" : " (unavailable)")") {
+                                    dictationEnhancementMode = "foundationModels"
+                                }
+                                Button("Claude") {
+                                    dictationEnhancementMode = "claude"
+                                }
+                            } label: {
+                                Text(dictationEnhancementModeDisplayName)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.75))
+                            }
+                            .menuStyle(.borderlessButton)
                         )
                     }
                 )
@@ -1712,6 +1831,14 @@ struct IslandSettingsView: View {
         Circle()
             .fill(isSet ? Color.green.opacity(0.8) : Color.white.opacity(0.2))
             .frame(width: 8, height: 8)
+    }
+
+    private var dictationEnhancementModeDisplayName: String {
+        switch dictationEnhancementMode {
+        case "foundationModels": return "Apple Intelligence"
+        case "claude": return "Claude"
+        default: return "None"
+        }
     }
 
     private var discordBotHelp: String {

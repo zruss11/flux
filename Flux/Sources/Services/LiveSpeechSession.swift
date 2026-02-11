@@ -118,9 +118,12 @@ final class LiveSpeechSession {
     nonisolated static func makeTapBlock(
         analyzerFormat: AVAudioFormat,
         converter: AVAudioConverter?,
-        feeder: Feeder
+        feeder: Feeder,
+        meter: AudioLevelMeter?
     ) -> AVAudioNodeTapBlock {
         return { buffer, _ in
+            meter?.update(from: buffer)
+
             // Convert to analyzer format if necessary.
             let outputBuffer: AVAudioPCMBuffer
 

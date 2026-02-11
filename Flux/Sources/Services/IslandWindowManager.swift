@@ -179,6 +179,10 @@ final class IslandWindowManager: ObservableObject {
         panel?.ignoresMouseEvents = true
     }
 
+    func preferredScreen() -> NSScreen? {
+        targetScreen ?? preferredNotchScreen() ?? NSScreen.main
+    }
+
     // MARK: - Event Monitors
 
     private func setupEventMonitors() {
