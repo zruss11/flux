@@ -78,11 +78,12 @@ enum TelegramPairingStore {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         guard let data = try? JSONEncoder().encode(state) else { return }
 
-        let tmpURL = dir.appendingPathComponent("pairing.json.tmp")
-        try? data.write(to: tmpURL, options: [.atomic])
-        if FileManager.default.fileExists(atPath: url.path) {
-            try? FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
-        } else {
+        let tmpURL = dir.appendingPathComponent("pairing.json.\(ProcessInfo.processInfo.processIdentifier).\(UUID().uuidString).tmp")
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+        do {
+            try data.write(to: tmpURL, options: [.atomic])
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
+        } catch {
             try? FileManager.default.moveItem(at: tmpURL, to: url)
         }
     }

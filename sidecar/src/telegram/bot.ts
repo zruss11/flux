@@ -63,9 +63,13 @@ function savePairingStore(store: PairingStore): void {
   const filePath = pairingFilePath();
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
-  const tmpPath = `${filePath}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(store, null, 2));
-  fs.renameSync(tmpPath, filePath);
+  const tmpPath = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(store, null, 2));
+    fs.renameSync(tmpPath, filePath);
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch {}
+  }
 }
 
 function pruneExpiredPending(store: PairingStore): void {
@@ -131,20 +135,21 @@ export function createTelegramBot(options: {
   let botUsername = '';
   let currentToken = '';
   let abortController: AbortController | null = null;
+  let pollLoopPromise: Promise<void> | null = null;
 
   const log = (level: 'info' | 'warn' | 'error', message: string) => {
     options.onLog?.(level, message);
   };
 
-  const updateConfig = (next: TelegramConfig) => {
+  const updateConfig = async (next: TelegramConfig) => {
     const tokenChanged = next.botToken !== currentToken;
     config = next;
     if (!next.botToken) {
-      stopPolling();
+      await stopPolling();
       return;
     }
     if (tokenChanged) {
-      stopPolling();
+      await stopPolling();
       currentToken = next.botToken;
       offset = 0;
       startPolling();
@@ -157,24 +162,33 @@ export function createTelegramBot(options: {
     if (polling) return;
     stopRequested = false;
     polling = true;
-    pollLoop().catch((err) => {
+    pollLoopPromise = pollLoop().catch((err) => {
       log('error', `telegram polling crashed: ${String(err)}`);
+    }).finally(() => {
       polling = false;
+      pollLoopPromise = null;
     });
   };
 
-  const stopPolling = () => {
+  const stopPolling = async () => {
     stopRequested = true;
     polling = false;
     if (abortController) {
       abortController.abort();
       abortController = null;
     }
+    if (pollLoopPromise) {
+      await pollLoopPromise;
+      pollLoopPromise = null;
+    }
   };
 
   const pollLoop = async () => {
     botUsername = await fetchBotUsername();
     while (!stopRequested && config.botToken) {
+      if (!botUsername) {
+        botUsername = await fetchBotUsername();
+      }
       try {
         abortController = new AbortController();
         const url = new URL(`https://api.telegram.org/bot${config.botToken}/getUpdates`);
