@@ -1,5 +1,6 @@
 @preconcurrency import ScreenCaptureKit
 import AppKit
+import os
 
 @Observable
 @MainActor
@@ -41,7 +42,7 @@ final class ScreenCapture {
 
             return cgImageToBase64JPEG(image, maxDimension: 1600, quality: 0.7)
         } catch {
-            print("Screen capture error: \(error)")
+            Log.screen.error("Screen capture error: \(error)")
             return nil
         }
     }
@@ -77,7 +78,7 @@ final class ScreenCapture {
 
             return cgImageToBase64JPEG(image, maxDimension: 1600, quality: 0.7)
         } catch {
-            print("Window capture error: \(error)")
+            Log.screen.error("Window capture error: \(error)")
             return nil
         }
     }

@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { createTelegramBot } from './telegram/bot.js';
+import { createLogger } from './logger.js';
 
 interface ChatMessage {
   type: 'chat';
@@ -96,6 +97,8 @@ interface SDKUserMessage {
   session_id: string;
 }
 
+const log = createLogger('bridge');
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -172,9 +175,9 @@ const telegramBot = createTelegramBot({
     await handleTelegramMessage(msg.chatId, msg.threadId, msg.text);
   },
   onLog: (level, message) => {
-    if (level === 'error') console.error(message);
-    else if (level === 'warn') console.warn(message);
-    else console.log(message);
+    if (level === 'error') log.error(message);
+    else if (level === 'warn') log.warn(message);
+    else log.info(message);
   },
 });
 
@@ -182,10 +185,10 @@ export function startBridge(port: number): void {
   const wss = new WebSocketServer({ port });
   startMcpBridge(port + 1);
 
-  console.log(`WebSocket server listening on port ${port}`);
+  log.info(`WebSocket server listening on port ${port}`);
 
   wss.on('connection', (ws) => {
-    console.log('Swift app connected');
+    log.info('Swift app connected');
     activeClient = ws;
 
     ws.on('message', (data) => {
@@ -193,12 +196,12 @@ export function startBridge(port: number): void {
         const message = JSON.parse(data.toString()) as IncomingMessage;
         handleMessage(ws, message);
       } catch (error) {
-        console.error('Failed to parse message:', error);
+        log.error('Failed to parse message:', error);
       }
     });
 
     ws.on('close', () => {
-      console.log('Swift app disconnected');
+      log.info('Swift app disconnected');
       if (activeClient === ws) {
         activeClient = null;
       }
@@ -208,7 +211,7 @@ export function startBridge(port: number): void {
     });
 
     ws.on('error', (error) => {
-      console.error('WebSocket error:', error);
+      log.error('WebSocket error:', error);
     });
   });
 }
@@ -226,7 +229,7 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
       if (runtimeApiKey) {
         process.env.ANTHROPIC_API_KEY = runtimeApiKey;
       }
-      console.log('API key updated from Swift app');
+      log.info('API key updated from Swift app');
       break;
     case 'mcp_auth':
       handleMcpAuth(message);
@@ -238,7 +241,7 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
       });
       break;
     default:
-      console.warn('Unknown message type:', (message as Record<string, unknown>).type);
+      log.warn('Unknown message type:', (message as Record<string, unknown>).type);
   }
 }
 
@@ -253,7 +256,7 @@ function handleMcpAuth(message: McpAuthMessage): void {
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
   const { conversationId, content } = message;
-  console.log(`[${conversationId}] User: ${content}`);
+  log.info(`[${conversationId}] User: ${content}`);
 
   if (!runtimeApiKey) {
     sendToClient(ws, {
@@ -292,7 +295,7 @@ function startSessionRun(session: ConversationSession, messages: string[]): void
   touchIdle(session);
 
   void runAgentSession(session).catch((error) => {
-    console.error('Agent run error:', error);
+    log.error('Agent run error:', error);
     sendToClient(activeClient, {
       type: 'assistant_message',
       conversationId: session.conversationId,
@@ -367,7 +370,7 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
 
 function handleAgentMessage(session: ConversationSession, message: any): void {
   const msgType = message.type === 'system' ? `system/${message.subtype}` : message.type;
-  console.log(`[agent] ${session.conversationId} message=${msgType}`);
+  log.debug(`[agent] ${session.conversationId} message=${msgType}`);
 
   if (message.type === 'assistant' && message.uuid) {
     session.lastAssistantUuid = message.uuid;
@@ -379,7 +382,7 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
   if (message.type === 'system' && message.subtype === 'task_notification') {
     const summary = message.summary ? ` (${message.summary})` : '';
-    console.log(`[agent] task_notification: ${message.status}${summary}`);
+    log.debug(`task_notification: ${message.status}${summary}`);
     touchIdle(session);
     return;
   }
@@ -439,7 +442,7 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
           // Update the existing tool call entry on the Swift side via completeToolCall.
           // The Swift side's addToolCall uses toolUseId to identify entries, so re-sending
           // tool_use_start would create a duplicate. Instead, we just log the parsed input.
-          console.log(`[agent] tool input for ${tracked.name}: ${summarizeToolInput(tracked.name, fullInput)}`);
+          log.debug(`tool input for ${tracked.name}: ${summarizeToolInput(tracked.name, fullInput)}`);
         } catch {
           // Input parsing failed — keep the tool name as summary
         }
@@ -618,7 +621,7 @@ function startMcpBridge(port: number): void {
         const message = JSON.parse(data.toString()) as BridgeMessage;
         handleMcpBridgeMessage(ws, message);
       } catch (error) {
-        console.error('Failed to parse MCP bridge message:', error);
+        log.error('Failed to parse MCP bridge message:', error);
       }
     });
 
@@ -627,7 +630,7 @@ function startMcpBridge(port: number): void {
     });
   });
 
-  console.log(`MCP bridge listening on ${mcpBridgeUrl}`);
+  log.info(`MCP bridge listening on ${mcpBridgeUrl}`);
 }
 
 interface BridgeHello {
@@ -729,7 +732,7 @@ function handleMcpBridgeMessage(ws: WebSocket, message: BridgeMessage): void {
 function handleToolResult(message: ToolResultMessage): void {
   const pending = pendingToolCalls.get(message.toolUseId);
   if (!pending) {
-    console.warn(`No pending tool result for toolUseId=${message.toolUseId}`);
+    log.warn(`No pending tool result for toolUseId=${message.toolUseId}`);
     return;
   }
 

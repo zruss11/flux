@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 struct SkillsPillButton: View {
     @Binding var isPresented: Bool
@@ -205,7 +206,7 @@ struct SkillsView: View {
                     }
                 }
             } catch {
-                print("[SkillsView] Failed to install skill: \(error)")
+                Log.ui.error("Failed to install skill: \(error)")
                 await MainActor.run {
                     installingSkillId = nil
                 }
