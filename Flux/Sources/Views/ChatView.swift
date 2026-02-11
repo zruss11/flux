@@ -213,6 +213,14 @@ struct ChatView: View {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
+        // Slash commands
+        let lowered = text.lowercased()
+        if lowered == "/new" || lowered == "/clear" {
+            inputText = ""
+            conversationStore.startNewConversation()
+            return
+        }
+
         if showSkills {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
                 showSkills = false
