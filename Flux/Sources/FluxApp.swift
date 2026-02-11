@@ -20,6 +20,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let accessibilityReader = AccessibilityReader()
     private let screenCapture = ScreenCapture()
     private let toolRunner = ToolRunner()
+    private let automationService = AutomationService.shared
 
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
@@ -63,6 +64,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func launchMainApp() {
         setupBridgeCallbacks()
+        automationService.configureRunner { [weak self] request in
+            guard let self else { return }
+            self.agentBridge.sendChatMessage(
+                conversationId: request.conversationId,
+                content: request.content
+            )
+        }
         agentBridge.connect()
 
         IslandWindowManager.shared.showIsland(
@@ -227,9 +235,147 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let chatIdOverride = input["chatId"] as? String
             return await sendTelegramMessage(text: text, chatIdOverride: chatIdOverride)
 
+        case "create_automation":
+            let name = input["name"] as? String
+            let prompt = input["prompt"] as? String ?? ""
+            let scheduleExpression = (input["scheduleExpression"] as? String)
+                ?? (input["schedule"] as? String)
+                ?? (input["cron"] as? String)
+                ?? ""
+            let timezone = input["timezone"] as? String
+            do {
+                let automation = try automationService.createAutomation(
+                    name: name,
+                    prompt: prompt,
+                    scheduleExpression: scheduleExpression,
+                    timezoneIdentifier: timezone
+                )
+                return encodeJSON(AutomationMutationResponse(
+                    ok: true,
+                    message: "Automation created.",
+                    automation: automation
+                ))
+            } catch {
+                return encodeJSON(AutomationErrorResponse(ok: false, error: error.localizedDescription))
+            }
+
+        case "list_automations":
+            return encodeJSON(AutomationListResponse(ok: true, automations: automationService.automations))
+
+        case "update_automation":
+            let id = input["id"] as? String ?? ""
+            let name = input["name"] as? String
+            let prompt = input["prompt"] as? String
+            let scheduleExpression = (input["scheduleExpression"] as? String)
+                ?? (input["schedule"] as? String)
+                ?? (input["cron"] as? String)
+            let timezone = input["timezone"] as? String
+
+            do {
+                let automation = try automationService.updateAutomation(
+                    id: id,
+                    name: name,
+                    prompt: prompt,
+                    scheduleExpression: scheduleExpression,
+                    timezoneIdentifier: timezone
+                )
+                return encodeJSON(AutomationMutationResponse(
+                    ok: true,
+                    message: "Automation updated.",
+                    automation: automation
+                ))
+            } catch {
+                return encodeJSON(AutomationErrorResponse(ok: false, error: error.localizedDescription))
+            }
+
+        case "pause_automation":
+            let id = input["id"] as? String ?? ""
+            do {
+                let automation = try automationService.pauseAutomation(id: id)
+                return encodeJSON(AutomationMutationResponse(
+                    ok: true,
+                    message: "Automation paused.",
+                    automation: automation
+                ))
+            } catch {
+                return encodeJSON(AutomationErrorResponse(ok: false, error: error.localizedDescription))
+            }
+
+        case "resume_automation":
+            let id = input["id"] as? String ?? ""
+            do {
+                let automation = try automationService.resumeAutomation(id: id)
+                return encodeJSON(AutomationMutationResponse(
+                    ok: true,
+                    message: "Automation resumed.",
+                    automation: automation
+                ))
+            } catch {
+                return encodeJSON(AutomationErrorResponse(ok: false, error: error.localizedDescription))
+            }
+
+        case "delete_automation":
+            let id = input["id"] as? String ?? ""
+            do {
+                try automationService.deleteAutomation(id: id)
+                return encodeJSON(AutomationDeleteResponse(
+                    ok: true,
+                    message: "Automation deleted.",
+                    id: id
+                ))
+            } catch {
+                return encodeJSON(AutomationErrorResponse(ok: false, error: error.localizedDescription))
+            }
+
+        case "run_automation_now":
+            let id = input["id"] as? String ?? ""
+            do {
+                let automation = try automationService.runAutomationNow(id: id)
+                return encodeJSON(AutomationMutationResponse(
+                    ok: true,
+                    message: "Automation dispatched.",
+                    automation: automation
+                ))
+            } catch {
+                return encodeJSON(AutomationErrorResponse(ok: false, error: error.localizedDescription))
+            }
+
         default:
             return "Unknown tool: \(toolName)"
         }
+    }
+
+    private func encodeJSON<T: Encodable>(_ value: T) -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .prettyPrinted
+        guard let data = try? encoder.encode(value),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{\"ok\":false,\"error\":\"Failed to encode JSON response.\"}"
+        }
+        return json
+    }
+
+    private struct AutomationListResponse: Codable {
+        let ok: Bool
+        let automations: [Automation]
+    }
+
+    private struct AutomationMutationResponse: Codable {
+        let ok: Bool
+        let message: String
+        let automation: Automation
+    }
+
+    private struct AutomationDeleteResponse: Codable {
+        let ok: Bool
+        let message: String
+        let id: String
+    }
+
+    private struct AutomationErrorResponse: Codable {
+        let ok: Bool
+        let error: String
     }
 
     private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {

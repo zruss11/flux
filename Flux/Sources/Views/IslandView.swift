@@ -401,6 +401,22 @@ struct IslandSettingsView: View {
     @State private var telegramPairingCode = ""
     @State private var telegramPending: [TelegramPairingRequest] = []
     @State private var telegramPairingError: String?
+    @State private var automationService = AutomationService.shared
+    @State private var automationsExpanded = false
+    @State private var automationEditorMode: InlineAutomationEditorMode?
+    @State private var pendingDeleteAutomation: Automation?
+    @State private var automationActionError: String?
+
+    // Automation editor fields
+    @State private var editorName = ""
+    @State private var editorPrompt = ""
+    @State private var editorFrequency: ScheduleFrequencyOption = .weekdays
+    @State private var editorMinuteInterval = 30
+    @State private var editorHour = 9
+    @State private var editorMinute = 0
+    @State private var editorSelectedDays: Set<Weekday> = [.monday, .wednesday, .friday]
+    @State private var editorDayOfMonth = 1
+    @State private var editorTimezone = TimeZone.current.identifier
 
     private enum EditingField: Hashable {
         case apiKey
@@ -412,6 +428,22 @@ struct IslandSettingsView: View {
         case telegramBotToken
         case telegramChatId
         case telegramPairingCode
+    }
+
+    private enum InlineAutomationEditorMode: Equatable {
+        case create
+        case edit(String) // automation ID
+    }
+
+    private enum ScheduleFrequencyOption: String, CaseIterable, Identifiable {
+        case everyMinutes = "Every X min"
+        case hourly = "Hourly"
+        case daily = "Daily"
+        case weekdays = "Weekdays"
+        case weekly = "Weekly"
+        case monthly = "Monthly"
+
+        var id: String { rawValue }
     }
 
     var body: some View {
@@ -481,6 +513,41 @@ struct IslandSettingsView: View {
                         )
                     }
                 )
+
+                divider
+
+                // Automations header (expandable)
+                settingsRow(
+                    icon: "clock.badge.checkmark",
+                    label: "Automations",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 6) {
+                                if automationService.activeCount > 0 {
+                                    Text("\(automationService.activeCount) active")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.green.opacity(0.85))
+                                } else {
+                                    Text("None")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                }
+                                Image(systemName: automationsExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                        )
+                    }
+                )
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        automationsExpanded.toggle()
+                    }
+                }
+
+                if automationsExpanded {
+                    automationsInlineSection
+                }
 
                 divider
 
@@ -879,6 +946,505 @@ struct IslandSettingsView: View {
                 loadTelegramPairing()
                 try? await Task.sleep(for: .seconds(1))
             }
+        }
+    }
+
+    private var automationsInlineSection: some View {
+        VStack(spacing: 2) {
+            if let automationActionError {
+                Text(automationActionError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red.opacity(0.9))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+            }
+
+            let sorted = automationService.automations.sorted { lhs, rhs in
+                switch (lhs.nextRunAt, rhs.nextRunAt) {
+                case (.some(let a), .some(let b)): return a < b
+                case (.some, .none): return true
+                case (.none, .some): return false
+                case (.none, .none): return lhs.createdAt > rhs.createdAt
+                }
+            }
+
+            ForEach(sorted) { automation in
+                automationInlineCard(automation)
+            }
+
+            if automationEditorMode != nil {
+                automationInlineEditor
+            }
+
+            // New automation button
+            if automationEditorMode == nil {
+                Button {
+                    startCreatingAutomation()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 12))
+                        Text("New Automation")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .confirmationDialog(
+            "Delete automation?",
+            isPresented: Binding(
+                get: { pendingDeleteAutomation != nil },
+                set: { if !$0 { pendingDeleteAutomation = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let pending = pendingDeleteAutomation else { return }
+                do {
+                    try automationService.deleteAutomation(id: pending.id)
+                    automationActionError = nil
+                } catch {
+                    automationActionError = error.localizedDescription
+                }
+                pendingDeleteAutomation = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteAutomation = nil
+            }
+        } message: {
+            Text(pendingDeleteAutomation?.name ?? "")
+        }
+    }
+
+    private func automationInlineCard(_ automation: Automation) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                statusDot(isSet: automation.status == .active)
+
+                Text(automation.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+
+                Spacer()
+            }
+
+            HStack(spacing: 4) {
+                Text(SchedulePreset.fromCron(automation.scheduleExpression).displayString)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+
+                if let nextRun = automation.nextRunAt, automation.status == .active {
+                    Text("\u{00B7}")
+                        .foregroundStyle(.white.opacity(0.3))
+                    Text("Next: \(relativeTimeString(nextRun))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.4))
+                } else if automation.status == .paused {
+                    Text("\u{00B7}")
+                        .foregroundStyle(.white.opacity(0.3))
+                    Text("Paused")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange.opacity(0.7))
+                }
+            }
+
+            if let summary = automation.lastRunSummary, !summary.isEmpty {
+                Text(summary)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: 8) {
+                Button("Run Now") {
+                    do {
+                        _ = try automationService.runAutomationNow(id: automation.id)
+                        automationActionError = nil
+                    } catch {
+                        automationActionError = error.localizedDescription
+                    }
+                }
+
+                if automation.status == .active {
+                    Button("Pause") {
+                        do {
+                            _ = try automationService.pauseAutomation(id: automation.id)
+                            automationActionError = nil
+                        } catch {
+                            automationActionError = error.localizedDescription
+                        }
+                    }
+                } else {
+                    Button("Resume") {
+                        do {
+                            _ = try automationService.resumeAutomation(id: automation.id)
+                            automationActionError = nil
+                        } catch {
+                            automationActionError = error.localizedDescription
+                        }
+                    }
+                }
+
+                Button("Edit") {
+                    startEditingAutomation(automation)
+                }
+
+                Spacer()
+
+                Button("Delete") {
+                    pendingDeleteAutomation = automation
+                }
+                .foregroundStyle(.red.opacity(0.7))
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.white.opacity(0.6))
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+    }
+
+    private var automationInlineEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(automationEditorMode == .create ? "New Automation" : "Edit Automation")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+
+            // Name
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Name")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                TextField("Automation name", text: $editorName)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white)
+                    .padding(6)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+                    .onAppear {
+                        IslandWindowManager.shared.makeKeyIfNeeded()
+                    }
+            }
+
+            // Schedule frequency
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Schedule")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(ScheduleFrequencyOption.allCases) { option in
+                            Button(option.rawValue) {
+                                editorFrequency = option
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(editorFrequency.rawValue)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.white.opacity(0.75))
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.white.opacity(0.4))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+                    }
+                    .menuStyle(.borderlessButton)
+
+                    scheduleSubFields
+                }
+            }
+
+            // Weekday selector (only for weekly)
+            if editorFrequency == .weekly {
+                HStack(spacing: 4) {
+                    ForEach(Weekday.allCases) { day in
+                        Button {
+                            if editorSelectedDays.contains(day) {
+                                editorSelectedDays.remove(day)
+                            } else {
+                                editorSelectedDays.insert(day)
+                            }
+                        } label: {
+                            Text(day.shortAbbreviation)
+                                .font(.system(size: 10, weight: .semibold))
+                                .frame(width: 24, height: 24)
+                                .background(
+                                    Circle()
+                                        .fill(editorSelectedDays.contains(day) ? Color.green.opacity(0.3) : Color.white.opacity(0.06))
+                                )
+                                .foregroundStyle(editorSelectedDays.contains(day) ? .green.opacity(0.9) : .white.opacity(0.5))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            // Prompt
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Prompt")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                TextEditor(text: $editorPrompt)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 60, maxHeight: 100)
+                    .padding(6)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                    .onAppear {
+                        IslandWindowManager.shared.makeKeyIfNeeded()
+                    }
+            }
+
+            // Save/Cancel
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") {
+                    automationEditorMode = nil
+                    automationActionError = nil
+                }
+                .foregroundStyle(.white.opacity(0.5))
+
+                Button("Save") {
+                    saveAutomation()
+                }
+                .foregroundStyle(.green.opacity(0.9))
+                .disabled(editorPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .font(.system(size: 12, weight: .medium))
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+        )
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var scheduleSubFields: some View {
+        switch editorFrequency {
+        case .everyMinutes:
+            Menu {
+                ForEach([5, 10, 15, 30], id: \.self) { n in
+                    Button("\(n) min") {
+                        editorMinuteInterval = n
+                    }
+                }
+            } label: {
+                Text("\(editorMinuteInterval) min")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+            }
+            .menuStyle(.borderlessButton)
+
+        case .hourly:
+            EmptyView()
+
+        case .daily, .weekdays, .weekly:
+            timePickers
+
+        case .monthly:
+            HStack(spacing: 6) {
+                Menu {
+                    ForEach(1...31, id: \.self) { d in
+                        Button("Day \(d)") {
+                            editorDayOfMonth = d
+                        }
+                    }
+                } label: {
+                    Text("Day \(editorDayOfMonth)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+                }
+                .menuStyle(.borderlessButton)
+
+                timePickers
+            }
+
+        }
+    }
+
+    private var timePickers: some View {
+        HStack(spacing: 4) {
+            Menu {
+                ForEach(0..<24, id: \.self) { h in
+                    Button(String(format: "%d %@", h == 0 ? 12 : (h > 12 ? h - 12 : h), h >= 12 ? "PM" : "AM")) {
+                        editorHour = h
+                    }
+                }
+            } label: {
+                Text(String(format: "%d %@", editorHour == 0 ? 12 : (editorHour > 12 ? editorHour - 12 : editorHour), editorHour >= 12 ? "PM" : "AM"))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+            }
+            .menuStyle(.borderlessButton)
+
+            Text(":")
+                .foregroundStyle(.white.opacity(0.3))
+
+            Menu {
+                ForEach([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55], id: \.self) { m in
+                    Button(String(format: ":%02d", m)) {
+                        editorMinute = m
+                    }
+                }
+            } label: {
+                Text(String(format: ":%02d", editorMinute))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+            }
+            .menuStyle(.borderlessButton)
+        }
+    }
+
+    private func relativeTimeString(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private func startCreatingAutomation() {
+        editorName = ""
+        editorPrompt = ""
+        editorFrequency = .weekdays
+        editorHour = 9
+        editorMinute = 0
+        editorMinuteInterval = 30
+        editorSelectedDays = [.monday, .wednesday, .friday]
+        editorDayOfMonth = 1
+        editorTimezone = TimeZone.current.identifier
+        automationEditorMode = .create
+        automationActionError = nil
+    }
+
+    private func startEditingAutomation(_ automation: Automation) {
+        editorName = automation.name
+        editorPrompt = automation.prompt
+        editorTimezone = automation.timezoneIdentifier
+
+        let preset = SchedulePreset.fromCron(automation.scheduleExpression)
+        switch preset {
+        case .everyMinutes(let n):
+            editorFrequency = .everyMinutes
+            editorMinuteInterval = n
+        case .hourly:
+            editorFrequency = .hourly
+        case .daily(let h, let m):
+            editorFrequency = .daily
+            editorHour = h
+            editorMinute = m
+        case .weekdays(let h, let m):
+            editorFrequency = .weekdays
+            editorHour = h
+            editorMinute = m
+        case .weekly(let days, let h, let m):
+            editorFrequency = .weekly
+            editorSelectedDays = days
+            editorHour = h
+            editorMinute = m
+        case .monthly(let d, let h, let m):
+            editorFrequency = .monthly
+            editorDayOfMonth = d
+            editorHour = h
+            editorMinute = m
+        case .custom:
+            editorFrequency = .weekly
+            editorSelectedDays = Set(Weekday.allCases)
+            editorHour = 9
+            editorMinute = 0
+        }
+
+        automationEditorMode = .edit(automation.id)
+        automationActionError = nil
+    }
+
+    private func buildPresetFromEditor() -> SchedulePreset {
+        switch editorFrequency {
+        case .everyMinutes:
+            return .everyMinutes(editorMinuteInterval)
+        case .hourly:
+            return .hourly
+        case .daily:
+            return .daily(hour: editorHour, minute: editorMinute)
+        case .weekdays:
+            return .weekdays(hour: editorHour, minute: editorMinute)
+        case .weekly:
+            return .weekly(days: editorSelectedDays.isEmpty ? [.monday] : editorSelectedDays, hour: editorHour, minute: editorMinute)
+        case .monthly:
+            return .monthly(day: editorDayOfMonth, hour: editorHour, minute: editorMinute)
+        }
+    }
+
+    private func saveAutomation() {
+        let cronExpr = buildPresetFromEditor().toCron()
+        let trimmedName = editorName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        do {
+            switch automationEditorMode {
+            case .create:
+                _ = try automationService.createAutomation(
+                    name: trimmedName.isEmpty ? nil : trimmedName,
+                    prompt: editorPrompt,
+                    scheduleExpression: cronExpr,
+                    timezoneIdentifier: editorTimezone
+                )
+            case .edit(let id):
+                _ = try automationService.updateAutomation(
+                    id: id,
+                    name: trimmedName.isEmpty ? nil : trimmedName,
+                    prompt: editorPrompt,
+                    scheduleExpression: cronExpr,
+                    timezoneIdentifier: editorTimezone
+                )
+            case nil:
+                break
+            }
+            automationEditorMode = nil
+            automationActionError = nil
+        } catch {
+            automationActionError = error.localizedDescription
         }
     }
 

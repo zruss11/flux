@@ -1,0 +1,21 @@
+interface:
+  display_name: "Automations"
+  short_description: "Create and manage recurring automations"
+  default_prompt: "Set up and maintain recurring automations with clear schedules and prompts."
+
+dependencies:
+  tools:
+    - type: "native"
+      value: "create_automation"
+    - type: "native"
+      value: "list_automations"
+    - type: "native"
+      value: "update_automation"
+    - type: "native"
+      value: "pause_automation"
+    - type: "native"
+      value: "resume_automation"
+    - type: "native"
+      value: "delete_automation"
+    - type: "native"
+      value: "run_automation_now"
