@@ -3,12 +3,14 @@ import Foundation
 enum SecretKeys {
     static let discordBotToken = "discordBotToken"
     static let slackBotToken = "slackBotToken"
+    static let telegramBotToken = "telegramBotToken"
 }
 
 enum SecretMigration {
     static func migrateUserDefaultsTokensToKeychainIfNeeded() {
         migrateKey(SecretKeys.discordBotToken)
         migrateKey(SecretKeys.slackBotToken)
+        migrateKey(SecretKeys.telegramBotToken)
     }
 
     private static func migrateKey(_ key: String) {

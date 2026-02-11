@@ -1,7 +1,9 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import crypto from 'crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { getToolDefinitions } from './tools/index.js';
 import { executeNodeTool, isNodeTool } from './tools/nodeRouter.js';
+import { createTelegramBot } from './telegram/bot.js';
 
 interface ChatMessage {
   type: 'chat';
@@ -28,7 +30,13 @@ interface McpAuthMessage {
   token: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage;
+interface SetTelegramConfigMessage {
+  type: 'set_telegram_config';
+  botToken: string;
+  defaultChatId: string;
+}
+
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -73,6 +81,7 @@ type ContentBlockParam = Anthropic.ContentBlockParam;
 
 const conversationHistories = new Map<string, MessageParam[]>();
 const pendingToolResults = new Map<string, (result: string) => void>();
+const telegramSessionMap = new Map<string, string>();
 
 // Guardrails: tool results like screenshots (base64) can be enormous.
 // Keep tool results only long enough for the *next* model call, then redact them.
@@ -82,6 +91,17 @@ const MAX_RETAINED_TEXT_CHARS = 20_000;
 let activeClient: WebSocket | null = null;
 let anthropic: Anthropic | null = null;
 let runtimeApiKey: string | null = null;
+
+const telegramBot = createTelegramBot({
+  onMessage: async (msg) => {
+    await handleTelegramMessage(msg.chatId, msg.threadId, msg.text);
+  },
+  onLog: (level, message) => {
+    if (level === 'error') console.error(message);
+    else if (level === 'warn') console.warn(message);
+    else console.log(message);
+  },
+});
 
 function getAnthropicClient(): Anthropic {
   if (!anthropic) {
@@ -186,6 +206,7 @@ export function startBridge(port: number): void {
       // Free memory aggressively on disconnect; the Swift app can reconnect and rebuild context.
       conversationHistories.clear();
       pendingToolResults.clear();
+      telegramSessionMap.clear();
     });
 
     ws.on('error', (error) => {
@@ -209,6 +230,12 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
       break;
     case 'mcp_auth':
       handleMcpAuth(message);
+      break;
+    case 'set_telegram_config':
+      telegramBot.updateConfig({
+        botToken: message.botToken ?? '',
+        defaultChatId: message.defaultChatId ?? '',
+      });
       break;
     default:
       console.warn('Unknown message type:', (message as Record<string, unknown>).type);
@@ -262,10 +289,15 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
   }
 }
 
+type RunConversationOptions = {
+  onAssistantFinal?: (text: string) => void;
+};
+
 async function runConversationLoop(
   ws: WebSocket,
   conversationId: string,
   history: MessageParam[],
+  options: RunConversationOptions = {},
 ): Promise<void> {
   const client = getAnthropicClient();
 
@@ -352,8 +384,9 @@ async function runConversationLoop(
 
     // If no tool use, we're done
     if (finalMessage.stop_reason !== 'tool_use' || toolUseBlocks.length === 0) {
-      if (fullText) {
-        // Full message already streamed via chunks
+      const assistantText = fullText || extractTextFromContent(finalMessage.content);
+      if (assistantText && assistantText.trim().length > 0) {
+        options.onAssistantFinal?.(assistantText);
       }
       break;
     }
@@ -440,6 +473,57 @@ function handleToolResult(_ws: WebSocket, message: ToolResultMessage): void {
   }
 }
 
+async function handleTelegramMessage(chatId: string, threadId: number | undefined, text: string): Promise<void> {
+  if (!runtimeApiKey) {
+    await telegramBot.sendMessage(
+      'No Anthropic API key configured. Open Flux Settings and set your API key.',
+      chatId,
+      threadId,
+    );
+    return;
+  }
+
+  if (!activeClient || activeClient.readyState !== WebSocket.OPEN) {
+    await telegramBot.sendMessage('Flux is offline. Open the app to reconnect.', chatId, threadId);
+    return;
+  }
+
+  const conversationId = getTelegramConversationId(chatId, threadId);
+  if (!conversationHistories.has(conversationId)) {
+    conversationHistories.set(conversationId, []);
+  }
+  const history = conversationHistories.get(conversationId)!;
+  history.push({ role: 'user', content: text });
+  trimHistory(history);
+
+  let finalText = '';
+  try {
+    await runConversationLoop(activeClient, conversationId, history, {
+      onAssistantFinal: (msg) => {
+        finalText = msg;
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    await telegramBot.sendMessage(`Error: ${message}`, chatId, threadId);
+    return;
+  }
+
+  if (finalText.trim().length > 0) {
+    await telegramBot.sendMessage(finalText, chatId, threadId);
+  }
+}
+
+function getTelegramConversationId(chatId: string, threadId?: number): string {
+  const key = threadId != null ? `${chatId}:${threadId}` : chatId;
+  let conversationId = telegramSessionMap.get(key);
+  if (!conversationId) {
+    conversationId = crypto.randomUUID();
+    telegramSessionMap.set(key, conversationId);
+  }
+  return conversationId;
+}
+
 /**
  * Produce a short human-readable summary of a tool call's input for display
  * in the UI (e.g. the file path for read_file, the command for shell, etc.).
@@ -462,4 +546,18 @@ function summarizeToolInput(toolName: string, input: Record<string, unknown>): s
   }
 
   return toolName;
+}
+
+function extractTextFromContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block && typeof block === 'object' && (block as any).type === 'text') {
+      const text = (block as any).text;
+      if (typeof text === 'string') parts.push(text);
+    }
+  }
+  return parts.join('');
 }
