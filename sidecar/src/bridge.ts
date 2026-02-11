@@ -121,6 +121,10 @@ interface ConversationSession {
   isRunning: boolean;
   idleTimer?: NodeJS.Timeout;
   pendingMessages: string[];
+  /** Track tool_use content blocks by stream index during streaming */
+  toolUseByIndex: Map<number, { id: string; name: string; inputChunks: string[] }>;
+  /** Non-MCP tool calls started but not yet completed (toolUseId → toolName) */
+  pendingToolCompletions: Map<string, string>;
 }
 
 class MessageStream {
@@ -314,6 +318,7 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
         resumeSessionAt: session.lastAssistantUuid,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
+        includePartialMessages: true,
         settingSources: ['project', 'user'],
         allowedTools: [
           'WebSearch',
@@ -375,22 +380,117 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
     return;
   }
 
+  if (message.type === 'stream_event') {
+    const event = message.event;
+
+    // New message starting — complete any pending non-MCP tool calls from the previous turn.
+    // A new message_start means the SDK finished executing tools and is streaming the next response.
+    if (event?.type === 'message_start') {
+      flushPendingToolCompletions(session);
+      session.toolUseByIndex.clear();
+      touchIdle(session);
+      return;
+    }
+
+    // Tool use content block starting
+    if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+      const index = event.index as number;
+      const toolUseId = event.content_block.id as string;
+      const toolName = event.content_block.name as string;
+      session.toolUseByIndex.set(index, { id: toolUseId, name: toolName, inputChunks: [] });
+
+      // MCP-bridged tools emit their own tool_use_start via the MCP bridge — skip them here
+      // to avoid duplicate entries in the UI.
+      if (!toolName.startsWith('mcp__')) {
+        sendToClient(activeClient, {
+          type: 'tool_use_start',
+          conversationId: session.conversationId,
+          toolUseId,
+          toolName,
+          inputSummary: toolName,
+        });
+        session.pendingToolCompletions.set(toolUseId, toolName);
+      }
+
+      touchIdle(session);
+      return;
+    }
+
+    // Accumulate input JSON for tool uses
+    if (event?.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
+      const tracked = session.toolUseByIndex.get(event.index as number);
+      if (tracked) {
+        tracked.inputChunks.push(event.delta.partial_json);
+        touchIdle(session);
+      }
+      return;
+    }
+
+    // Content block finished — update tool input summary with parsed input
+    if (event?.type === 'content_block_stop') {
+      const tracked = session.toolUseByIndex.get(event.index as number);
+      if (tracked && !tracked.name.startsWith('mcp__') && tracked.inputChunks.length > 0) {
+        try {
+          const fullInput = JSON.parse(tracked.inputChunks.join(''));
+          // Update the existing tool call entry on the Swift side via completeToolCall.
+          // The Swift side's addToolCall uses toolUseId to identify entries, so re-sending
+          // tool_use_start would create a duplicate. Instead, we just log the parsed input.
+          console.log(`[agent] tool input for ${tracked.name}: ${summarizeToolInput(tracked.name, fullInput)}`);
+        } catch {
+          // Input parsing failed — keep the tool name as summary
+        }
+      }
+      if (tracked) {
+        session.toolUseByIndex.delete(event.index as number);
+      }
+      return;
+    }
+
+    // Text delta — stream to UI
+    if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+      sendToClient(activeClient, {
+        type: 'stream_chunk',
+        conversationId: session.conversationId,
+        content: event.delta.text,
+      });
+      touchIdle(session);
+    }
+    return;
+  }
+
   if (message.type === 'result') {
+    flushPendingToolCompletions(session);
+    session.toolUseByIndex.clear();
+
     const textResult = typeof message.result === 'string'
       ? message.result
       : message.result != null
         ? JSON.stringify(message.result)
         : '';
     if (textResult.trim().length > 0) {
-      sendToClient(activeClient, {
-        type: 'stream_chunk',
-        conversationId: session.conversationId,
-        content: textResult,
-      });
+      // Don't send to Swift client — text was already streamed via stream_event chunks.
       forwardToTelegramIfNeeded(session.conversationId, textResult);
       touchIdle(session);
     }
   }
+}
+
+/**
+ * Mark all pending non-MCP tool calls as complete. Called when a new assistant
+ * turn starts (meaning the SDK finished executing the previous turn's tools)
+ * or when the conversation result arrives.
+ */
+function flushPendingToolCompletions(session: ConversationSession): void {
+  for (const [toolUseId, toolName] of session.pendingToolCompletions) {
+    sendToClient(activeClient, {
+      type: 'tool_use_complete',
+      conversationId: session.conversationId,
+      toolUseId,
+      toolName,
+      resultPreview: 'Done',
+    });
+  }
+  session.pendingToolCompletions.clear();
 }
 
 function buildFluxSystemPrompt(): string {
@@ -412,6 +512,8 @@ function getSession(conversationId: string): ConversationSession {
       stream: null,
       isRunning: false,
       pendingMessages: [],
+      toolUseByIndex: new Map(),
+      pendingToolCompletions: new Map(),
     };
     sessions.set(conversationId, session);
   }
