@@ -44,6 +44,7 @@
 - For closed-island activity UI, keep an independent `ConversationStore` run-state flag (started on send, updated by stream/run-status callbacks) and OR it with bridge state so indicators survive dropped/late WebSocket lifecycle events.
 - In animating notch UIs, pin closed-header content to `.top` during expand/collapse transitions; centered stacks make indicators appear too low and only visible during a brief morph frame.
 - Add a short visibility latch (~1.5s) for closed-state activity indicators so transient state flips do not cause one-frame flashes.
+- For a global "hold fn" gesture on macOS, listen to `.flagsChanged`, check `.function` in modifier flags, and gate with a `wasPressed` latch so the action fires once per hold.
 
 ## Patterns That Don't Work
 - (approaches that failed and why)
