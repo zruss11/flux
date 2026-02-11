@@ -11,6 +11,11 @@
 | 2026-02-11 | me | Typed a Unicode comparison symbol (`≥`) in source while editing AppleScript in Swift raw strings. | Keep source edits ASCII-only unless Unicode is explicitly required; use `>=` style operators in embedded scripts. |
 | 2026-02-11 | me | Used `>=` inside AppleScript and caused parse errors (`Expected end of line but found identifier`). | In AppleScript use textual comparisons (`is greater than or equal to`) or valid AppleScript operators. |
 | 2026-02-11 | user | Needed to keep working on existing branch `zruss11/all-window-context`, but I renamed away from it. | Keep the current task branch stable when user says to continue existing work; only rename when explicitly needed. |
+| 2026-02-11 | me | Used `process.chdir()` inside Vitest tests, which fails in worker threads. | Avoid `process.chdir()` in Vitest; create fixtures under the repo/root or run tests in forks/single-thread mode. |
+| 2026-02-11 | me | Added a mutable static test override in a nonisolated type, triggering Swift concurrency-safety errors. | Prefer environment-driven overrides or isolate overrides on an actor to satisfy concurrency rules. |
+| 2026-02-11 | me | Put `ConversationStore.overrideHistoryDirectory` behind `#if DEBUG`, which broke `swift test -c release` compilation. | Keep test hooks needed by test targets compiled in release too, or gate tests and hooks consistently. |
+| 2026-02-11 | me | Left GitHub macOS workflows on `macos-latest` while code used macOS 26 Speech APIs unavailable on the macOS 15 image. | Pin workflows to `macos-26` when builds depend on macOS 26 SDK/runtime features. |
+| 2026-02-11 | me | Switched to `.macOS(.v26)` in `Package.swift` without bumping tools version, causing manifest parse failures. | Use `// swift-tools-version: 6.2` (or newer) when targeting `.macOS(.v26)` in SwiftPM manifests. |
 | 2026-02-11 | me | Announced that I was using/reading the napkin skill in user-facing status text. | Apply napkin silently; do not mention reading it in updates. |
 | 2026-02-11 | me | Added block-based NotificationCenter observer on a `@MainActor` app delegate and hit Swift 6 Sendable/data-race compiler errors. | Prefer selector-based observers (or main-actor isolated async hops) when notification payloads would otherwise cross actor boundaries unsafely. |
 

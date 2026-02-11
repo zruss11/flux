@@ -1,9 +1,9 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
     name: "Flux",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v26)],
     dependencies: [
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.0")
     ],
@@ -14,6 +14,11 @@ let package = Package(
                 .product(name: "MarkdownUI", package: "swift-markdown-ui")
             ],
             path: "Sources"
+        ),
+        .testTarget(
+            name: "FluxTests",
+            dependencies: ["Flux"],
+            path: "Tests"
         )
     ]
 )
