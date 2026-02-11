@@ -31,6 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SecretMigration.migrateUserDefaultsTokensToKeychainIfNeeded()
 
         setupStatusItem()
+        setupAutomationThreadObserver()
 
         let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
 
@@ -66,8 +67,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupBridgeCallbacks()
         automationService.configureRunner { [weak self] request in
             guard let self else { return }
+            guard let conversationId = UUID(uuidString: request.conversationId) else { return }
+
+            let automationName = self.automationService.automations
+                .first(where: { $0.id == request.automationId })?
+                .name ?? "Automation"
+            self.conversationStore.ensureConversationExists(
+                id: conversationId,
+                title: "Automation: \(automationName)"
+            )
+
             self.agentBridge.sendChatMessage(
-                conversationId: request.conversationId,
+                conversationId: conversationId.uuidString,
                 content: request.content
             )
         }
@@ -93,6 +104,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         item.menu = menu
         statusItem = item
+    }
+
+    private func setupAutomationThreadObserver() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAutomationOpenThreadNotification(_:)),
+            name: .automationOpenThreadRequested,
+            object: nil
+        )
+    }
+
+    @objc
+    private func handleAutomationOpenThreadNotification(_ notification: Notification) {
+        handleAutomationOpenThread(notification)
+    }
+
+    private func handleAutomationOpenThread(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let conversationIdRaw = userInfo[NotificationPayloadKey.conversationId] as? String,
+              let conversationId = UUID(uuidString: conversationIdRaw) else {
+            return
+        }
+
+        let title = (userInfo[NotificationPayloadKey.conversationTitle] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resolvedTitle = title.isEmpty ? "Automation" : title
+
+        let islandWasShown = IslandWindowManager.shared.isShown
+        if !islandWasShown {
+            IslandWindowManager.shared.showIsland(
+                conversationStore: conversationStore,
+                agentBridge: agentBridge
+            )
+        }
+
+        conversationStore.ensureConversationExists(
+            id: conversationId,
+            title: resolvedTitle
+        )
+        conversationStore.openConversation(id: conversationId)
+        IslandWindowManager.shared.expand()
+
+        if islandWasShown {
+            NotificationCenter.default.post(
+                name: .islandOpenConversationRequested,
+                object: nil,
+                userInfo: [NotificationPayloadKey.conversationId: conversationId.uuidString]
+            )
+        }
     }
 
     @objc private func toggleIslandFromMenu() {

@@ -162,6 +162,17 @@ struct IslandView: View {
                 windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .islandOpenConversationRequested)) { notification in
+            guard let userInfo = notification.userInfo,
+                  let conversationIdRaw = userInfo[NotificationPayloadKey.conversationId] as? String,
+                  let conversationId = UUID(uuidString: conversationIdRaw) else {
+                return
+            }
+            conversationStore.openConversation(id: conversationId)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                contentType = .chat
+            }
+        }
     }
 
     @ViewBuilder
@@ -1094,6 +1105,10 @@ struct IslandSettingsView: View {
                     startEditingAutomation(automation)
                 }
 
+                Button("Open Thread") {
+                    openAutomationThread(automation)
+                }
+
                 Spacer()
 
                 Button("Delete") {
@@ -1446,6 +1461,23 @@ struct IslandSettingsView: View {
         } catch {
             automationActionError = error.localizedDescription
         }
+    }
+
+    private func openAutomationThread(_ automation: Automation) {
+        guard let conversationId = UUID(uuidString: automation.conversationId) else {
+            automationActionError = "Automation thread ID is invalid."
+            return
+        }
+        automationActionError = nil
+
+        NotificationCenter.default.post(
+            name: .automationOpenThreadRequested,
+            object: nil,
+            userInfo: [
+                NotificationPayloadKey.conversationId: conversationId.uuidString,
+                NotificationPayloadKey.conversationTitle: "Automation: \(automation.name)",
+            ]
+        )
     }
 
     private var divider: some View {

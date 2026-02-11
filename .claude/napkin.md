@@ -12,11 +12,13 @@
 | 2026-02-11 | me | Used `>=` inside AppleScript and caused parse errors (`Expected end of line but found identifier`). | In AppleScript use textual comparisons (`is greater than or equal to`) or valid AppleScript operators. |
 | 2026-02-11 | user | Needed to keep working on existing branch `zruss11/all-window-context`, but I renamed away from it. | Keep the current task branch stable when user says to continue existing work; only rename when explicitly needed. |
 | 2026-02-11 | me | Announced that I was using/reading the napkin skill in user-facing status text. | Apply napkin silently; do not mention reading it in updates. |
+| 2026-02-11 | me | Added block-based NotificationCenter observer on a `@MainActor` app delegate and hit Swift 6 Sendable/data-race compiler errors. | Prefer selector-based observers (or main-actor isolated async hops) when notification payloads would otherwise cross actor boundaries unsafely. |
 
 ## User Preferences
 - (accumulate here as you learn them)
 - For screen understanding, prefer global visible-window context instead of only frontmost-window AX tree when the task involves multiple apps/windows.
 - In UI copy, label scheduled work as "Automations" and avoid "cron/crons" wording.
+- Automation runs should live in dedicated chat threads, with thread targeting implicit in the UI.
 
 ## Patterns That Work
 - For new agent tools, add the tool definition in `sidecar/src/tools/index.ts` and implement the matching `toolName` case in `Flux/Sources/FluxApp.swift`'s `handleToolRequest` switch.

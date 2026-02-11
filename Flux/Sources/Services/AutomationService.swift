@@ -250,6 +250,11 @@ final class AutomationService {
         var automation = automations[index]
         let now = Date()
 
+        // Legacy data may contain non-UUID conversation ids. Normalize before dispatch.
+        if UUID(uuidString: automation.conversationId) == nil {
+            automation.conversationId = UUID().uuidString
+        }
+
         let timezone = try resolveTimeZone(identifier: automation.timezoneIdentifier)
         let schedule = try CronSchedule(expression: automation.scheduleExpression)
         let nextRun = schedule.nextRun(after: now, in: timezone)
@@ -333,6 +338,11 @@ final class AutomationService {
             var automation = automations[index]
 
             do {
+                if UUID(uuidString: automation.conversationId) == nil {
+                    automation.conversationId = UUID().uuidString
+                    changed = true
+                }
+
                 let timezone = try resolveTimeZone(identifier: automation.timezoneIdentifier)
                 let schedule = try CronSchedule(expression: automation.scheduleExpression)
                 if automation.scheduleExpression != schedule.expression {

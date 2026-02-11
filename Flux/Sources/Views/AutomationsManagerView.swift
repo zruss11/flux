@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AutomationsManagerView: View {
+    @Environment(\.dismiss) private var dismiss
     @State private var automationService = AutomationService.shared
     @State private var editorMode: AutomationEditorMode?
     @State private var pendingDelete: Automation?
@@ -174,6 +175,10 @@ struct AutomationsManagerView: View {
                     editorMode = .edit(automation)
                 }
 
+                Button("Open Thread") {
+                    openAutomationThread(automation)
+                }
+
                 Spacer()
 
                 Button("Delete", role: .destructive) {
@@ -210,6 +215,24 @@ struct AutomationsManagerView: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private func openAutomationThread(_ automation: Automation) {
+        guard let conversationId = UUID(uuidString: automation.conversationId) else {
+            actionError = "Automation thread ID is invalid."
+            return
+        }
+        actionError = nil
+
+        NotificationCenter.default.post(
+            name: .automationOpenThreadRequested,
+            object: nil,
+            userInfo: [
+                NotificationPayloadKey.conversationId: conversationId.uuidString,
+                NotificationPayloadKey.conversationTitle: "Automation: \(automation.name)",
+            ]
+        )
+        dismiss()
     }
 }
 
@@ -496,4 +519,3 @@ private struct AutomationEditorSheet: View {
         }
     }
 }
-
