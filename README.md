@@ -44,6 +44,32 @@ swift test --package-path Flux
 cd sidecar && npm install && npm test
 ```
 
+## Releasing signed DMGs
+
+GitHub Actions workflow: `.github/workflows/release.yml`
+
+Required repository secrets:
+- `APPLE_CERTIFICATE_P12_BASE64` — base64-encoded Developer ID Application certificate (`.p12`)
+- `APPLE_CERTIFICATE_PASSWORD` — password for that `.p12`
+- `APPLE_SIGNING_IDENTITY` (optional) — explicit signing identity name; if omitted, first Developer ID Application identity is used
+- `APPLE_API_KEY_ID` — App Store Connect API key ID
+- `APPLE_API_ISSUER_ID` — App Store Connect issuer ID
+- `APPLE_API_PRIVATE_KEY_BASE64` — base64-encoded private key (`AuthKey_*.p8`)
+
+Create a tag to release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Or run manually with `workflow_dispatch` and provide a tag.
+
+Release assets include:
+- `flux-<version>.dmg`
+- `flux-<version>.dmg.sha256`
+- `sidecar-dist.tgz`
+
 ## Architecture
 
 ```
