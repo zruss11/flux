@@ -96,20 +96,61 @@ mkdir -p "${APP_BUNDLE}/Contents/Resources"
 cp "${APP_BIN}" "${APP_BUNDLE}/Contents/MacOS/Flux"
 cp "${ROOT}/Flux/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
 
+# Package repo skills into the dev app bundle so the Skills UI can discover them
+# without requiring per-machine installation into ~/.agents or ~/.claude.
+if [[ -d "${ROOT}/.agents/skills" ]]; then
+  mkdir -p "${APP_BUNDLE}/Contents/Resources/agents"
+  rm -rf "${APP_BUNDLE}/Contents/Resources/agents/skills" >/dev/null 2>&1 || true
+  cp -R "${ROOT}/.agents/skills" "${APP_BUNDLE}/Contents/Resources/agents/skills"
+fi
+
 # Codesign the bundle so TCC permissions (Accessibility / Screen Recording) stick across rebuilds.
 # Prefer Apple Development; fall back to Developer ID; finally fall back to ad-hoc.
 SIGN_IDENTITY="${FLUX_CODESIGN_IDENTITY:-}"
 if [[ -z "${SIGN_IDENTITY}" ]]; then
-  SIGN_IDENTITY="$(
-    security find-identity -p codesigning -v 2>/dev/null \
-      | awk -F'"' '/Apple Development:/{print $2; exit}'
-  )"
-fi
-if [[ -z "${SIGN_IDENTITY}" ]]; then
-  SIGN_IDENTITY="$(
-    security find-identity -p codesigning -v 2>/dev/null \
-      | awk -F'"' '/Developer ID Application:/{print $2; exit}'
-  )"
+  # NOTE: Avoid searching the System keychain here; it can trigger repeated
+  # admin-password prompts. We only search user keychains.
+  USER_KEYCHAINS=()
+  while IFS= read -r kc; do
+    # Explicitly exclude system keychains; they can prompt for admin credentials.
+    case "${kc}" in
+      /Library/Keychains/*|/System/Library/Keychains/*) continue ;;
+    esac
+    USER_KEYCHAINS+=("${kc}")
+  done < <(
+    (security list-keychains -d user 2>/dev/null || true) \
+      | sed -E 's/^[[:space:]]*"([^"]+)".*/\1/' \
+      | awk 'NF { print }'
+  )
+
+  # Filter to keychains that exist on disk, to avoid noisy errors.
+  EXISTING_USER_KEYCHAINS=()
+  for kc in "${USER_KEYCHAINS[@]}"; do
+    if [[ -f "${kc}" ]]; then
+      EXISTING_USER_KEYCHAINS+=("${kc}")
+    fi
+  done
+
+  if [[ "${#EXISTING_USER_KEYCHAINS[@]}" -eq 0 ]]; then
+    # Fallback: the default login keychain path on modern macOS.
+    if [[ -f "${HOME}/Library/Keychains/login.keychain-db" ]]; then
+      EXISTING_USER_KEYCHAINS=("${HOME}/Library/Keychains/login.keychain-db")
+    elif [[ -f "${HOME}/Library/Keychains/login.keychain" ]]; then
+      EXISTING_USER_KEYCHAINS=("${HOME}/Library/Keychains/login.keychain")
+    fi
+  fi
+
+  IDENTITIES=""
+  if [[ "${#EXISTING_USER_KEYCHAINS[@]}" -gt 0 ]]; then
+    IDENTITIES="$(
+      security find-identity -p codesigning -v "${EXISTING_USER_KEYCHAINS[@]}" 2>/dev/null || true
+    )"
+  fi
+
+  SIGN_IDENTITY="$(echo "${IDENTITIES}" | awk -F'\"' '/Apple Development:/{print $2; exit}')"
+  if [[ -z "${SIGN_IDENTITY}" ]]; then
+    SIGN_IDENTITY="$(echo "${IDENTITIES}" | awk -F'\"' '/Developer ID Application:/{print $2; exit}')"
+  fi
 fi
 if [[ -z "${SIGN_IDENTITY}" ]]; then
   SIGN_IDENTITY="-"
