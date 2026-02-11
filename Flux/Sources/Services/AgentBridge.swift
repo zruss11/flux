@@ -3,12 +3,19 @@ import Foundation
 @Observable
 final class AgentBridge: @unchecked Sendable {
     var isConnected = false
+    var isAgentWorking = false
 
     var onAssistantMessage: ((String, String) -> Void)?  // conversationId, content
     var onToolRequest: ((String, String, String, [String: Any]) -> Void)?  // conversationId, toolUseId, toolName, input
     var onStreamChunk: ((String, String) -> Void)?  // conversationId, content
     var onToolUseStart: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, inputSummary
     var onToolUseComplete: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, resultPreview
+    var onRunStatus: ((String, Bool) -> Void)?  // conversationId, isWorking
+    private var activeRunConversationIds: Set<String> = []
+    private var activeToolUseIds: Set<String> = []
+    private var activeStreamConversationIds: Set<String> = []
+    private var streamIdleWorkItems: [String: DispatchWorkItem] = [:]
+    private let streamIdleTimeout: TimeInterval = 1.2
 
     private var webSocketTask: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .default)
@@ -41,6 +48,7 @@ final class AgentBridge: @unchecked Sendable {
     }
 
     func connect() {
+        clearRunState()
         shouldReconnect = true
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
@@ -72,12 +80,15 @@ final class AgentBridge: @unchecked Sendable {
         reconnectWorkItem = nil
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
+        clearRunState()
         Task { @MainActor in
             isConnected = false
         }
     }
 
     func sendChatMessage(conversationId: String, content: String) {
+        setRunStatus(for: conversationId, isWorking: true)
+
         // Keep sidecar config in sync (user may have edited settings since connect).
         sendMcpAuthIfNeeded()
         sendTelegramConfigFromStores()
@@ -200,6 +211,9 @@ final class AgentBridge: @unchecked Sendable {
                 Task { @MainActor in
                     self.onAssistantMessage?(conversationId, content)
                 }
+                // Error and non-stream replies arrive as full assistant messages.
+                setRunStatus(for: conversationId, isWorking: false)
+                clearStreamActivity(for: conversationId)
             }
 
         case "tool_request":
@@ -216,6 +230,9 @@ final class AgentBridge: @unchecked Sendable {
                 Task { @MainActor in
                     self.onStreamChunk?(conversationId, content)
                 }
+                // Some sidecar paths can stream without a preceding local sendChat call.
+                setRunStatus(for: conversationId, isWorking: true)
+                registerStreamChunk(for: conversationId)
             }
 
         case "tool_use_start":
@@ -225,6 +242,7 @@ final class AgentBridge: @unchecked Sendable {
                 Task { @MainActor in
                     self.onToolUseStart?(conversationId, toolUseId, toolName, inputSummary)
                 }
+                setToolUseStatus(for: conversationId, toolUseId: toolUseId, isActive: true)
             }
 
         case "tool_use_complete":
@@ -234,6 +252,15 @@ final class AgentBridge: @unchecked Sendable {
                 Task { @MainActor in
                     self.onToolUseComplete?(conversationId, toolUseId, toolName, resultPreview)
                 }
+                setToolUseStatus(for: conversationId, toolUseId: toolUseId, isActive: false)
+            }
+
+        case "run_status":
+            if let isWorking = json["isWorking"] as? Bool {
+                Task { @MainActor in
+                    self.onRunStatus?(conversationId, isWorking)
+                }
+                setRunStatus(for: conversationId, isWorking: isWorking)
             }
 
         default:
@@ -242,6 +269,7 @@ final class AgentBridge: @unchecked Sendable {
     }
 
     private func handleDisconnect() {
+        clearRunState()
         Task { @MainActor in
             isConnected = false
         }
@@ -262,5 +290,76 @@ final class AgentBridge: @unchecked Sendable {
         }
         reconnectWorkItem = item
         DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func setRunStatus(for conversationId: String, isWorking: Bool) {
+        Task { @MainActor in
+            if isWorking {
+                self.activeRunConversationIds.insert(conversationId)
+            } else {
+                self.activeRunConversationIds.remove(conversationId)
+            }
+            self.refreshWorkingFlag()
+        }
+    }
+
+    private func clearRunState() {
+        Task { @MainActor in
+            for conversationId in self.activeRunConversationIds {
+                self.onRunStatus?(conversationId, false)
+            }
+            self.activeRunConversationIds.removeAll()
+            self.activeToolUseIds.removeAll()
+            self.activeStreamConversationIds.removeAll()
+            self.streamIdleWorkItems.values.forEach { $0.cancel() }
+            self.streamIdleWorkItems.removeAll()
+            self.refreshWorkingFlag()
+        }
+    }
+
+    private func setToolUseStatus(for conversationId: String, toolUseId: String, isActive: Bool) {
+        let key = "\(conversationId):\(toolUseId)"
+        Task { @MainActor in
+            if isActive {
+                self.activeToolUseIds.insert(key)
+            } else {
+                self.activeToolUseIds.remove(key)
+            }
+            self.refreshWorkingFlag()
+        }
+    }
+
+    private func refreshWorkingFlag() {
+        isAgentWorking = !activeRunConversationIds.isEmpty
+            || !activeToolUseIds.isEmpty
+            || !activeStreamConversationIds.isEmpty
+    }
+
+    private func registerStreamChunk(for conversationId: String) {
+        Task { @MainActor in
+            self.activeStreamConversationIds.insert(conversationId)
+            self.streamIdleWorkItems[conversationId]?.cancel()
+
+            let item = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    self.activeStreamConversationIds.remove(conversationId)
+                    self.streamIdleWorkItems.removeValue(forKey: conversationId)
+                    self.refreshWorkingFlag()
+                }
+            }
+            self.streamIdleWorkItems[conversationId] = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.streamIdleTimeout, execute: item)
+            self.refreshWorkingFlag()
+        }
+    }
+
+    private func clearStreamActivity(for conversationId: String) {
+        Task { @MainActor in
+            self.streamIdleWorkItems[conversationId]?.cancel()
+            self.streamIdleWorkItems.removeValue(forKey: conversationId)
+            self.activeStreamConversationIds.remove(conversationId)
+            self.refreshWorkingFlag()
+        }
     }
 }

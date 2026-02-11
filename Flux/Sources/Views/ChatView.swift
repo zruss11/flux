@@ -254,6 +254,7 @@ struct ChatView: View {
 
         // Display what the user typed (with `$skill`), but send `/skill` to the sidecar.
         conversationStore.addMessage(to: conversationId, role: .user, content: text)
+        conversationStore.setConversationRunning(conversationId, isRunning: true)
         agentBridge.sendChatMessage(conversationId: conversationId.uuidString, content: outboundText)
 
         inputText = ""
