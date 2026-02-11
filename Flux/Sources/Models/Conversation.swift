@@ -43,6 +43,7 @@ final class ConversationStore {
     var activeConversationId: UUID?
     var folders: [ChatFolder] = []
     var summaries: [ConversationSummary] = []
+    private var runningConversationIds: Set<UUID> = []
 
     // MARK: - Persistence Paths
 
@@ -61,6 +62,10 @@ final class ConversationStore {
 
     var activeConversation: Conversation? {
         conversations.first { $0.id == activeConversationId }
+    }
+
+    var hasRunningConversations: Bool {
+        !runningConversationIds.isEmpty
     }
 
     // MARK: - Lifecycle
@@ -189,6 +194,7 @@ final class ConversationStore {
     func deleteConversation(id: UUID) {
         conversations.removeAll { $0.id == id }
         summaries.removeAll { $0.id == id }
+        runningConversationIds.remove(id)
         // Remove from any folder
         for i in folders.indices {
             folders[i].conversationIds.removeAll { $0 == id }
@@ -253,6 +259,16 @@ final class ConversationStore {
             summaries[si].folderId = folderId
         }
         saveIndex()
+    }
+
+    // MARK: - Run State
+
+    func setConversationRunning(_ conversationId: UUID, isRunning: Bool) {
+        if isRunning {
+            runningConversationIds.insert(conversationId)
+        } else {
+            runningConversationIds.remove(conversationId)
+        }
     }
 
     /// Conversations not assigned to any folder, sorted by recency.
