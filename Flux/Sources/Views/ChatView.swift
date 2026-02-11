@@ -8,8 +8,8 @@ struct ChatContentHeightKey: PreferenceKey {
     }
 }
 
-// Preference key to signal skills bubble is expanded
-struct SkillsExpandedKey: PreferenceKey {
+// Preference key to tell IslandView whether the skills panel is visible
+struct SkillsVisibleKey: PreferenceKey {
     nonisolated(unsafe) static var defaultValue: Bool = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) {
         value = value || nextValue()
@@ -24,6 +24,7 @@ struct ChatView: View {
     @State private var showSkills = false
     @State private var dollarTriggerActive = false
     @State private var selectedSkillDirNames: Set<String> = []
+    @State private var skillSearchQuery = ""
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
@@ -101,12 +102,17 @@ struct ChatView: View {
                     )
             )
             .padding(.horizontal, 10)
-            .padding(.bottom, 12)
 
-            SkillsView(isPresented: $showSkills) { skill in
+            // Skills dropdown stays above the input (so it doesn't get cut off),
+            // but the Skills pill lives below the input row.
+            SkillsView(isPresented: $showSkills, searchQuery: $skillSearchQuery, showsPill: false) { skill in
                 insertSkillToken(skill.directoryName)
                 isInputFocused = true
             }
+
+            SkillsPillButton(isPresented: $showSkills)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
         }
         .background(
             GeometryReader { geo in
@@ -114,20 +120,29 @@ struct ChatView: View {
                     .preference(key: ChatContentHeightKey.self, value: geo.size.height)
             }
         )
-        .preference(key: SkillsExpandedKey.self, value: showSkills)
+        .preference(key: SkillsVisibleKey.self, value: showSkills)
         .onChange(of: inputText) { oldValue, newValue in
-            print("[ChatView] inputText changed: '\(oldValue)' -> '\(newValue)' (delta: \(newValue.count - oldValue.count))")
+            // Detect a freshly typed `$` to open skills
             if !showSkills,
                newValue.count - oldValue.count == 1,
                newValue.filter({ $0 == "$" }).count > oldValue.filter({ $0 == "$" }).count {
-                print("[ChatView] $ detected, opening skills")
                 dollarTriggerActive = true
-                showSkills = true
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+                    showSkills = true
+                }
+                skillSearchQuery = ""
+            }
+
+            // Update the search query with whatever is typed after the last `$`
+            if showSkills, dollarTriggerActive, let idx = newValue.lastIndex(of: "$") {
+                let afterDollar = String(newValue[newValue.index(after: idx)...])
+                skillSearchQuery = afterDollar.trimmingCharacters(in: .whitespaces)
             }
         }
         .onChange(of: showSkills) { _, presented in
             if !presented {
                 dollarTriggerActive = false
+                skillSearchQuery = ""
             }
         }
         .onAppear {
@@ -142,7 +157,9 @@ struct ChatView: View {
         guard !text.isEmpty else { return }
 
         if showSkills {
-            showSkills = false
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                showSkills = false
+            }
             dollarTriggerActive = false
         }
 
@@ -179,6 +196,7 @@ struct ChatView: View {
 
         selectedSkillDirNames.insert(directoryName)
         dollarTriggerActive = false
+        skillSearchQuery = ""
         // Intentionally keep `showSkills` open so users can click multiple skills.
     }
 

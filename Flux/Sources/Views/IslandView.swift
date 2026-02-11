@@ -17,7 +17,7 @@ struct IslandView: View {
     @State private var contentType: IslandContentType = .chat
     @State private var showExpandedContent = false
     @State private var measuredChatHeight: CGFloat = 0
-    @State private var skillsExpanded = false
+    @State private var skillsVisible = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -49,22 +49,19 @@ struct IslandView: View {
     }
 
     private var expandedHeight: CGFloat {
+        let effectiveMaxHeight: CGFloat = skillsVisible ? 700 : maxExpandedHeight
         if contentType == .settings {
             return maxExpandedHeight
         }
-        // Skills bubble is open — use max height to accommodate the thought bubble
-        if skillsExpanded {
-            return maxExpandedHeight
-        }
         // No messages yet — compact initial state with just the input row
-        if messageCount == 0 {
+        if messageCount == 0 && !skillsVisible {
             return minExpandedHeight + 80
         }
         // Grow to fit measured chat content + header + input row + padding
         // Header ~36pt, input row ~52pt, divider + padding ~20pt
         let overhead: CGFloat = 108
         let desired = measuredChatHeight + overhead
-        return min(max(desired, minExpandedHeight + 80), maxExpandedHeight)
+        return min(max(desired, minExpandedHeight + 80), effectiveMaxHeight)
     }
 
     private var currentWidth: CGFloat { isExpanded ? expandedWidth : closedWidth }
@@ -105,7 +102,7 @@ struct IslandView: View {
                 .animation(.spring(response: 0.5, dampingFraction: 0.8), value: messageCount)
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
-                .animation(.spring(response: 0.5, dampingFraction: 0.75), value: skillsExpanded)
+                .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: isExpanded) { _, expanded in
@@ -137,15 +134,15 @@ struct IslandView: View {
         .onPreferenceChange(ChatContentHeightKey.self) { height in
             measuredChatHeight = height
         }
-        .onPreferenceChange(SkillsExpandedKey.self) { expanded in
-            skillsExpanded = expanded
+        .onPreferenceChange(SkillsVisibleKey.self) { visible in
+            skillsVisible = visible
         }
         .onChange(of: measuredChatHeight) { _, _ in
             if isExpanded {
                 windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
             }
         }
-        .onChange(of: skillsExpanded) { _, _ in
+        .onChange(of: skillsVisible) { _, _ in
             if isExpanded {
                 windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
             }
