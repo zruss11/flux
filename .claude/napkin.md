@@ -8,9 +8,13 @@
 | 2026-02-11 | me | Used Bash 4-only `mapfile` in a script that may run under macOS's default Bash 3.2. | Use a `while IFS= read -r ...` loop (Bash 3.2-compatible) or explicitly depend on a newer Bash. |
 | 2026-02-11 | me | Accidentally used `require()` inside an ESM TypeScript module (`sidecar/src/skills/loadInstalledSkills.ts`). | In ESM, use `import` and async `fs.stat`/`fs.access` checks instead of `require()`. |
 | 2026-02-11 | me | Posted an in-progress status update in the `final` channel before work was complete. | Use `commentary` for progress updates and reserve `final` for the end-of-turn results summary. |
+| 2026-02-11 | me | Typed a Unicode comparison symbol (`≥`) in source while editing AppleScript in Swift raw strings. | Keep source edits ASCII-only unless Unicode is explicitly required; use `>=` style operators in embedded scripts. |
+| 2026-02-11 | me | Used `>=` inside AppleScript and caused parse errors (`Expected end of line but found identifier`). | In AppleScript use textual comparisons (`is greater than or equal to`) or valid AppleScript operators. |
+| 2026-02-11 | user | Needed to keep working on existing branch `zruss11/all-window-context`, but I renamed away from it. | Keep the current task branch stable when user says to continue existing work; only rename when explicitly needed. |
 
 ## User Preferences
 - (accumulate here as you learn them)
+- For screen understanding, prefer global visible-window context instead of only frontmost-window AX tree when the task involves multiple apps/windows.
 
 ## Patterns That Work
 - For new agent tools, add the tool definition in `sidecar/src/tools/index.ts` and implement the matching `toolName` case in `Flux/Sources/FluxApp.swift`'s `handleToolRequest` switch.
@@ -19,9 +23,11 @@
 - For SpriteKit inside a SwiftUI `SpriteView` hosted in a non-activating `NSPanel`, don't rely on the per-frame `update(_:)` loop or off-screen spawn; spawn nodes within visible bounds in `didMove`/`didChangeSize` so content renders even if physics/time is throttled.
 - For `AVAudioNode.installTap(...)` used from a `@MainActor` type, build the tap block in a `nonisolated` helper. Otherwise the closure inherits `@MainActor` isolation and can SIGTRAP on macOS 26 when CoreAudio invokes it off-main.
 - Telegram DM pairing state is shared via `~/.flux/telegram/pairing.json` so both Swift and the sidecar can read/write approvals.
+- For `capture_screen` results in the Anthropic conversation loop, send image payloads as tool-result image blocks (`source: {type: 'base64', media_type, data}`) rather than raw base64 text to avoid token-limit failures.
 
 ## Patterns That Don't Work
 - (approaches that failed and why)
 
 ## Domain Notes
 - (project/domain context that matters)
+- `read_ax_tree` is frontmost-window-only, so it can miss user-visible context outside Flux itself.

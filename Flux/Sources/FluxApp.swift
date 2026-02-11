@@ -153,6 +153,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleToolRequest(toolName: String, input: [String: Any]) async -> String {
+        let intInput: (String) -> Int? = { key in
+            if let value = input[key] as? Int {
+                return value
+            }
+            if let value = input[key] as? Double {
+                return Int(value)
+            }
+            if let value = input[key] as? NSNumber {
+                return value.intValue
+            }
+            return nil
+        }
+
         switch toolName {
         case "capture_screen":
             let target = input["target"] as? String ?? "display"
@@ -171,6 +184,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             return "Failed to read accessibility tree"
+
+        case "read_visible_windows":
+            let maxApps = intInput("maxApps")
+            let maxWindowsPerApp = intInput("maxWindowsPerApp")
+            let maxElementsPerWindow = intInput("maxElementsPerWindow")
+            let maxTextLength = intInput("maxTextLength")
+            let includeMinimized = input["includeMinimized"] as? Bool
+            return await accessibilityReader.readVisibleWindowsContext(
+                maxApps: maxApps,
+                maxWindowsPerApp: maxWindowsPerApp,
+                maxElementsPerWindow: maxElementsPerWindow,
+                maxTextLength: maxTextLength,
+                includeMinimized: includeMinimized
+            ) ?? "Failed to read visible windows accessibility context"
 
         case "read_selected_text":
             return await accessibilityReader.readSelectedText() ?? "No text selected"
