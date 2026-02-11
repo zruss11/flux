@@ -193,8 +193,21 @@ struct IslandView: View {
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
                 .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
                 .padding(.top, hasNotch ? 0 : windowManager.topOffset)
+
+            // Clipboard notification that drops below the island
+            if windowManager.showingClipboardNotification {
+                ClipboardNotificationView()
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity
+                        )
+                    )
+                    .offset(y: currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingClipboardNotification)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 clearClosedIndicatorsWorkItem?.cancel()
@@ -301,13 +314,17 @@ struct IslandView: View {
         return HStack(spacing: 0) {
             ZStack {
                 if isDictatingClosed {
-                    ClosedWaveformBars(
-                        levels: DictationManager.shared.barLevels,
-                        isProcessing: DictationManager.shared.isProcessing
-                    )
+                    HStack(spacing: 4) {
+                        ClosedWaveformBars(
+                            levels: DictationManager.shared.barLevels,
+                            isProcessing: DictationManager.shared.isProcessing
+                        )
+                        ClosedSparklesIndicator(isActive: true)
+                            .frame(width: 22, height: 22)
+                    }
                 }
             }
-            .frame(width: closedDictationSlotWidth, height: closedHeight)
+            .frame(width: closedDictationSlotWidth, height: closedHeight, alignment: .leading)
 
             ZStack {
                 if showActivity {
@@ -555,6 +572,31 @@ struct IslandView: View {
     }
 }
 
+private struct ClipboardNotificationView: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.on.clipboard")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
+
+            Text("Copied to clipboard")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(.black)
+        )
+        .overlay(
+            Capsule()
+                .stroke(.white.opacity(0.15), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
+    }
+}
+
 private struct ClosedSparklesIndicator: View {
     let isActive: Bool
 
@@ -624,32 +666,41 @@ private struct ClosedWaveformBars: View {
     let levels: [Float]
     let isProcessing: Bool
 
-    private let barCount = 8
-    private let barWidth: CGFloat = 2.5
-    private let barSpacing: CGFloat = 1.5
+    private let barCount = 6
+    private let barWidth: CGFloat = 3
+    private let barSpacing: CGFloat = 2
 
     var body: some View {
-        HStack(spacing: barSpacing) {
-            ForEach(0..<barCount, id: \.self) { index in
-                let sourceIndex = index * 2
-                let level = sourceIndex < levels.count ? levels[sourceIndex] : Float(0)
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(.white.opacity(isProcessing ? 0.5 : 0.9))
-                    .frame(width: barWidth, height: barHeight(for: level))
-                    .animation(
-                        .spring(response: 0.15, dampingFraction: 0.6),
-                        value: level
-                    )
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            // Use peak level — more responsive than average.
+            let peak = levels.max() ?? 0
+            // Aggressively amplify so any voice drives full-range animation.
+            let energy = min(1.0, Float(peak) * 17)
+
+            HStack(spacing: barSpacing) {
+                ForEach(0..<barCount, id: \.self) { index in
+                    let phase = Double(index) * 1.1
+                    let wave = sin(time * 3.0 + phase) * 0.45
+                        + sin(time * 5.5 + phase * 1.6) * 0.35
+                        + sin(time * 9.0 + phase * 0.7) * 0.2
+                    // Wide range [0.05, 1.0] for dramatic ups and downs.
+                    let modulation = Float((wave + 1.0) / 2.0 * 0.95 + 0.05)
+                    let level = energy * modulation
+
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(.white.opacity(0.9))
+                        .frame(width: barWidth, height: barHeight(for: level))
+                }
             }
+            .padding(.leading, 8)
         }
     }
 
     private func barHeight(for level: Float) -> CGFloat {
-        let maxH: CGFloat = 18
+        let maxH: CGFloat = 20
         let minH: CGFloat = 3
-        // Raw speech RMS is typically 0.01–0.15; amplify to fill the visual range.
-        let amplified = min(1.0, CGFloat(level) * 10)
-        return minH + amplified * (maxH - minH)
+        return minH + CGFloat(level) * (maxH - minH)
     }
 }
 

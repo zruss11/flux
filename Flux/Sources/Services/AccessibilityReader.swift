@@ -1,6 +1,13 @@
 @preconcurrency import ApplicationServices
 import AppKit
 
+enum TextInsertionResult {
+    case inserted
+    case noTextField
+    case noFocusedElement
+    case notTrusted
+}
+
 @Observable
 @MainActor
 final class AccessibilityReader {
@@ -58,30 +65,29 @@ final class AccessibilityReader {
         NSWorkspace.shared.frontmostApplication?.localizedName
     }
 
-    func insertTextAtFocusedField(_ text: String) -> Bool {
-        guard AXIsProcessTrusted() else { return false }
+    func insertTextAtFocusedField(_ text: String) -> TextInsertionResult {
+        guard AXIsProcessTrusted() else { return .notTrusted }
         let systemWide = AXUIElementCreateSystemWide()
 
         var focusedElement: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedElement)
-        guard result == .success, let element = focusedElement else { return false }
-        guard CFGetTypeID(element) == AXUIElementGetTypeID() else { return false }
+        guard result == .success, let element = focusedElement else { return .noFocusedElement }
+        guard CFGetTypeID(element) == AXUIElementGetTypeID() else { return .noFocusedElement }
 
         let axElement = element as! AXUIElement
 
-        // Attempt 1: Set via kAXValueAttribute
-        let valueResult = AXUIElementSetAttributeValue(axElement, kAXValueAttribute as CFString, text as CFTypeRef)
-        if valueResult == .success {
-            return true
-        }
-
-        // Attempt 2: Set via kAXSelectedTextAttribute
+        // Attempt 1: kAXSelectedTextAttribute — inserts at cursor / replaces selection.
+        // Try this unconditionally; it's the most reliable cursor-aware insertion method.
         let selectedResult = AXUIElementSetAttributeValue(axElement, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
         if selectedResult == .success {
-            return true
+            return .inserted
         }
 
-        // Attempt 3: Pasteboard fallback (simulate Cmd+V)
+        // Attempt 2: Pasteboard fallback (simulate Cmd+V).
+        // Only do this if the focused element looks like a text field, otherwise we'd
+        // paste into random UI elements (e.g. Finder icons).
+        guard isTextEntryElement(axElement) else { return .noTextField }
+
         let savedPasteboard = NSPasteboard.general.string(forType: .string)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -102,7 +108,39 @@ final class AccessibilityReader {
             }
         }
 
-        return true
+        return .inserted
+    }
+
+    private func isTextEntryElement(_ element: AXUIElement) -> Bool {
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+
+        if let role = roleRef as? String {
+            let textEntryRoles: Set<String> = [
+                kAXTextFieldRole as String,
+                kAXTextAreaRole as String,
+                kAXComboBoxRole as String,
+                "AXSearchField",
+                "AXWebArea",
+            ]
+            if textEntryRoles.contains(role) {
+                return true
+            }
+        }
+
+        var subroleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRef)
+        if let subrole = subroleRef as? String, subrole == "AXSearchField" {
+            return true
+        }
+
+        var isSettable: DarwinBoolean = false
+        let settableResult = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &isSettable)
+        if settableResult == .success && isSettable.boolValue {
+            return true
+        }
+
+        return false
     }
 
     func focusedFieldAppName() -> String? {

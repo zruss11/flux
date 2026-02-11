@@ -216,11 +216,16 @@ final class DictationManager {
             let targetApp = self.accessibilityReader?.focusedFieldAppName()
 
             // Insert text into the focused field, or fall back to the pasteboard.
-            let inserted = self.accessibilityReader?.insertTextAtFocusedField(finalText) ?? false
+            let insertionResult = self.accessibilityReader?.insertTextAtFocusedField(finalText)
+                ?? .noFocusedElement
 
-            if !inserted {
+            switch insertionResult {
+            case .inserted:
+                break
+            case .noTextField, .noFocusedElement, .notTrusted:
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(finalText, forType: .string)
+                IslandWindowManager.shared.showClipboardNotification()
             }
 
             // Persist the entry in history.
