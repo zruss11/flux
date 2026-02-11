@@ -46,7 +46,7 @@ final class ToolRunner {
         case .shell(let script):
             return await executeShellScript(script)
         case .applescript(let script):
-            return executeAppleScript(script)
+            return await executeAppleScript(script)
         case .claude(let instructions):
             return "Claude action: \(instructions)"
         }
@@ -75,15 +75,35 @@ final class ToolRunner {
         }
     }
 
-    func executeAppleScript(_ source: String) -> String {
-        var error: NSDictionary?
-        let script = NSAppleScript(source: source)
-        let result = script?.executeAndReturnError(&error)
+    func executeAppleScript(_ source: String) async -> String {
+        // Run via osascript in a background thread to avoid blocking the main thread.
+        // NSAppleScript.executeAndReturnError is synchronous and will freeze the UI
+        // when called on the @MainActor.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                process.arguments = ["-e", source]
 
-        if let error {
-            return "AppleScript error: \(error)"
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if process.terminationStatus != 0 && !output.isEmpty {
+                        continuation.resume(returning: "AppleScript error: \(output)")
+                    } else {
+                        continuation.resume(returning: output)
+                    }
+                } catch {
+                    continuation.resume(returning: "Error: \(error.localizedDescription)")
+                }
+            }
         }
-
-        return result?.stringValue ?? ""
     }
 }

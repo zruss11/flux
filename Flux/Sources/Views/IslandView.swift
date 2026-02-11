@@ -7,11 +7,12 @@ enum IslandContentType: Equatable {
     case chat
     case settings
     case history
+    case skills
     case folderDetail(ChatFolder)
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
-        case (.chat, .chat), (.settings, .settings), (.history, .history): return true
+        case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills): return true
         case (.folderDetail(let a), .folderDetail(let b)): return a.id == b.id
         default: return false
         }
@@ -59,7 +60,7 @@ struct IslandView: View {
     }
 
     private var expandedHeight: CGFloat {
-        if contentType == .settings || contentType == .history {
+        if contentType == .settings || contentType == .history || contentType == .skills {
             return maxExpandedHeight
         }
         if case .folderDetail = contentType {
@@ -210,6 +211,7 @@ struct IslandView: View {
         case .chat: return "Flux"
         case .settings: return "Settings"
         case .history: return "History"
+        case .skills: return "Skills"
         case .folderDetail(let folder): return folder.name
         }
     }
@@ -251,6 +253,22 @@ struct IslandView: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
+
+            if contentType == .chat {
+                // Skills Marketplace button (left side, next to title)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        contentType = .skills
+                    }
+                } label: {
+                    Image(systemName: "puzzlepiece.extension")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+            }
 
             Spacer()
 
@@ -361,6 +379,8 @@ struct IslandView: View {
                             }
                         }
                     )
+                case .skills:
+                    SkillsMarketplaceView()
                 case .folderDetail(let folder):
                     FolderDetailView(
                         conversationStore: conversationStore,
@@ -905,45 +925,14 @@ struct IslandSettingsView: View {
         let options = [promptKey: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
 
-        // The "prompt" typically opens System Settings rather than showing a modal prompt.
-        openSystemSettingsPrivacyPane(type: .accessibility)
+        SkillPermission.accessibility.openSystemSettings()
     }
 
     private func requestScreenRecordingPermission() {
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
         }
-        openSystemSettingsPrivacyPane(type: .screenRecording)
-    }
-
-    private enum PrivacyPaneType {
-        case accessibility
-        case screenRecording
-    }
-
-    private func openSystemSettingsPrivacyPane(type: PrivacyPaneType) {
-        let candidates: [String]
-        switch type {
-        case .accessibility:
-            candidates = [
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-                "x-apple.systempreferences:com.apple.preference.security?Privacy"
-            ]
-        case .screenRecording:
-            candidates = [
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-                "x-apple.systempreferences:com.apple.preference.security?Privacy"
-            ]
-        }
-
-        for str in candidates {
-            if let url = URL(string: str), NSWorkspace.shared.open(url) {
-                return
-            }
-        }
-
-        // Fallback: open System Settings if deep-links aren't supported.
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
+        SkillPermission.screenRecording.openSystemSettings()
     }
 
     private func relaunch() {
