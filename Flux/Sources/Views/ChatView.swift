@@ -106,6 +106,10 @@ struct ChatView: View {
                             }
                             return .handled
                         }
+                        if IslandWindowManager.shared.isExpanded {
+                            IslandWindowManager.shared.collapse()
+                            return .handled
+                        }
                         return .ignored
                     }
 
