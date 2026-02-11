@@ -11,6 +11,8 @@
 | 2026-02-11 | me | Typed a Unicode comparison symbol (`≥`) in source while editing AppleScript in Swift raw strings. | Keep source edits ASCII-only unless Unicode is explicitly required; use `>=` style operators in embedded scripts. |
 | 2026-02-11 | me | Used `>=` inside AppleScript and caused parse errors (`Expected end of line but found identifier`). | In AppleScript use textual comparisons (`is greater than or equal to`) or valid AppleScript operators. |
 | 2026-02-11 | user | Needed to keep working on existing branch `zruss11/all-window-context`, but I renamed away from it. | Keep the current task branch stable when user says to continue existing work; only rename when explicitly needed. |
+| 2026-02-11 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
+| 2026-02-11 | me | Used `z.record(z.any())` with Zod v4 and hit a TS overload error. | Use `z.record(z.string(), z.any())` for passthrough maps. |
 | 2026-02-11 | me | Used `process.chdir()` inside Vitest tests, which fails in worker threads. | Avoid `process.chdir()` in Vitest; create fixtures under the repo/root or run tests in forks/single-thread mode. |
 | 2026-02-11 | me | Added a mutable static test override in a nonisolated type, triggering Swift concurrency-safety errors. | Prefer environment-driven overrides or isolate overrides on an actor to satisfy concurrency rules. |
 | 2026-02-11 | me | Put `ConversationStore.overrideHistoryDirectory` behind `#if DEBUG`, which broke `swift test -c release` compilation. | Keep test hooks needed by test targets compiled in release too, or gate tests and hooks consistently. |
@@ -45,6 +47,7 @@
 - In animating notch UIs, pin closed-header content to `.top` during expand/collapse transitions; centered stacks make indicators appear too low and only visible during a brief morph frame.
 - Add a short visibility latch (~1.5s) for closed-state activity indicators so transient state flips do not cause one-frame flashes.
 - For a global "hold fn" gesture on macOS, listen to `.flagsChanged`, check `.function` in modifier flags, and gate with a `wasPressed` latch so the action fires once per hold.
+- In sidecar session maps, tie idle timers to actual eviction (not just ending streams) and clean up related Telegram/pending-tool state so long-lived processes do not leak memory.
 
 ## Patterns That Don't Work
 - (approaches that failed and why)

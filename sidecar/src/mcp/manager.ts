@@ -113,6 +113,10 @@ export class McpManager {
     return this.servers.has(serverId);
   }
 
+  listServerIds(): string[] {
+    return Array.from(this.servers.keys());
+  }
+
   getLastError(serverId: string): string | null {
     return this.servers.get(serverId)?.lastError ?? null;
   }
