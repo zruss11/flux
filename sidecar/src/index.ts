@@ -5,6 +5,9 @@ import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { startBridge } from './bridge.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('sidecar');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,23 +33,23 @@ if (fs.existsSync(venvPython)) {
 
   transcriberProcess.stdout?.on('data', (data: Buffer) => {
     for (const line of data.toString().split('\n').filter(Boolean)) {
-      console.log(`[transcriber] ${line}`);
+      log.info(`[transcriber] ${line}`);
     }
   });
 
   transcriberProcess.stderr?.on('data', (data: Buffer) => {
     for (const line of data.toString().split('\n').filter(Boolean)) {
-      console.error(`[transcriber] ${line}`);
+      log.error(`[transcriber] ${line}`);
     }
   });
 
   transcriberProcess.on('close', (code) => {
-    console.log(`[transcriber] process exited with code ${code}`);
+    log.info(`transcriber process exited with code ${code}`);
     transcriberProcess = null;
   });
 } else {
-  console.log(
-    '[sidecar] Transcriber venv not found at ~/.flux/transcriber-venv — voice transcription unavailable. Run transcriber/setup.sh to set up.'
+  log.warn(
+    'Transcriber venv not found at ~/.flux/transcriber-venv — voice transcription unavailable. Run transcriber/setup.sh to set up.'
   );
 }
 

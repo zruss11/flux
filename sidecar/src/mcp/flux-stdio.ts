@@ -8,13 +8,16 @@ import { baseTools } from '../tools/index.js';
 import { loadInstalledSkills } from '../skills/loadInstalledSkills.js';
 import { McpManager } from './manager.js';
 import type { ToolDefinition } from '../tools/types.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('mcp');
 
 const BRIDGE_URL = process.env.FLUX_MCP_BRIDGE_URL || 'ws://127.0.0.1:7848';
 const conversationId = process.env.FLUX_CONVERSATION_ID || '';
 const runId = process.env.FLUX_RUN_ID || '';
 
 if (!conversationId) {
-  console.error('[flux-mcp] Missing FLUX_CONVERSATION_ID env var');
+  log.error('Missing FLUX_CONVERSATION_ID env var');
   process.exit(1);
 }
 

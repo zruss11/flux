@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftUI
 
 enum SkillsLoader {
@@ -32,7 +33,7 @@ enum SkillsLoader {
                 let skillsDir = cur.appendingPathComponent(".agents/skills")
                 var isDir: ObjCBool = false
                 if fm.fileExists(atPath: skillsDir.path, isDirectory: &isDir), isDir.boolValue {
-                    print("[SkillsLoader] Discovered project skills dir at \(skillsDir.path)")
+                    Log.skills.debug("Discovered project skills dir at \(skillsDir.path)")
                     return skillsDir
                 }
 
@@ -72,7 +73,7 @@ enum SkillsLoader {
 
         for skillsDir in searchDirs {
             let dirExists = fm.fileExists(atPath: skillsDir.path)
-            print("[SkillsLoader] Checking \(skillsDir.path) — exists: \(dirExists)")
+            Log.skills.debug("Checking \(skillsDir.path) — exists: \(dirExists)")
             guard dirExists else { continue }
 
             guard let entries = try? fm.contentsOfDirectory(
@@ -80,11 +81,11 @@ enum SkillsLoader {
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]
             ) else {
-                print("[SkillsLoader] Failed to list contents of \(skillsDir.path)")
+                Log.skills.warning("Failed to list contents of \(skillsDir.path)")
                 continue
             }
 
-            print("[SkillsLoader] Found \(entries.count) entries in \(skillsDir.lastPathComponent)")
+            Log.skills.debug("Found \(entries.count) entries in \(skillsDir.lastPathComponent)")
 
             for entry in entries {
                 let dirName = entry.lastPathComponent
@@ -121,7 +122,7 @@ enum SkillsLoader {
             }
         }
 
-        print("[SkillsLoader] Loaded \(skills.count) skills total")
+        Log.skills.info("Loaded \(skills.count) skills total")
         return skills.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 

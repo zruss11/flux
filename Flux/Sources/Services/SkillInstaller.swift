@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum SkillInstaller {
     enum InstallError: Error {
@@ -33,7 +34,7 @@ enum SkillInstaller {
         for dep in entry.dependencies {
             let allPresent = dep.bins.allSatisfy { isBinaryOnPath($0) }
             if allPresent {
-                print("[SkillInstaller] Dependencies for '\(entry.displayName)' already satisfied")
+                Log.skills.debug("Dependencies for '\(entry.displayName)' already satisfied")
                 continue
             }
 
@@ -65,7 +66,7 @@ enum SkillInstaller {
             throw InstallError.fileWriteFailed(error)
         }
 
-        print("[SkillInstaller] Installed skill '\(entry.displayName)' at \(skillDir.path)")
+        Log.skills.info("Installed skill '\(entry.displayName)' at \(skillDir.path)")
     }
 
     // MARK: - Brew Dependency Installation
@@ -81,7 +82,7 @@ enum SkillInstaller {
         if let tap = dep.tap {
             let tapResult = await runProcess("/usr/bin/env", arguments: ["brew", "tap", tap])
             if tapResult.status != 0 {
-                print("[SkillInstaller] Warning: brew tap '\(tap)' exited \(tapResult.status): \(tapResult.output)")
+                Log.skills.warning("brew tap '\(tap)' exited \(tapResult.status): \(tapResult.output)")
             }
         }
 
@@ -89,7 +90,7 @@ enum SkillInstaller {
         if result.status != 0 {
             throw InstallError.dependencyInstallFailed(dep.formula, result.status)
         }
-        print("[SkillInstaller] Installed brew dependency '\(dep.formula)'")
+        Log.skills.info("Installed brew dependency '\(dep.formula)'")
     }
 
     /// Returns true when a binary is available on PATH.
@@ -164,7 +165,7 @@ enum SkillInstaller {
                 do {
                     try fm.removeItem(at: skillDir)
                     removed = true
-                    print("[SkillInstaller] Uninstalled skill '\(directoryName)' from \(skillDir.path)")
+                    Log.skills.info("Uninstalled skill '\(directoryName)' from \(skillDir.path)")
                 } catch {
                     throw UninstallError.deletionFailed(error)
                 }
@@ -223,7 +224,7 @@ enum SkillInstaller {
             throw CustomInstallError.fileWriteFailed(error)
         }
 
-        print("[SkillInstaller] Installed custom skill '\(displayName)' at \(skillDir.path)")
+        Log.skills.info("Installed custom skill '\(displayName)' at \(skillDir.path)")
     }
 
     /// Resolves the preferred install directory for skills by preferring
