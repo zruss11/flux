@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
@@ -8,6 +9,20 @@ function getRepoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url)); // sidecar/src/skills
   const sidecarRoot = path.resolve(here, '..', '..'); // sidecar/
   return path.resolve(sidecarRoot, '..'); // repo root
+}
+
+async function findAncestorWithAgentsSkills(startDir: string): Promise<string | null> {
+  let cur = path.resolve(startDir);
+  // Prevent infinite loops on weird paths.
+  for (let i = 0; i < 50; i++) {
+    const skillsDir = path.join(cur, '.agents', 'skills');
+    if (await fileExists(skillsDir)) return skillsDir;
+
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return null;
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -63,10 +78,7 @@ function parseSkillMcpDependencies(agentYaml: OpenAiAgentYaml): SkillMcpDependen
   return mcp;
 }
 
-export async function loadInstalledSkills(): Promise<InstalledSkill[]> {
-  const repoRoot = getRepoRoot();
-  const skillsRoot = path.join(repoRoot, '.agents', 'skills');
-
+async function loadSkillsFromRoot(skillsRoot: string): Promise<InstalledSkill[]> {
   if (!(await fileExists(skillsRoot))) return [];
 
   const dirents = await fs.readdir(skillsRoot, { withFileTypes: true });
@@ -74,12 +86,13 @@ export async function loadInstalledSkills(): Promise<InstalledSkill[]> {
 
   for (const ent of dirents) {
     if (!ent.isDirectory()) continue;
-    const skillDir = path.join(skillsRoot, ent.name);
+    const id = ent.name;
+    const skillDir = path.join(skillsRoot, id);
 
     const skillMdPath = path.join(skillDir, 'SKILL.md');
     const openAiAgentYamlPath = path.join(skillDir, 'agents', 'openai.yaml');
 
-    let name = ent.name;
+    let name = id;
     let description: string | undefined;
     let defaultPrompt: string | undefined;
     let mcpDependencies: SkillMcpDependency[] = [];
@@ -103,6 +116,7 @@ export async function loadInstalledSkills(): Promise<InstalledSkill[]> {
     }
 
     skills.push({
+      id,
       name,
       description,
       defaultPrompt,
@@ -113,3 +127,38 @@ export async function loadInstalledSkills(): Promise<InstalledSkill[]> {
   return skills;
 }
 
+export async function loadInstalledSkills(): Promise<InstalledSkill[]> {
+  const repoRoot = getRepoRoot();
+
+  // Project skills: prefer `.agents/skills` discovered near CWD (active project),
+  // with a fallback to repo-local `.agents/skills` for dev.
+  const cwdProjectSkills = await findAncestorWithAgentsSkills(process.cwd());
+  const repoSkills = path.join(repoRoot, '.agents', 'skills');
+
+  // Global skills: users can install skills into ~/.claude/skills (and some setups use ~/.agents/skills).
+  const home = os.homedir();
+  const globalClaudeSkills = path.join(home, '.claude', 'skills');
+  const globalAgentsSkills = path.join(home, '.agents', 'skills');
+
+  const roots = [
+    cwdProjectSkills,
+    repoSkills,
+    globalClaudeSkills,
+    globalAgentsSkills,
+  ].filter((p): p is string => Boolean(p))
+    .filter((p, i, arr) => arr.indexOf(p) === i);
+
+  const seenIds = new Set<string>();
+  const out: InstalledSkill[] = [];
+
+  for (const root of roots) {
+    const loaded = await loadSkillsFromRoot(root);
+    for (const s of loaded) {
+      if (seenIds.has(s.id)) continue;
+      seenIds.add(s.id);
+      out.push(s);
+    }
+  }
+
+  return out;
+}

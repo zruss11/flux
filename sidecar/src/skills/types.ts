@@ -6,9 +6,10 @@ export interface SkillMcpDependency {
 }
 
 export interface InstalledSkill {
+  // Directory name (skill "id") used for stable referencing across sources.
+  id: string;
   name: string;
   description?: string;
   defaultPrompt?: string;
   mcpDependencies: SkillMcpDependency[];
 }
-

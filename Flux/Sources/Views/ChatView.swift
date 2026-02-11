@@ -8,11 +8,23 @@ struct ChatContentHeightKey: PreferenceKey {
     }
 }
 
+// Preference key to tell IslandView whether the skills panel is visible
+struct SkillsVisibleKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: Bool = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
 struct ChatView: View {
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
     @State private var inputText = ""
     @State private var voiceInput = VoiceInput()
+    @State private var showSkills = false
+    @State private var dollarTriggerActive = false
+    @State private var selectedSkillDirNames: Set<String> = []
+    @State private var skillSearchQuery = ""
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
 
@@ -40,12 +52,6 @@ struct ChatView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear
-                                .preference(key: ChatContentHeightKey.self, value: geo.size.height)
-                        }
-                    )
                 }
                 .onChange(of: conversationStore.activeConversation?.messages.count) { _, _ in
                     if let conversation = conversationStore.activeConversation,
@@ -84,13 +90,22 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
 
-                TextField("Message Flux...", text: $inputText)
+                TextField("Message Flux...  $ for skills", text: $inputText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundStyle(.white)
                     .focused($isInputFocused)
                     .onSubmit {
                         sendMessage()
+                    }
+                    .onKeyPress(.escape) {
+                        if showSkills {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                showSkills = false
+                            }
+                            return .handled
+                        }
+                        return .ignored
                     }
 
                 Button {
@@ -114,7 +129,63 @@ struct ChatView: View {
                     )
             )
             .padding(.horizontal, 10)
-            .padding(.bottom, 12)
+
+            // Skills list appears below the input, expanding the window downward
+            if showSkills {
+                SkillsView(isPresented: $showSkills, searchQuery: $skillSearchQuery, showsPill: false) { skill in
+                    insertSkillToken(skill.directoryName)
+                    isInputFocused = true
+                }
+                .transition(
+                    .asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .top)),
+                        removal: .opacity
+                    )
+                )
+            }
+
+            SkillsPillButton(isPresented: $showSkills)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .preference(key: ChatContentHeightKey.self, value: geo.size.height)
+            }
+        )
+        .preference(key: SkillsVisibleKey.self, value: showSkills)
+        .onChange(of: inputText) { oldValue, newValue in
+            // Detect a freshly typed `$` to open skills (or re-activate search if already open)
+            if newValue.count - oldValue.count == 1,
+               newValue.filter({ $0 == "$" }).count > oldValue.filter({ $0 == "$" }).count {
+                dollarTriggerActive = true
+                if !showSkills {
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+                        showSkills = true
+                    }
+                }
+                skillSearchQuery = ""
+            }
+
+            // Update the search query with whatever is typed after the last `$`
+            if showSkills, dollarTriggerActive, let idx = newValue.lastIndex(of: "$") {
+                let afterDollar = String(newValue[newValue.index(after: idx)...])
+                skillSearchQuery = afterDollar.trimmingCharacters(in: .whitespaces)
+            }
+
+            // Dismiss skills if the trigger `$` was deleted
+            if showSkills, dollarTriggerActive, !newValue.contains("$") {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    showSkills = false
+                }
+            }
+        }
+        .onChange(of: showSkills) { _, presented in
+            if !presented {
+                dollarTriggerActive = false
+                skillSearchQuery = ""
+            }
         }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -142,6 +213,15 @@ struct ChatView: View {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
+        if showSkills {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                showSkills = false
+            }
+            dollarTriggerActive = false
+        }
+
+        let outboundText = transformSelectedSkillTokensForOutbound(text)
+
         var conversationId: UUID
         if let activeId = conversationStore.activeConversationId {
             conversationId = activeId
@@ -150,10 +230,57 @@ struct ChatView: View {
             conversationId = conversation.id
         }
 
+        // Display what the user typed (with `$skill`), but send `/skill` to the sidecar.
         conversationStore.addMessage(to: conversationId, role: .user, content: text)
-        agentBridge.sendChatMessage(conversationId: conversationId.uuidString, content: text)
+        agentBridge.sendChatMessage(conversationId: conversationId.uuidString, content: outboundText)
 
         inputText = ""
+        selectedSkillDirNames.removeAll()
+    }
+
+    private func insertSkillToken(_ directoryName: String) {
+        let token = "$\(directoryName) "
+
+        if dollarTriggerActive, let idx = inputText.lastIndex(of: "$") {
+            // Remove the `$` plus any query text typed after it so the full
+            // token replaces the entire `$query` fragment.
+            let afterDollar = inputText.index(after: idx)
+            let searchEnd = inputText[afterDollar...].firstIndex(where: { $0.isWhitespace }) ?? inputText.endIndex
+            let remainder = String(inputText[searchEnd...])
+            inputText = String(inputText[..<idx]) + token + remainder.trimmingCharacters(in: .init(charactersIn: " "))
+            if !remainder.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Ensure a space between the token and any trailing text.
+                if !inputText.hasSuffix(" ") {
+                    inputText += " "
+                }
+            }
+        } else {
+            if let last = inputText.last, !last.isWhitespace {
+                inputText.append(" ")
+            }
+            inputText.append(contentsOf: token)
+        }
+
+        selectedSkillDirNames.insert(directoryName)
+        dollarTriggerActive = false
+        skillSearchQuery = ""
+        // Intentionally keep `showSkills` open so users can click multiple skills.
+    }
+
+    private func transformSelectedSkillTokensForOutbound(_ text: String) -> String {
+        guard !selectedSkillDirNames.isEmpty else { return text }
+
+        var out = text
+        // Replace longer names first to avoid partial replacement collisions.
+        for dir in selectedSkillDirNames.sorted(by: { $0.count > $1.count }) {
+            let escaped = NSRegularExpression.escapedPattern(for: dir)
+            let pattern = "(^|\\s)\\$" + escaped + "(?=\\s|$)"
+            guard let re = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(out.startIndex..<out.endIndex, in: out)
+            let safeDir = NSRegularExpression.escapedTemplate(for: dir)
+            out = re.stringByReplacingMatches(in: out, range: range, withTemplate: "$1/\(safeDir)")
+        }
+        return out
     }
 }
 

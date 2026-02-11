@@ -39,7 +39,7 @@ final class IslandWindowManager: ObservableObject {
     private var targetScreen: NSScreen?
     private var notchGeometry: NotchGeometry?
 
-    private let windowHeight: CGFloat = 750
+    private let windowHeight: CGFloat = 850
 
     private var cancellables = Set<AnyCancellable>()
     private var hoverTimer: DispatchWorkItem?
