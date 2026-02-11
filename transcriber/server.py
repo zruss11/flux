@@ -27,7 +27,7 @@ try:
         "automatic-speech-recognition",
         model=MODEL_NAME,
         device="cpu",
-        model_kwargs={"local_files_only": True},
+        local_files_only=True,
     )
 except Exception as exc:
     print(
