@@ -38,7 +38,7 @@ final class AutomationService {
     private(set) var isSchedulerRunning = false
 
     private var schedulerTask: Task<Void, Never>?
-    private var dispatchHandler: ((AutomationDispatchRequest) -> Void)?
+    private var dispatchHandler: ((AutomationDispatchRequest) -> Bool)?
     private let schedulerPollIntervalSeconds: UInt64 = 30
 
     private struct StoreEnvelope: Codable {
@@ -64,7 +64,7 @@ final class AutomationService {
         automations.filter { $0.status == .active }.count
     }
 
-    func configureRunner(_ handler: @escaping (AutomationDispatchRequest) -> Void) {
+    func configureRunner(_ handler: @escaping (AutomationDispatchRequest) -> Bool) {
         dispatchHandler = handler
         startSchedulerIfNeeded()
     }
@@ -259,8 +259,6 @@ final class AutomationService {
         let schedule = try CronSchedule(expression: automation.scheduleExpression)
         let nextRun = schedule.nextRun(after: now, in: timezone)
 
-        automation.lastRunAt = now
-        automation.nextRunAt = nextRun
         automation.updatedAt = now
 
         let dispatchMessage = Self.dispatchContent(
@@ -270,16 +268,25 @@ final class AutomationService {
             timezone: timezone
         )
 
-        if dispatchHandler != nil {
-            automation.lastRunSummary = reason == "manual"
-                ? "Ran manually."
-                : "Scheduled run dispatched."
-            dispatchHandler?(AutomationDispatchRequest(
+        let dispatched: Bool
+        if let handler = dispatchHandler {
+            dispatched = handler(AutomationDispatchRequest(
                 automationId: automation.id,
                 conversationId: automation.conversationId,
                 content: dispatchMessage
             ))
         } else {
+            dispatched = false
+        }
+
+        if dispatched {
+            automation.lastRunAt = now
+            automation.nextRunAt = nextRun
+            automation.lastRunSummary = reason == "manual"
+                ? "Ran manually."
+                : "Scheduled run dispatched."
+        } else {
+            // Do not advance the schedule — the scheduler will retry on the next poll.
             automation.lastRunSummary = "Skipped run because automation runner is unavailable."
         }
 

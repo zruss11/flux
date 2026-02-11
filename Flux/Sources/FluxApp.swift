@@ -66,8 +66,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func launchMainApp() {
         setupBridgeCallbacks()
         automationService.configureRunner { [weak self] request in
-            guard let self else { return }
-            guard let conversationId = UUID(uuidString: request.conversationId) else { return }
+            guard let self else { return false }
+            guard self.agentBridge.isConnected else { return false }
+            guard let conversationId = UUID(uuidString: request.conversationId) else { return false }
 
             let automationName = self.automationService.automations
                 .first(where: { $0.id == request.automationId })?
@@ -81,6 +82,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 conversationId: conversationId.uuidString,
                 content: request.content
             )
+            return true
         }
         agentBridge.connect()
 
