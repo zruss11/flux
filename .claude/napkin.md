@@ -16,10 +16,14 @@
 | 2026-02-11 | me | Put `ConversationStore.overrideHistoryDirectory` behind `#if DEBUG`, which broke `swift test -c release` compilation. | Keep test hooks needed by test targets compiled in release too, or gate tests and hooks consistently. |
 | 2026-02-11 | me | Left GitHub macOS workflows on `macos-latest` while code used macOS 26 Speech APIs unavailable on the macOS 15 image. | Pin workflows to `macos-26` when builds depend on macOS 26 SDK/runtime features. |
 | 2026-02-11 | me | Switched to `.macOS(.v26)` in `Package.swift` without bumping tools version, causing manifest parse failures. | Use `// swift-tools-version: 6.2` (or newer) when targeting `.macOS(.v26)` in SwiftPM manifests. |
+| 2026-02-11 | me | Announced that I was using/reading the napkin skill in user-facing status text. | Apply napkin silently; do not mention reading it in updates. |
+| 2026-02-11 | me | Added block-based NotificationCenter observer on a `@MainActor` app delegate and hit Swift 6 Sendable/data-race compiler errors. | Prefer selector-based observers (or main-actor isolated async hops) when notification payloads would otherwise cross actor boundaries unsafely. |
 
 ## User Preferences
 - (accumulate here as you learn them)
 - For screen understanding, prefer global visible-window context instead of only frontmost-window AX tree when the task involves multiple apps/windows.
+- In UI copy, label scheduled work as "Automations" and avoid "cron/crons" wording.
+- Automation runs should live in dedicated chat threads, with thread targeting implicit in the UI.
 
 ## Patterns That Work
 - For new agent tools, add the tool definition in `sidecar/src/tools/index.ts` and implement the matching `toolName` case in `Flux/Sources/FluxApp.swift`'s `handleToolRequest` switch.
@@ -29,6 +33,7 @@
 - For `AVAudioNode.installTap(...)` used from a `@MainActor` type, build the tap block in a `nonisolated` helper. Otherwise the closure inherits `@MainActor` isolation and can SIGTRAP on macOS 26 when CoreAudio invokes it off-main.
 - Telegram DM pairing state is shared via `~/.flux/telegram/pairing.json` so both Swift and the sidecar can read/write approvals.
 - For `capture_screen` results in the Anthropic conversation loop, send image payloads as tool-result image blocks (`source: {type: 'base64', media_type, data}`) rather than raw base64 text to avoid token-limit failures.
+- For recurring agent workflows, implement persistence/scheduling in a dedicated Swift service and expose CRUD/run controls via sidecar tool definitions + matching `FluxApp` tool handlers.
 - If using `EKEventStore.requestFullAccessToReminders()`, include `NSRemindersFullAccessUsageDescription` in `Flux/Info.plist` or macOS will terminate the app at runtime.
 - For closed-island background activity indicators, emit explicit sidecar run lifecycle events (e.g. `run_status` true/false) and drive Swift UI from `AgentBridge.isAgentWorking` instead of inferring from hover/tool-call UI state.
 - Keep closed-island activity robust with multiple signals: sidecar `run_status`, `stream_chunk`/`tool_use_*` tracking in `AgentBridge`, plus a UI fallback for any pending tool calls in `ConversationStore`.

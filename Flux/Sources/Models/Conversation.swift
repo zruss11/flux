@@ -100,6 +100,43 @@ final class ConversationStore {
         return conversation
     }
 
+    @discardableResult
+    func ensureConversationExists(id: UUID, title: String, activate: Bool = false) -> Conversation {
+        if let index = conversations.firstIndex(where: { $0.id == id }) {
+            let conversation = conversations[index]
+            let changed = ensureSummaryExists(for: conversation, title: title)
+            if activate {
+                activeConversationId = id
+            }
+            if changed {
+                saveIndex()
+            }
+            return conversation
+        }
+
+        if let loaded = loadConversation(id: id) {
+            conversations.append(loaded)
+            let changed = ensureSummaryExists(for: loaded, title: title)
+            if activate {
+                activeConversationId = id
+            }
+            if changed {
+                saveIndex()
+            }
+            return loaded
+        }
+
+        let conversation = Conversation(id: id)
+        conversations.append(conversation)
+        _ = ensureSummaryExists(for: conversation, title: title)
+        saveConversation(conversation)
+        saveIndex()
+        if activate {
+            activeConversationId = id
+        }
+        return conversation
+    }
+
     func addMessage(to conversationId: UUID, role: Message.Role, content: String) {
         guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
         let message = Message(role: role, content: content)
@@ -297,6 +334,33 @@ final class ConversationStore {
     private func ensureDirectories() {
         let fm = FileManager.default
         try? fm.createDirectory(at: Self.conversationsDirectory, withIntermediateDirectories: true)
+    }
+
+    @discardableResult
+    private func ensureSummaryExists(for conversation: Conversation, title: String) -> Bool {
+        if let index = summaries.firstIndex(where: { $0.id == conversation.id }) {
+            if summaries[index].title == "New Chat",
+               summaries[index].messageCount == 0,
+               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                summaries[index].title = title
+                return true
+            }
+            return false
+        }
+
+        let fallbackTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle = fallbackTitle.isEmpty ? "New Chat" : fallbackTitle
+        let lastMessageAt = conversation.messages.last?.timestamp ?? conversation.createdAt
+        let summary = ConversationSummary(
+            id: conversation.id,
+            title: resolvedTitle,
+            createdAt: conversation.createdAt,
+            lastMessageAt: lastMessageAt,
+            messageCount: conversation.messages.count,
+            folderId: nil
+        )
+        summaries.insert(summary, at: 0)
+        return true
     }
 
     private func saveConversation(_ conversation: Conversation) {
