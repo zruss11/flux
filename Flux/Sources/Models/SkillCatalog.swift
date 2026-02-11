@@ -773,5 +773,100 @@ enum SkillCatalog {
             category: .productivity,
             requiredPermissions: [.automation]
         ),
+        RecommendedSkill(
+            directoryName: "sandbox-agent",
+            displayName: "Sandbox Agent",
+            description: "Run coding agents (Claude Code, Codex, OpenCode, Amp) in sandboxed sessions",
+            skillMdContent: """
+            ---
+            name: Sandbox Agent
+            description: Run coding agents in sandboxed sessions via the sandbox-agent CLI. Supports Claude Code, Codex, OpenCode, Amp, and Pi.
+            ---
+
+            # Sandbox Agent
+
+            Use `sandbox-agent` to run coding agents in isolated sandboxed sessions. Control them over HTTP — create sessions, send prompts, and stream events.
+
+            ## Setup
+
+            Install the CLI:
+
+            ```bash
+            npm install -g @sandbox-agent/cli@0.2.x
+            ```
+
+            Start the server locally (no auth for local dev):
+
+            ```bash
+            sandbox-agent server --no-token --host 127.0.0.1 --port 2468
+            ```
+
+            Optionally pre-install agents (they auto-install on first use if skipped):
+
+            ```bash
+            sandbox-agent install-agent claude
+            sandbox-agent install-agent codex
+            sandbox-agent install-agent opencode
+            sandbox-agent install-agent amp
+            ```
+
+            ## Extract API Credentials
+
+            Pull API keys from your locally configured agents (Claude Code, Codex, etc.):
+
+            ```bash
+            sandbox-agent credentials extract-env --export
+            ```
+
+            This prints environment variables for OpenAI, Anthropic, and other provider keys.
+
+            ## Session Management
+
+            ### Create a session
+
+            ```bash
+            sandbox-agent api sessions create my-session \\
+              --agent claude \\
+              --endpoint http://127.0.0.1:2468
+            ```
+
+            Supported agents: `claude`, `codex`, `opencode`, `amp`, `pi`.
+
+            ### Send a message
+
+            ```bash
+            sandbox-agent api sessions send-message my-session \\
+              --message "Summarize this repository" \\
+              --endpoint http://127.0.0.1:2468
+            ```
+
+            ### Stream a message (real-time output)
+
+            ```bash
+            sandbox-agent api sessions send-message-stream my-session \\
+              --message "Refactor the auth module" \\
+              --endpoint http://127.0.0.1:2468
+            ```
+
+            ### List available agents
+
+            ```bash
+            sandbox-agent api agents list --endpoint http://127.0.0.1:2468
+            ```
+
+            ## Inspector
+
+            Debug sessions via the built-in web UI at `http://localhost:2468/ui/`.
+
+            ## Notes
+
+            - The server is a Rust binary — fast startup, low memory.
+            - Each session runs a coding agent in an isolated subprocess.
+            - Events stream in a universal JSON schema.
+            - Use `--agent codex` for OpenAI Codex, `--agent claude` for Claude Code, etc.
+            - For production, deploy to E2B, Daytona, or Vercel Sandboxes with `--token` auth.
+            """,
+            category: .devTools
+        ),
     ]
 }
