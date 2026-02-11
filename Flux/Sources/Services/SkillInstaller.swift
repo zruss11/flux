@@ -5,6 +5,8 @@ enum SkillInstaller {
         case catalogEntryNotFound
         case directoryCreationFailed(Error)
         case fileWriteFailed(Error)
+        case dependencyInstallFailed(String, Int32)
+        case brewNotFound
     }
 
     enum UninstallError: Error {
@@ -45,6 +47,83 @@ enum SkillInstaller {
         }
 
         print("[SkillInstaller] Installed skill '\(entry.displayName)' at \(skillDir.path)")
+
+        // Install CLI dependencies (e.g. brew formulas) if the required binaries are missing.
+        for dep in entry.dependencies {
+            let allPresent = dep.bins.allSatisfy { isBinaryOnPath($0) }
+            if allPresent {
+                print("[SkillInstaller] Dependencies for '\(entry.displayName)' already satisfied")
+                continue
+            }
+
+            switch dep.kind {
+            case .brew:
+                try await installBrewDependency(dep)
+            }
+        }
+    }
+
+    // MARK: - Brew Dependency Installation
+
+    private static func installBrewDependency(_ dep: SkillDependency) async throws {
+        guard isBinaryOnPath("brew") else {
+            throw InstallError.brewNotFound
+        }
+
+        // If the formula includes a tap (e.g. "steipete/tap/imsg"), brew handles tapping automatically.
+        // But if an explicit tap is set, tap first for clarity.
+        if let tap = dep.tap {
+            let tapResult = await runProcess("/usr/bin/env", arguments: ["brew", "tap", tap])
+            if tapResult.status != 0 {
+                print("[SkillInstaller] Warning: brew tap '\(tap)' exited \(tapResult.status): \(tapResult.output)")
+            }
+        }
+
+        let result = await runProcess("/usr/bin/env", arguments: ["brew", "install", dep.formula])
+        if result.status != 0 {
+            throw InstallError.dependencyInstallFailed(dep.formula, result.status)
+        }
+        print("[SkillInstaller] Installed brew dependency '\(dep.formula)'")
+    }
+
+    private static func isBinaryOnPath(_ name: String) -> Bool {
+        let result = Process()
+        result.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        result.arguments = [name]
+        result.standardOutput = FileHandle.nullDevice
+        result.standardError = FileHandle.nullDevice
+        do {
+            try result.run()
+            result.waitUntilExit()
+            return result.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
+    private static func runProcess(_ path: String, arguments: [String]) async -> (status: Int32, output: String) {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = arguments
+
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    continuation.resume(returning: (process.terminationStatus, output))
+                } catch {
+                    continuation.resume(returning: (-1, error.localizedDescription))
+                }
+            }
+        }
     }
 
     static func uninstall(directoryName: String) async throws {

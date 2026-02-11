@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 @preconcurrency import ApplicationServices
 import AVFoundation
+import EventKit
 
 enum SkillPermissionChecker {
 
@@ -17,6 +18,9 @@ enum SkillPermissionChecker {
             // Per-app Automation status is not queryable; conservatively return false
             // so the user is always offered the chance to grant it.
             return false
+        case .reminders:
+            let status = EKEventStore.authorizationStatus(for: .reminder)
+            return status == .fullAccess || status == .authorized
         }
     }
 

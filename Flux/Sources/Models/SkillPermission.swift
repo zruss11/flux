@@ -6,6 +6,7 @@ enum SkillPermission: String, Hashable, CaseIterable {
     case accessibility
     case screenRecording
     case microphone
+    case reminders
 
     var displayName: String {
         switch self {
@@ -13,6 +14,7 @@ enum SkillPermission: String, Hashable, CaseIterable {
         case .accessibility: return "Accessibility"
         case .screenRecording: return "Screen Recording"
         case .microphone: return "Microphone"
+        case .reminders: return "Reminders"
         }
     }
 
@@ -22,6 +24,7 @@ enum SkillPermission: String, Hashable, CaseIterable {
         case .accessibility: return "Read window contents and UI elements"
         case .screenRecording: return "Capture screenshots for context"
         case .microphone: return "Voice input for hands-free commands"
+        case .reminders: return "Access Apple Reminders data"
         }
     }
 
@@ -31,6 +34,7 @@ enum SkillPermission: String, Hashable, CaseIterable {
         case .accessibility: return "accessibility"
         case .screenRecording: return "rectangle.inset.filled.and.person.filled"
         case .microphone: return "mic.fill"
+        case .reminders: return "checklist"
         }
     }
 
@@ -54,6 +58,11 @@ enum SkillPermission: String, Hashable, CaseIterable {
         case .microphone:
             return [
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy",
+            ]
+        case .reminders:
+            return [
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders",
                 "x-apple.systempreferences:com.apple.preference.security?Privacy",
             ]
         }

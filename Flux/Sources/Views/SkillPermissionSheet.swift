@@ -1,6 +1,7 @@
 import SwiftUI
 @preconcurrency import ApplicationServices
 import AVFoundation
+import EventKit
 
 struct SkillPermissionSheet: View {
     let skill: Skill
@@ -147,6 +148,11 @@ struct SkillPermissionSheet: View {
 
         case .microphone:
             AVCaptureDevice.requestAccess(for: .audio) { _ in }
+
+        case .reminders:
+            let store = EKEventStore()
+            store.requestFullAccessToReminders { _, _ in }
+            permission.openSystemSettings()
         }
     }
 
