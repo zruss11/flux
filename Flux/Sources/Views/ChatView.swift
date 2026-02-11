@@ -28,6 +28,7 @@ struct ChatView: View {
     @State private var skillSearchQuery = ""
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
+    @State private var worktreeEnabled = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -176,6 +177,38 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
 
+                Button {
+                    if conversationStore.activeWorktreeBranch != nil {
+                        conversationStore.activeWorktreeBranch = nil
+                        worktreeEnabled = false
+                    } else {
+                        worktreeEnabled.toggle()
+                    }
+                } label: {
+                    let isActive = worktreeEnabled || conversationStore.activeWorktreeBranch != nil
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(isActive ? 0.9 : 0.6))
+                        Text(conversationStore.activeWorktreeBranch ?? "Worktree")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(isActive ? 0.9 : 0.6))
+                            .lineLimit(1)
+                    }
+                    .fixedSize()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(isActive ? 0.15 : 0.06))
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(Color.white.opacity(isActive ? 0.2 : 0.1), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+
                 SkillsPillButton(isPresented: $showSkills)
             }
             .padding(.top, 8)
@@ -233,6 +266,8 @@ struct ChatView: View {
         .onChange(of: conversationStore.activeConversationId) { _, _ in
             inputText = ""
             selectedSkillDirNames.removeAll()
+            worktreeEnabled = false
+            conversationStore.activeWorktreeBranch = nil
             if showSkills {
                 showSkills = false
                 dollarTriggerActive = false
@@ -274,7 +309,12 @@ struct ChatView: View {
             dollarTriggerActive = false
         }
 
-        let outboundText = transformSelectedSkillTokensForOutbound(text)
+        var outboundText = transformSelectedSkillTokensForOutbound(text)
+
+        if worktreeEnabled && conversationStore.activeWorktreeBranch == nil {
+            let worktreePrefix = "Before writing code, create a git worktree for this task. Choose a short, descriptive branch name based on my request, then run `git worktree add ../worktree-<branch-name> -b <branch-name>` and cd into the new worktree before doing any work. After creating the worktree, call the `mcp__flux__set_worktree` tool with the branch name so it appears in the UI.\n\n"
+            outboundText = worktreePrefix + outboundText
+        }
 
         var conversationId: UUID
         if let activeId = conversationStore.activeConversationId {

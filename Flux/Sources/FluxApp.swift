@@ -356,6 +356,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let command = input["command"] as? String ?? ""
             return await toolRunner.executeShellScript(command, workingDirectory: conversationStore.workspacePath)
 
+        case "set_worktree":
+            let branchName = input["branchName"] as? String ?? ""
+            conversationStore.activeWorktreeBranch = branchName
+            return "{\"ok\":true,\"branchName\":\"\(branchName)\"}"
+
         case "send_slack_message":
             let text = input["text"] as? String ?? ""
             let channelOverride = (input["channelId"] as? String) ?? (input["channel"] as? String)
