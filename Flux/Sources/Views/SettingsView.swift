@@ -4,11 +4,16 @@ struct SettingsView: View {
     @AppStorage("anthropicApiKey") private var apiKey = ""
     @AppStorage("discordChannelId") private var discordChannelId = ""
     @AppStorage("slackChannelId") private var slackChannelId = ""
+    @AppStorage("telegramChatId") private var telegramChatId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
+    @State private var telegramBotToken = ""
     @State private var secretsLoaded = false
+    @State private var telegramPairingCode = ""
+    @State private var telegramPending: [TelegramPairingRequest] = []
+    @State private var pairingError: String?
 
     var body: some View {
         Form {
@@ -50,6 +55,59 @@ struct SettingsView: View {
                 TextField("Slack Channel ID", text: $slackChannelId)
                     .textFieldStyle(.roundedBorder)
                     .help(slackBotHelp)
+
+                SecureField("Telegram Bot Token", text: $telegramBotToken)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: telegramBotToken) {
+                        persistTelegramBotToken()
+                    }
+
+                TextField("Telegram Chat ID", text: $telegramChatId)
+                    .textFieldStyle(.roundedBorder)
+                    .help(telegramBotHelp)
+                    .onChange(of: telegramChatId) {
+                        notifyTelegramConfigChanged()
+                    }
+            }
+
+            Section("Telegram Pairing") {
+                if telegramPending.isEmpty {
+                    Text("No pending pairing requests.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(telegramPending) { request in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(request.username.map { "@\($0)" } ?? "Chat \(request.chatId)")
+                                    .font(.subheadline)
+                                Text("Chat ID: \(request.chatId)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Remove") {
+                                TelegramPairingStore.removePending(chatId: request.chatId)
+                                loadPendingPairings()
+                            }
+                        }
+                    }
+                }
+
+                HStack {
+                    TextField("Pairing code", text: $telegramPairingCode)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Approve") {
+                        approveTelegramPairing()
+                    }
+                    .disabled(telegramPairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if let pairingError {
+                    Text(pairingError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
         }
         .formStyle(.grouped)
@@ -57,6 +115,7 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .onAppear {
             loadSecretsIfNeeded()
+            loadPendingPairings()
         }
     }
 
@@ -84,12 +143,26 @@ struct SettingsView: View {
         ].joined(separator: "\n")
     }
 
+    private var telegramBotHelp: String {
+        [
+            "Telegram bot setup:",
+            "1) Create a bot with @BotFather and copy the token.",
+            "2) Paste the token into Flux.",
+            "3) Send your bot a DM to get a pairing code.",
+            "4) Paste the pairing code in Flux to approve.",
+            "5) For groups, mention @YourBotName to trigger responses.",
+            "",
+            "Full guide: docs/bot-setup.md",
+        ].joined(separator: "\n")
+    }
+
     private func loadSecretsIfNeeded() {
         guard !secretsLoaded else { return }
         secretsLoaded = true
 
         discordBotToken = KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? ""
         slackBotToken = KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? ""
+        telegramBotToken = KeychainService.getString(forKey: SecretKeys.telegramBotToken) ?? ""
     }
 
     private func persistDiscordBotToken() {
@@ -106,5 +179,33 @@ struct SettingsView: View {
         } catch {
             // Best effort; ignore.
         }
+    }
+
+    private func persistTelegramBotToken() {
+        do {
+            try KeychainService.setString(telegramBotToken, forKey: SecretKeys.telegramBotToken)
+        } catch {
+            // Best effort; ignore.
+        }
+        notifyTelegramConfigChanged()
+    }
+
+    private func notifyTelegramConfigChanged() {
+        NotificationCenter.default.post(name: .telegramConfigDidChange, object: nil)
+    }
+
+    private func loadPendingPairings() {
+        telegramPending = TelegramPairingStore.loadPending()
+    }
+
+    private func approveTelegramPairing() {
+        pairingError = nil
+        let code = telegramPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let _ = TelegramPairingStore.approve(code: code) else {
+            pairingError = "Pairing code not found or expired."
+            return
+        }
+        telegramPairingCode = ""
+        loadPendingPairings()
     }
 }

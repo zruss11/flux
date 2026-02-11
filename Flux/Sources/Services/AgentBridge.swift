@@ -19,9 +19,25 @@ final class AgentBridge: @unchecked Sendable {
 
     private let port: Int
     private var lastSentLinearMcpToken: String = ""
+    private var lastSentTelegramBotToken: String?
+    private var lastSentTelegramChatId: String?
+    private var telegramConfigObserver: NSObjectProtocol?
 
     init(port: Int = 7847) {
         self.port = port
+        telegramConfigObserver = NotificationCenter.default.addObserver(
+            forName: .telegramConfigDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.sendTelegramConfigFromStores()
+        }
+    }
+
+    deinit {
+        if let observer = telegramConfigObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     func connect() {
@@ -45,6 +61,7 @@ final class AgentBridge: @unchecked Sendable {
 
         // Send MCP auth config proactively; doesn't depend on receiving a message first.
         sendMcpAuthIfNeeded()
+        sendTelegramConfigFromStores()
 
         receiveMessage()
     }
@@ -63,6 +80,7 @@ final class AgentBridge: @unchecked Sendable {
     func sendChatMessage(conversationId: String, content: String) {
         // Keep sidecar config in sync (user may have edited settings since connect).
         sendMcpAuthIfNeeded()
+        sendTelegramConfigFromStores()
 
         let message: [String: Any] = [
             "type": "chat",
@@ -114,6 +132,27 @@ final class AgentBridge: @unchecked Sendable {
             "type": "mcp_auth",
             "serverId": "linear",
             "token": token
+        ]
+        send(message)
+    }
+
+    private func sendTelegramConfigFromStores() {
+        let token = (KeychainService.getString(forKey: SecretKeys.telegramBotToken) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let chatId = (UserDefaults.standard.string(forKey: "telegramChatId") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        sendTelegramConfig(botToken: token, defaultChatId: chatId)
+    }
+
+    private func sendTelegramConfig(botToken: String, defaultChatId: String) {
+        guard botToken != lastSentTelegramBotToken || defaultChatId != lastSentTelegramChatId else { return }
+        lastSentTelegramBotToken = botToken
+        lastSentTelegramChatId = defaultChatId
+
+        let message: [String: Any] = [
+            "type": "set_telegram_config",
+            "botToken": botToken,
+            "defaultChatId": defaultChatId
         ]
         send(message)
     }

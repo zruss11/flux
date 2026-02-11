@@ -111,6 +111,22 @@ export const baseTools: ToolDefinition[] = [
       required: ['content'],
     },
   },
+  {
+    name: 'send_telegram_message',
+    description:
+      'Send a message to Telegram using the configured Telegram bot (requires Telegram Bot Token + Telegram Chat ID in Flux Settings).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Message text to send' },
+        chatId: {
+          type: 'string',
+          description: 'Optional override chat ID. Defaults to the configured Telegram Chat ID.',
+        },
+      },
+      required: ['text'],
+    },
+  },
 ];
 
 const mcp = new McpManager();

@@ -1,6 +1,6 @@
-# Discord & Slack Bot Setup Guide
+# Discord, Slack & Telegram Bot Setup Guide
 
-Flux can send messages to Discord and Slack channels, letting your AI copilot reach you on the platforms you already use. This guide walks you through creating bot tokens and connecting them to Flux.
+Flux can send messages to Discord, Slack, and Telegram, letting your AI copilot reach you on the platforms you already use. This guide walks you through creating bot tokens and connecting them to Flux.
 
 ---
 
@@ -90,6 +90,50 @@ Ask Flux to send a test message (e.g. "post to Slack saying hello"). The message
 
 ---
 
+## Telegram
+
+### 1. Create a Telegram Bot (BotFather)
+
+1. Open Telegram and chat with **@BotFather**.
+2. Run `/newbot`, then follow the prompts (name + username ending in `bot`).
+3. Copy the bot token.
+
+> Paste this token into **Flux Settings → Telegram Bot Token**.
+
+### 2. Pair Your Account (DM)
+
+1. Open a DM with your bot and send any message.
+2. The bot will reply with a **pairing code**.
+3. Paste the code into **Flux Settings → Telegram Pairing Code** and approve.
+
+> Pairing is required for private DMs so only approved users can chat with Flux.
+
+### 3. Get Your Chat ID
+
+**Option A — From Bot API (recommended):**
+1. Send a DM to your bot (any text).
+2. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` in your browser.
+3. Find the latest update and copy `message.chat.id`.
+
+**Option B — @userinfobot:**
+1. Open Telegram and chat with **@userinfobot**.
+2. Copy your numeric ID from the response.
+
+> Paste the ID into **Flux Settings → Telegram Chat ID** (used for outbound messages).
+
+### 4. Groups (Mention Only)
+
+1. Add the bot to a group.
+2. Mention it (e.g. `@YourBotName`) to trigger a response.
+
+> Flux only responds to **mentions** in groups by default.
+
+### 5. Verify
+
+Ask Flux to send a test message (e.g. "send a message to Telegram saying hello"). The message should appear in the chat.
+
+---
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -100,12 +144,14 @@ Ask Flux to send a test message (e.g. "post to Slack saying hello"). The message
 | **"not_in_channel"** (Slack) | Run `/invite @YourBotName` in the channel (required for private channels). For public channels, add `chat:write.public` if you want to post without inviting. |
 | **"channel_not_found"** (Slack) | Double-check the Channel ID. Use the `C` or `G` prefixed ID, not the channel name. |
 | **Bot shows offline** (Discord) | Expected — Flux uses the REST API to send messages, not a persistent WebSocket gateway. The bot will appear offline but can still post. |
+| **Telegram DMs ignored** | Pairing is required. DM the bot to get a pairing code, then approve it in Flux Settings. |
+| **Telegram groups ignored** | You must **@mention** the bot in group chats. |
 
 ---
 
 ## Where Tokens Are Stored
 
-Bot tokens are saved locally in macOS Keychain (via Flux Settings). Channel IDs are saved in macOS UserDefaults. Tokens are **never** sent anywhere except the respective Discord/Slack API endpoints when sending a message. The Node.js sidecar does not store tokens — they are passed from the Swift app at runtime.
+Bot tokens are saved locally in macOS Keychain (via Flux Settings). Channel/chat IDs are saved in macOS UserDefaults. Tokens are **never** sent anywhere except the respective Discord/Slack/Telegram API endpoints when sending a message. The Node.js sidecar does not store tokens — they are passed from the Swift app at runtime.
 
 ---
 
@@ -115,3 +161,4 @@ Bot tokens are saved locally in macOS Keychain (via Flux Settings). Channel IDs 
 - [Discord Bot Permissions Calculator](https://discordapi.com/permissions.html)
 - [Slack API — Your Apps](https://api.slack.com/apps)
 - [Slack OAuth Scopes Reference](https://api.slack.com/scopes)
+- [Telegram Bot API](https://core.telegram.org/bots/api)

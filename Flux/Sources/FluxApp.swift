@@ -185,6 +185,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let channelIdOverride = input["channelId"] as? String
             return await sendDiscordMessage(content: content, channelIdOverride: channelIdOverride)
 
+        case "send_telegram_message":
+            let text = input["text"] as? String ?? ""
+            let chatIdOverride = input["chatId"] as? String
+            return await sendTelegramMessage(text: text, chatIdOverride: chatIdOverride)
+
         default:
             return "Unknown tool: \(toolName)"
         }
@@ -284,6 +289,58 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return "Discord message sent (id=\(messageId ?? "unknown"))."
         } catch {
             return "Discord send failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func sendTelegramMessage(text: String, chatIdOverride: String?) async -> String {
+        let token = (KeychainService.getString(forKey: SecretKeys.telegramBotToken) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let chatId = (chatIdOverride ?? UserDefaults.standard.string(forKey: "telegramChatId") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !token.isEmpty else {
+            return "Telegram bot token not set. Open Flux Settings and set Telegram Bot Token + Telegram Chat ID."
+        }
+        guard !chatId.isEmpty else {
+            return "Telegram chat ID not set. Open Flux Settings and set Telegram Chat ID."
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Telegram message text is empty."
+        }
+
+        guard let url = URL(string: "https://api.telegram.org/bot\(token)/sendMessage") else {
+            return "Telegram send failed: invalid bot token."
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "chat_id": chatId,
+            "text": text
+        ]
+
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let ok = json?["ok"] as? Bool
+            let result = json?["result"] as? [String: Any]
+            let messageId = result?["message_id"] as? Int
+
+            if status != 200 || ok != true {
+                let rawText = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let raw = rawText.count > 500 ? String(rawText.prefix(500)) + "…" : rawText
+                return "Telegram send failed: HTTP \(status)\(raw.isEmpty ? "" : " - \(raw)")"
+            }
+
+            return "Telegram message sent (id=\(messageId.map(String.init) ?? "unknown"))."
+        } catch {
+            return "Telegram send failed: \(error.localizedDescription)"
         }
     }
 }

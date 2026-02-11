@@ -86,6 +86,7 @@ struct ToolCallRow: View {
         case "run_shell_command": return "Shell command"
         case "send_slack_message": return "Send Slack message"
         case "send_discord_message": return "Send Discord message"
+        case "send_telegram_message": return "Send Telegram message"
         default:
             // Convert snake_case to Title Case, handle MCP-style names (e.g. linear__list_issues)
             return call.toolName
