@@ -28,6 +28,9 @@ class PassThroughHostingView<Content: View>: NSHostingView<Content> {
 final class IslandWindowManager: ObservableObject {
     static let shared = IslandWindowManager()
 
+    /// When true, the island will not collapse on app deactivation (e.g. during mic recording).
+    var suppressDeactivationCollapse = false
+
     private var panel: NSPanel?
     private var hostingView: PassThroughHostingView<IslandView>?
     @Published var isExpanded = false
@@ -233,7 +236,7 @@ final class IslandWindowManager: ObservableObject {
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard let self, self.isExpanded else { return }
+                guard let self, self.isExpanded, !self.suppressDeactivationCollapse else { return }
                 self.collapse()
             }
             .store(in: &cancellables)
