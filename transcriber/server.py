@@ -22,16 +22,14 @@ from transformers.utils import logging as tlogging
 tlogging.disable_progress_bar()
 
 try:
-    # Prevent any runtime downloads; `transcriber/setup.sh` pre-downloads the model.
     pipe = pipeline(
         "automatic-speech-recognition",
         model=MODEL_NAME,
         device="cpu",
-        local_files_only=True,
     )
 except Exception as exc:
     print(
-        "Failed to load ASR model from local cache. Run transcriber/setup.sh to download it.\n"
+        "Failed to load ASR model. Run transcriber/setup.sh to set up the venv and pre-download the model.\n"
         f"Error: {exc}"
     )
     raise
