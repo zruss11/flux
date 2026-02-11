@@ -315,14 +315,19 @@ async function runConversationLoop(
     const toolUseBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
 
-    const stream = client.messages.stream({
+    const stream = client.beta.messages.stream({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 4096,
+      betas: ['context-management-2025-06-27'],
       system: [
         'You are Flux, a macOS AI desktop copilot. You can see the user\'s screen, read window contents, and execute commands.',
         'Be concise and helpful.',
         'When the user asks about what\'s on their screen, use the read_ax_tree or capture_screen tools.',
         'Agent SDK skills reference: https://platform.claude.com/docs/en/agent-sdk/skills',
+        'IMPORTANT: ALWAYS VIEW YOUR MEMORY DIRECTORY BEFORE DOING ANYTHING ELSE.',
+        'MEMORY PROTOCOL: 1. Use the `view` command of your `memory` tool to check for earlier progress. 2. As you work, record status, progress, and thoughts in your memory.',
+        'ASSUME INTERRUPTION: Your context window might be reset at any moment, so record progress in memory.',
+        'When editing your memory folder, keep its content up-to-date, coherent and organized. Delete or rename files that are no longer relevant.',
         mcp.hasServer('linear')
           ? [
               'For Linear work (issues/projects), use the linear__* tools.',
@@ -336,7 +341,10 @@ async function runConversationLoop(
         .filter(Boolean)
         .join(' '),
       messages: history,
-      tools: tools as Anthropic.Tool[],
+      tools: [
+        { type: 'memory_20250818' as const, name: 'memory' },
+        ...(tools as any[]),
+      ] as any[],
     });
 
     for await (const event of stream) {
@@ -380,7 +388,7 @@ async function runConversationLoop(
     const finalMessage = await stream.finalMessage();
 
     // Add assistant message to history
-    history.push({ role: 'assistant', content: finalMessage.content });
+    history.push({ role: 'assistant', content: finalMessage.content as any });
     trimHistory(history);
 
     // If no tool use, we're done
@@ -530,6 +538,13 @@ function getTelegramConversationId(chatId: string, threadId?: number): string {
  * in the UI (e.g. the file path for read_file, the command for shell, etc.).
  */
 function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
+  // Memory tool: show "command path" (e.g. "view /memories")
+  if (toolName === 'memory') {
+    const cmd = (input.command as string) ?? '';
+    const p = (input.path as string) ?? (input.old_path as string) ?? '';
+    return `${cmd} ${p}`.trim() || 'memory';
+  }
+
   // Try common field names that make good summaries
   const candidates = ['path', 'file', 'target', 'command', 'script', 'query', 'url', 'text', 'content'];
   for (const key of candidates) {
