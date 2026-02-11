@@ -23,9 +23,18 @@ struct ChatView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if let conversation = conversationStore.activeConversation {
-                            ForEach(conversation.messages) { message in
-                                MessageBubble(message: message)
-                                    .id(message.id)
+                            ForEach(conversation.displaySegments) { segment in
+                                Group {
+                                    switch segment {
+                                    case .userMessage(let message):
+                                        MessageBubble(message: message)
+                                    case .assistantText(let message):
+                                        MessageBubble(message: message)
+                                    case .toolCallGroup(_, let calls):
+                                        ToolCallGroupView(calls: calls)
+                                    }
+                                }
+                                .id(segment.id)
                             }
                         }
                     }
@@ -39,9 +48,10 @@ struct ChatView: View {
                     )
                 }
                 .onChange(of: conversationStore.activeConversation?.messages.count) { _, _ in
-                    if let lastMessage = conversationStore.activeConversation?.messages.last {
+                    if let conversation = conversationStore.activeConversation,
+                       let lastSegment = conversation.displaySegments.last {
                         withAnimation {
-                            scrollProxy.scrollTo(lastMessage.id, anchor: .bottom)
+                            scrollProxy.scrollTo(lastSegment.id, anchor: .bottom)
                         }
                     }
                 }

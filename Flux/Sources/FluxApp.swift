@@ -131,6 +131,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             }
         }
+
+        agentBridge.onToolUseStart = { [weak self] conversationId, toolUseId, toolName, inputSummary in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            let info = ToolCallInfo(id: toolUseId, toolName: toolName, inputSummary: inputSummary)
+            self.conversationStore.addToolCall(to: uuid, info: info)
+        }
+
+        agentBridge.onToolUseComplete = { [weak self] conversationId, toolUseId, _, resultPreview in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            self.conversationStore.completeToolCall(in: uuid, toolUseId: toolUseId, resultPreview: resultPreview)
+        }
     }
 
     private func handleToolRequest(toolName: String, input: [String: Any]) async -> String {
