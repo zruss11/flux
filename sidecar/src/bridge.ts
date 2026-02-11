@@ -649,6 +649,13 @@ function handleMcpBridgeMessage(ws: WebSocket, message: BridgeMessage): void {
       result: 'Tool execution timed out',
       isError: true,
     });
+    sendToClient(activeClient, {
+      type: 'tool_use_complete',
+      conversationId: message.conversationId,
+      toolUseId: message.toolUseId,
+      toolName: message.toolName,
+      resultPreview: 'Timed out',
+    });
   }, TOOL_TIMEOUT_MS);
 
   pendingToolCalls.set(message.toolUseId, {
@@ -720,6 +727,13 @@ function cleanupBridgeSocket(ws: WebSocket): void {
     if (pending.ws === ws) {
       clearTimeout(pending.timeout);
       pendingToolCalls.delete(toolUseId);
+      sendToClient(activeClient, {
+        type: 'tool_use_complete',
+        conversationId: pending.conversationId,
+        toolUseId,
+        toolName: pending.toolName,
+        resultPreview: 'Disconnected',
+      });
     }
   }
 }
@@ -732,6 +746,13 @@ function flushPendingToolCalls(reason: string): void {
       toolUseId,
       result: reason,
       isError: true,
+    });
+    sendToClient(activeClient, {
+      type: 'tool_use_complete',
+      conversationId: pending.conversationId,
+      toolUseId,
+      toolName: pending.toolName,
+      resultPreview: reason,
     });
     pendingToolCalls.delete(toolUseId);
   }

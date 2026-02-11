@@ -20,6 +20,58 @@ if (!conversationId) {
 
 const passthroughSchema = z.record(z.string(), z.any());
 
+function jsonSchemaToZod(schema: ToolDefinition['input_schema']): z.ZodType {
+  const properties = schema.properties ?? {};
+  const requiredSet = new Set(schema.required ?? []);
+
+  if (Object.keys(properties).length === 0) {
+    return passthroughSchema;
+  }
+
+  const shape: Record<string, z.ZodType> = {};
+  for (const [key, prop] of Object.entries(properties)) {
+    const p = prop as Record<string, unknown>;
+    let field: z.ZodType;
+
+    switch (p.type) {
+      case 'string':
+        if (Array.isArray(p.enum) && p.enum.length > 0) {
+          field = z.enum(p.enum as [string, ...string[]]);
+        } else {
+          field = z.string();
+        }
+        break;
+      case 'number':
+      case 'integer':
+        field = z.number();
+        break;
+      case 'boolean':
+        field = z.boolean();
+        break;
+      case 'array':
+        field = z.array(z.any());
+        break;
+      case 'object':
+        field = z.record(z.string(), z.any());
+        break;
+      default:
+        field = z.any();
+    }
+
+    if (typeof p.description === 'string') {
+      field = field.describe(p.description);
+    }
+
+    if (!requiredSet.has(key)) {
+      field = field.optional();
+    }
+
+    shape[key] = field;
+  }
+
+  return z.object(shape).passthrough();
+}
+
 const mcp = new McpManager();
 const installedSkills = await loadInstalledSkills();
 mcp.registerFromSkills(installedSkills);
@@ -247,11 +299,12 @@ const server = new McpServer({
 });
 
 for (const tool of allTools) {
+  const inputSchema = tool.input_schema ? jsonSchemaToZod(tool.input_schema) : passthroughSchema;
   server.registerTool(
     tool.name,
     {
       description: tool.description ?? tool.name,
-      inputSchema: passthroughSchema,
+      inputSchema,
     },
     async (args) => handleToolCall(tool.name, args as Record<string, unknown>),
   );
