@@ -49,6 +49,7 @@ final class ConversationStore {
     var workspacePath: String? {
         didSet { UserDefaults.standard.set(workspacePath, forKey: "workspacePath") }
     }
+    var activeWorktreeBranch: String?
     private var runningConversationIds: Set<UUID> = []
     private(set) var scrollRevision: Int = 0
     private(set) var lastScrollConversationId: UUID?

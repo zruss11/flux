@@ -251,6 +251,21 @@ export const baseTools: ToolDefinition[] = [
       required: ['id'],
     },
   },
+  {
+    name: 'set_worktree',
+    description:
+      'Report the git worktree branch name back to the Flux UI after creating a worktree.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        branchName: {
+          type: 'string',
+          description: 'The branch name of the created worktree',
+        },
+      },
+      required: ['branchName'],
+    },
+  },
 ];
 
 const mcp = new McpManager();

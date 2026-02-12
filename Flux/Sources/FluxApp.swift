@@ -364,6 +364,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let command = input["command"] as? String ?? ""
             return await toolRunner.executeShellScript(command, workingDirectory: conversationStore.workspacePath)
 
+        case "set_worktree":
+            let rawBranchName = (input["branchName"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let branchName = (rawBranchName?.isEmpty == true) ? nil : rawBranchName
+            conversationStore.activeWorktreeBranch = branchName
+            return encodeJSON(SetWorktreeResponse(ok: true, branchName: branchName))
+
         case "send_slack_message":
             let text = input["text"] as? String ?? ""
             let channelOverride = (input["channelId"] as? String) ?? (input["channel"] as? String)
@@ -520,6 +527,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private struct AutomationErrorResponse: Codable {
         let ok: Bool
         let error: String
+    }
+
+    private struct SetWorktreeResponse: Codable {
+        let ok: Bool
+        let branchName: String?
     }
 
     private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {

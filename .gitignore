@@ -14,6 +14,7 @@ sidecar/.env
 .env
 .env.local
 Package.resolved
+worktree-*/
 
 # Installed agent skills (symlinks + temp clones). Keep `.agents/skills/` tracked.
 /.adal/
