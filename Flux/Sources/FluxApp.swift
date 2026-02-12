@@ -365,7 +365,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return await toolRunner.executeShellScript(command, workingDirectory: conversationStore.workspacePath)
 
         case "set_worktree":
-            let branchName = input["branchName"] as? String ?? ""
+            let rawBranchName = (input["branchName"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let branchName = (rawBranchName?.isEmpty == true) ? nil : rawBranchName
             conversationStore.activeWorktreeBranch = branchName
             return encodeJSON(SetWorktreeResponse(ok: true, branchName: branchName))
 
@@ -529,7 +531,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private struct SetWorktreeResponse: Codable {
         let ok: Bool
-        let branchName: String
+        let branchName: String?
     }
 
     private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {
