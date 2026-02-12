@@ -43,6 +43,7 @@ struct DictationEntry: Codable, Identifiable, Sendable {
         case none
         case foundationModels
         case claude
+        case magicReplace
     }
 
     enum Status: String, Codable, Sendable {

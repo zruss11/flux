@@ -19,6 +19,9 @@ final class DictationManager {
     // MARK: - Public State
 
     private(set) var isDictating = false
+    /// When `true`, the current dictation session is capturing a voice command
+    /// to transform selected text rather than plain transcription.
+    private(set) var isEditMode = false
 
     let historyStore = DictationHistoryStore()
 
@@ -44,6 +47,9 @@ final class DictationManager {
 
     /// Work item used to debounce the key-down event before starting dictation.
     private var debounceWorkItem: DispatchWorkItem?
+
+    /// The text that was selected when edit mode was activated.
+    private var editModeSelectedText: String?
 
     private let minRecordingDuration: TimeInterval = 0.5
     private let maxContinuousRecordingDuration: TimeInterval = 45
@@ -174,6 +180,17 @@ final class DictationManager {
             self.recordingStartTime = Date()
             AudioFeedbackService.shared.play(.dictationStart)
 
+            // Auto-detect edit mode: if the user has text selected, treat the
+            // voice command as an editing instruction rather than plain dictation.
+            let selectedText = await self.accessibilityReader?.readSelectedText()
+            if let selected = selectedText, !selected.isEmpty {
+                self.isEditMode = true
+                self.editModeSelectedText = selected
+            } else {
+                self.isEditMode = false
+                self.editModeSelectedText = nil
+            }
+
             IslandWindowManager.shared.suppressDeactivationCollapse = true
 
             // Poll audio levels at ~60 Hz to drive the in-notch waveform.
@@ -289,6 +306,45 @@ final class DictationManager {
         let cleanFillers = UserDefaults.standard.object(forKey: "dictationAutoCleanFillers") as? Bool ?? true
         let cleanedText = cleanFillers ? FillerWordCleaner.clean(rawTranscript) : rawTranscript
 
+        // ── Edit mode: transform the selected text using the voice command ──
+        if isEditMode, let selectedText = editModeSelectedText {
+            Task { @MainActor [weak self] in
+                guard let self, let reader = self.accessibilityReader else { return }
+
+                let replaceResult = await MagicReplaceManager.shared.performReplace(
+                    selectedText: selectedText,
+                    command: cleanedText,
+                    accessibilityReader: reader
+                )
+
+                let finalText = replaceResult.transformedText ?? cleanedText
+
+                if !replaceResult.inserted {
+                    let fallbackInserted = reader.replaceSelectedText(finalText)
+                    if !fallbackInserted {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(finalText, forType: .string)
+                    }
+                }
+
+                let targetApp = reader.focusedFieldAppName()
+                let entry = DictationEntry(
+                    rawTranscript: rawTranscript,
+                    cleanedText: cleanedText,
+                    enhancedText: replaceResult.transformedText,
+                    finalText: finalText,
+                    duration: duration,
+                    timestamp: Date(),
+                    targetApp: targetApp,
+                    enhancementMethod: .magicReplace
+                )
+                self.historyStore.add(entry)
+
+                self.tearDownUI()
+            }
+            return
+        }
+
         // Enhancement mode.
         let enhancementModeRaw = UserDefaults.standard.string(forKey: "dictationEnhancementMode") ?? "none"
         let appContext = currentEnhancementAppContext()
@@ -388,6 +444,18 @@ final class DictationManager {
         completeAttemptIfActive(attemptId)
         isDictating = false
         resetVisualState()
+    }
+
+    // MARK: - UI Teardown
+
+    private func tearDownUI() {
+        barLevels = Array(repeating: 0, count: 16)
+        isProcessing = false
+        isEditMode = false
+        editModeSelectedText = nil
+        IslandWindowManager.shared.suppressDeactivationCollapse = false
+        audioLevelMeter.reset()
+        recordingStartTime = nil
     }
 
     // MARK: - Foundation Models Enhancement
