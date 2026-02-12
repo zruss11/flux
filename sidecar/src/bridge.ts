@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { createTelegramBot } from './telegram/bot.js';
 import { createLogger } from './logger.js';
+import { OpenClawClient, type OpenClawChannel } from './openclaw/client.js';
 
 interface ChatMessage {
   type: 'chat';
@@ -45,7 +46,17 @@ interface SetTelegramConfigMessage {
   defaultChatId: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage;
+interface ReloadOpenClawRuntimeMessage {
+  type: 'reload_openclaw_runtime';
+}
+
+type IncomingMessage =
+  | ChatMessage
+  | ToolResultMessage
+  | SetApiKeyMessage
+  | McpAuthMessage
+  | SetTelegramConfigMessage
+  | ReloadOpenClawRuntimeMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -139,10 +150,13 @@ const sessions = new Map<string, ConversationSession>();
 const telegramSessionMap = new Map<string, string>();
 const telegramConversationMeta = new Map<string, { chatId: string; threadId?: number }>();
 const mcpAuthTokens = new Map<string, string>();
+const localBridgeToolNames = new Set(['send_openclaw_message', 'openclaw_channels_list', 'openclaw_status']);
+const legacyTelegramEnabled = process.env.FLUX_ENABLE_LEGACY_TELEGRAM === '1';
 
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
 let mcpBridgeUrl = '';
+const openClawClient = new OpenClawClient();
 
 interface ConversationSession {
   conversationId: string;
@@ -199,20 +213,39 @@ class MessageStream {
   }
 }
 
-const telegramBot = createTelegramBot({
-  onMessage: async (msg) => {
-    await handleTelegramMessage(msg.chatId, msg.threadId, msg.text);
-  },
-  onLog: (level, message) => {
-    if (level === 'error') log.error(message);
-    else if (level === 'warn') log.warn(message);
-    else log.info(message);
-  },
-});
+const telegramBot = legacyTelegramEnabled
+  ? createTelegramBot({
+    onMessage: async (msg) => {
+      await handleTelegramMessage(msg.chatId, msg.threadId, msg.text);
+    },
+    onLog: (level, message) => {
+      if (level === 'error') log.error(message);
+      else if (level === 'warn') log.warn(message);
+      else log.info(message);
+    },
+  })
+  : {
+    updateConfig: (_config: { botToken: string; defaultChatId: string }) => { /* no-op */ },
+    sendMessage: async (_text: string, _chatId: string, _threadId?: number) => { /* no-op */ },
+  };
 
 export function startBridge(port: number): void {
+  startBridgeWithOptions(port, {});
+}
+
+interface BridgeOptions {
+  onReloadOpenClawRuntime?: () => void;
+}
+
+export function startBridgeWithOptions(port: number, options: BridgeOptions): void {
   const wss = new WebSocketServer({ port });
   startMcpBridge(port + 1);
+  if (!legacyTelegramEnabled) {
+    log.info('Legacy Telegram connector disabled (set FLUX_ENABLE_LEGACY_TELEGRAM=1 to re-enable).');
+  }
+  void openClawClient.preflight().catch((error) => {
+    log.warn(`OpenClaw preflight failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 
   log.info(`WebSocket server listening on port ${port}`);
 
@@ -223,7 +256,7 @@ export function startBridge(port: number): void {
     ws.on('message', (data) => {
       try {
         const message = JSON.parse(data.toString()) as IncomingMessage;
-        handleMessage(ws, message);
+        handleMessage(ws, message, options);
       } catch (error) {
         log.error('Failed to parse message:', error);
       }
@@ -245,7 +278,7 @@ export function startBridge(port: number): void {
   });
 }
 
-function handleMessage(ws: WebSocket, message: IncomingMessage): void {
+function handleMessage(ws: WebSocket, message: IncomingMessage, options: BridgeOptions): void {
   switch (message.type) {
     case 'chat':
       handleChat(ws, message);
@@ -268,6 +301,9 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
         botToken: message.botToken ?? '',
         defaultChatId: message.defaultChatId ?? '',
       });
+      break;
+    case 'reload_openclaw_runtime':
+      options.onReloadOpenClawRuntime?.();
       break;
     default:
       log.warn('Unknown message type:', (message as Record<string, unknown>).type);
@@ -599,9 +635,9 @@ You have access to the following tools:
 **Action Tools** (use these to perform tasks on behalf of the user):
 - mcp__flux__execute_applescript: Execute AppleScript commands
 - mcp__flux__run_shell_command: Run shell commands
-- mcp__flux__send_slack_message: Send messages via Slack
-- mcp__flux__send_discord_message: Send messages via Discord
-- mcp__flux__send_telegram_message: Send messages via Telegram
+- mcp__flux__send_openclaw_message: Send messages through OpenClaw (Slack/Discord/Telegram/etc)
+- mcp__flux__openclaw_channels_list: List configured OpenClaw channels/accounts
+- mcp__flux__openclaw_status: Inspect OpenClaw health and connector status
 
 **Delegation Tool**:
 - TeamCreate: For complex tasks requiring research, planning, or multi-step workflows, spin up a small agent team to delegate work
@@ -722,7 +758,7 @@ function startMcpBridge(port: number): void {
     ws.on('message', (data) => {
       try {
         const message = JSON.parse(data.toString()) as BridgeMessage;
-        handleMcpBridgeMessage(ws, message);
+        void handleMcpBridgeMessage(ws, message);
       } catch (error) {
         log.error('Failed to parse MCP bridge message:', error);
       }
@@ -769,12 +805,17 @@ interface PendingToolCall {
 
 const pendingToolCalls = new Map<string, PendingToolCall>();
 
-function handleMcpBridgeMessage(ws: WebSocket, message: BridgeMessage): void {
+async function handleMcpBridgeMessage(ws: WebSocket, message: BridgeMessage): Promise<void> {
   if (message.type === 'hello') {
     return;
   }
 
   if (message.type !== 'tool_request') return;
+
+  if (localBridgeToolNames.has(message.toolName)) {
+    await handleLocalBridgeToolRequest(ws, message);
+    return;
+  }
 
   if (!activeClient || activeClient.readyState !== WebSocket.OPEN) {
     sendBridgeResponse(ws, {
@@ -830,6 +871,199 @@ function handleMcpBridgeMessage(ws: WebSocket, message: BridgeMessage): void {
     toolName: message.toolName,
     inputSummary: summarizeToolInput(message.toolName, message.input),
   });
+}
+
+async function handleLocalBridgeToolRequest(ws: WebSocket, message: BridgeToolRequest): Promise<void> {
+  sendToClient(activeClient, {
+    type: 'tool_use_start',
+    conversationId: message.conversationId,
+    toolUseId: message.toolUseId,
+    toolName: message.toolName,
+    inputSummary: summarizeToolInput(message.toolName, message.input),
+  });
+
+  const session = sessions.get(message.conversationId);
+  if (session) touchIdle(session);
+
+  let result = '';
+  let isError = false;
+
+  try {
+    result = await executeLocalBridgeTool(message.toolName, message.input);
+  } catch (error) {
+    isError = true;
+    result = error instanceof Error ? error.message : String(error);
+  }
+
+  sendBridgeResponse(ws, {
+    type: 'tool_response',
+    toolUseId: message.toolUseId,
+    result,
+    isError,
+  });
+
+  sendToClient(activeClient, {
+    type: 'tool_use_complete',
+    conversationId: message.conversationId,
+    toolUseId: message.toolUseId,
+    toolName: message.toolName,
+    resultPreview: toolResultPreview(message.toolName, result),
+  });
+}
+
+async function executeLocalBridgeTool(toolName: string, input: Record<string, unknown>): Promise<string> {
+  if (toolName === 'openclaw_channels_list') {
+    const raw = await openClawClient.channelsList();
+    return summarizeOpenClawChannelsList(raw);
+  }
+
+  if (toolName === 'openclaw_status') {
+    const deep = parseBoolean(input.deep, false);
+    const timeoutMs = parseNumber(input.timeoutMs);
+    const raw = await openClawClient.status({
+      deep,
+      timeoutMs,
+    });
+    return summarizeOpenClawStatus(raw);
+  }
+
+  if (toolName === 'send_openclaw_message') {
+    const message = pickString(input, ['message', 'text', 'content']);
+    if (!message) {
+      throw new Error('send_openclaw_message requires `message`.');
+    }
+
+    const channelRaw = pickString(input, ['channel']);
+    const channel = channelRaw ? (channelRaw as OpenClawChannel) : undefined;
+
+    return await openClawClient.sendMessage({
+      message,
+      channel,
+      target: pickString(input, ['target']),
+      account: pickString(input, ['account']),
+      threadId: pickString(input, ['threadId', 'thread_id']),
+      replyTo: pickString(input, ['replyTo', 'reply_to']),
+      silent: parseBoolean(input.silent, false),
+    });
+  }
+
+  throw new Error(`Unsupported local bridge tool: ${toolName}`);
+}
+
+function summarizeOpenClawChannelsList(raw: string): string {
+  const parsed = parseJsonObject(raw);
+  if (!parsed) return capText(raw, 3000);
+
+  const chat = isRecord(parsed.chat) ? parsed.chat : {};
+  const channels = Object.keys(chat);
+  const auth = Array.isArray(parsed.auth) ? parsed.auth : [];
+  const usageProviders = isRecord(parsed.usage) && Array.isArray(parsed.usage.providers)
+    ? parsed.usage.providers
+    : [];
+
+  const summary = {
+    ok: true,
+    configuredChannels: channels,
+    configuredChannelCount: channels.length,
+    authProfileCount: auth.length,
+    usageProviderCount: usageProviders.length,
+  };
+  return JSON.stringify(summary, null, 2);
+}
+
+function summarizeOpenClawStatus(raw: string): string {
+  const parsed = parseJsonObject(raw);
+  if (!parsed) return capText(raw, 4000);
+
+  const gateway = isRecord(parsed.gateway) ? parsed.gateway : {};
+  const agents = isRecord(parsed.agents) ? parsed.agents : {};
+  const securityAudit = isRecord(parsed.securityAudit) ? parsed.securityAudit : {};
+  const securitySummary = isRecord(securityAudit.summary) ? securityAudit.summary : {};
+  const channelSummary = Array.isArray(parsed.channelSummary) ? parsed.channelSummary : [];
+
+  const summary = {
+    ok: true,
+    gateway: {
+      mode: stringOrNull(gateway.mode),
+      url: stringOrNull(gateway.url),
+      reachable: boolOrNull(gateway.reachable),
+      error: stringOrNull(gateway.error),
+    },
+    channels: {
+      activeCount: channelSummary.length,
+      active: channelSummary.slice(0, 10),
+    },
+    agents: {
+      defaultId: stringOrNull(agents.defaultId),
+      totalSessions: numberOrNull(agents.totalSessions),
+    },
+    security: {
+      critical: numberOrNull(securitySummary.critical),
+      warn: numberOrNull(securitySummary.warn),
+      info: numberOrNull(securitySummary.info),
+    },
+  };
+  return JSON.stringify(summary, null, 2);
+}
+
+function pickString(input: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function parseBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return fallback;
+}
+
+function parseNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function capText(text: string, limit: number): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= limit) return trimmed;
+  return `${trimmed.slice(0, limit)}\n...[truncated ${trimmed.length - limit} chars]`;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function boolOrNull(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function handleToolResult(message: ToolResultMessage): void {
@@ -1000,8 +1234,10 @@ function summarizeToolInput(toolName: string, input: Record<string, unknown>): s
     'script',
     'query',
     'url',
+    'message',
     'text',
     'content',
+    'target',
     'id',
     'name',
     'scheduleExpression',

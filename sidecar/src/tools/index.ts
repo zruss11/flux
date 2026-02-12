@@ -105,56 +105,85 @@ export const baseTools: ToolDefinition[] = [
     },
   },
   {
-    name: 'send_slack_message',
+    name: 'send_openclaw_message',
     description:
-      'Send a message to Slack using the configured Slack bot (requires Slack Bot Token + Channel ID in Flux Settings). For posting to public channels without inviting the bot, add the Slack scope chat:write.public.',
+      'Send a message through OpenClaw. Supports Slack, Discord, Telegram, and other configured OpenClaw channels.',
     input_schema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Message text to post' },
-        channelId: {
-          type: 'string',
-          description: 'Optional override channel ID (e.g. C123...). Defaults to the configured Slack Channel ID.',
-        },
+        message: { type: 'string', description: 'Message text to send.' },
         channel: {
           type: 'string',
-          description: '[Deprecated] Alias for channelId.',
+          enum: [
+            'telegram',
+            'whatsapp',
+            'discord',
+            'googlechat',
+            'slack',
+            'signal',
+            'imessage',
+            'nostr',
+            'msteams',
+            'mattermost',
+            'nextcloud-talk',
+            'matrix',
+            'bluebubbles',
+            'line',
+            'zalo',
+            'zalouser',
+            'tlon',
+          ],
+          description: 'Optional channel provider. If omitted, OpenClaw will use its default routing.',
+        },
+        target: {
+          type: 'string',
+          description: 'Optional destination identifier (for example channel ID, user ID, @username, or phone number).',
+        },
+        account: {
+          type: 'string',
+          description: 'Optional OpenClaw account id to route through when multiple accounts exist.',
+        },
+        threadId: {
+          type: 'string',
+          description: 'Optional thread/forum id (for example Telegram forum thread).',
+        },
+        replyTo: {
+          type: 'string',
+          description: 'Optional message id to reply to.',
+        },
+        silent: {
+          type: 'boolean',
+          description: 'Send without notification when supported (for example Telegram).',
         },
       },
-      required: ['text'],
+      required: ['message'],
     },
   },
   {
-    name: 'send_discord_message',
+    name: 'openclaw_channels_list',
     description:
-      'Send a message to Discord using the configured Discord bot (requires Discord Bot Token + Channel ID in Flux Settings).',
+      'List OpenClaw channels/accounts that are currently configured.',
     input_schema: {
       type: 'object',
-      properties: {
-        content: { type: 'string', description: 'Message content to send' },
-        channelId: {
-          type: 'string',
-          description:
-            'Optional override Discord channel ID. Defaults to the configured Discord Channel ID in Flux Settings.',
-        },
-      },
-      required: ['content'],
+      properties: {},
     },
   },
   {
-    name: 'send_telegram_message',
+    name: 'openclaw_status',
     description:
-      'Send a message to Telegram using the configured Telegram bot (requires Telegram Bot Token + Telegram Chat ID in Flux Settings).',
+      'Inspect OpenClaw health and connector status.',
     input_schema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Message text to send' },
-        chatId: {
-          type: 'string',
-          description: 'Optional override chat ID. Defaults to the configured Telegram Chat ID.',
+        deep: {
+          type: 'boolean',
+          description: 'Run deeper channel probes.',
+        },
+        timeoutMs: {
+          type: 'number',
+          description: 'Optional probe timeout in milliseconds.',
         },
       },
-      required: ['text'],
     },
   },
   {

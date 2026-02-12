@@ -4,6 +4,9 @@ enum SecretKeys {
     static let discordBotToken = "discordBotToken"
     static let slackBotToken = "slackBotToken"
     static let telegramBotToken = "telegramBotToken"
+    static let openClawAnthropicApiKey = "openClawAnthropicApiKey"
+    static let openClawOpenAIApiKey = "openClawOpenAIApiKey"
+    static let openClawGoogleApiKey = "openClawGoogleApiKey"
 }
 
 enum SecretMigration {

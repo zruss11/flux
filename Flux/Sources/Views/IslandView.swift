@@ -774,29 +774,48 @@ struct IslandSettingsView: View {
     var agentBridge: AgentBridge
 
     @AppStorage("anthropicApiKey") private var apiKey = ""
-    @AppStorage("discordChannelId") private var discordChannelId = ""
-    @AppStorage("slackChannelId") private var slackChannelId = ""
-    @AppStorage("telegramChatId") private var telegramChatId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
 
-    @State private var discordBotToken = ""
-    @State private var slackBotToken = ""
-    @State private var telegramBotToken = ""
-    @State private var secretsLoaded = false
     @State private var editingField: EditingField?
     @FocusState private var fieldFocused: Bool
     @State private var permissionRefreshToken: Int = 0
-    @State private var telegramPairingCode = ""
-    @State private var telegramPending: [TelegramPairingRequest] = []
-    @State private var telegramPairingError: String?
     @State private var automationService = AutomationService.shared
     @State private var automationsExpanded = false
     @State private var automationEditorMode: InlineAutomationEditorMode?
     @State private var pendingDeleteAutomation: Automation?
     @State private var automationActionError: String?
+    @State private var openClawExpanded = true
+    @State private var openClawProfile = OpenClawSetupService.defaultProfile
+    @State private var openClawSelectedProvider: OpenClawProvider = .telegram
+    @State private var openClawChannels: [OpenClawChannelAccount] = []
+    @State private var openClawPluginsEnabled: [String: Bool] = [:]
+    @State private var openClawPendingTelegramPairings: [OpenClawPairingRequest] = []
+    @State private var openClawGatewayReachable = false
+    @State private var openClawAuthProfileCount = 0
+    @State private var openClawGatewayError: String?
+    @State private var openClawActionMessage: String?
+    @State private var openClawError: String?
+    @State private var openClawIsBusy = false
+    @State private var openClawModelAuthStorePath: String?
+    @State private var openClawModelProviders: [String: OpenClawModelProviderStatus] = [:]
+    @State private var openClawMissingModelProvidersInUse = Set<String>()
+    @State private var openClawSelectedModelProvider: OpenClawModelProvider = .anthropic
+    @State private var openClawModelApiKey = ""
+    @State private var openClawModelProfileId = ""
+    @State private var openClawPairingCode = ""
+    @State private var openClawTelegramToken = ""
+    @State private var openClawTelegramAccount = ""
+    @State private var openClawTelegramName = ""
+    @State private var openClawSlackBotToken = ""
+    @State private var openClawSlackAppToken = ""
+    @State private var openClawSlackAccount = ""
+    @State private var openClawSlackName = ""
+    @State private var openClawDiscordToken = ""
+    @State private var openClawDiscordAccount = ""
+    @State private var openClawDiscordName = ""
 
     // Automation editor fields
     @State private var editorName = ""
@@ -812,13 +831,66 @@ struct IslandSettingsView: View {
     private enum EditingField: Hashable {
         case apiKey
         case linearToken
-        case discordBotToken
-        case discordChannelId
-        case slackBotToken
-        case slackChannelId
-        case telegramBotToken
-        case telegramChatId
-        case telegramPairingCode
+    }
+
+    private enum OpenClawProvider: String, CaseIterable, Identifiable {
+        case telegram
+        case slack
+        case discord
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .telegram: return "Telegram"
+            case .slack: return "Slack"
+            case .discord: return "Discord"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .telegram: return "paperplane.fill"
+            case .slack: return "number"
+            case .discord: return "bubble.left.fill"
+            }
+        }
+    }
+
+    private enum OpenClawModelProvider: String, CaseIterable, Identifiable {
+        case anthropic
+        case openai
+        case google
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .anthropic: return "Anthropic"
+            case .openai: return "OpenAI"
+            case .google: return "Google"
+            }
+        }
+
+        var keychainKey: String {
+            switch self {
+            case .anthropic: return SecretKeys.openClawAnthropicApiKey
+            case .openai: return SecretKeys.openClawOpenAIApiKey
+            case .google: return SecretKeys.openClawGoogleApiKey
+            }
+        }
+
+        var defaultProfileId: String {
+            "\(rawValue):flux"
+        }
+
+        var envVarName: String {
+            switch self {
+            case .anthropic: return "ANTHROPIC_API_KEY"
+            case .openai: return "OPENAI_API_KEY"
+            case .google: return "GEMINI_API_KEY"
+            }
+        }
     }
 
     private enum InlineAutomationEditorMode: Equatable {
@@ -1020,269 +1092,32 @@ struct IslandSettingsView: View {
 
                 divider
 
-                // Discord Bot
-                if editingField == .discordBotToken {
-                    editableRow(icon: "bubble.left.fill", label: "Discord Bot Token") {
-                        SecureField("Bot token", text: $discordBotToken)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                persistDiscordBotToken()
-                                editingField = nil
+                settingsRow(icon: "paperplane.circle.fill", label: "Messaging (OpenClaw)", trailing: {
+                    AnyView(
+                        HStack(spacing: 8) {
+                            if openClawIsBusy {
+                                ProgressView()
+                                    .controlSize(.mini)
                             }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        persistDiscordBotToken()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "bubble.left.fill", label: "Discord Bot", trailing: {
-                        AnyView(
-                            HStack(spacing: 8) {
-                                statusDot(isSet: !discordBotToken.isEmpty && !discordChannelId.isEmpty)
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.35))
-                                    .help(discordBotHelp)
-                            }
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .discordBotToken
-                    }
-                }
-
-                if editingField == .discordChannelId {
-                    editableRow(icon: "bubble.left.fill", label: "Discord Channel ID") {
-                        TextField("Channel ID (e.g. 123456789012345678)", text: $discordChannelId)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "bubble.left.fill", label: "Discord Channel ID", trailing: {
-                        AnyView(statusDot(isSet: !discordChannelId.isEmpty))
-                    })
-                    .onTapGesture {
-                        editingField = .discordChannelId
-                    }
-                }
-
-                // Slack Bot
-                if editingField == .slackBotToken {
-                    editableRow(icon: "number", label: "Slack Bot Token") {
-                        SecureField("xoxb-...", text: $slackBotToken)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                persistSlackBotToken()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        persistSlackBotToken()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "number", label: "Slack Bot", trailing: {
-                        AnyView(
-                            HStack(spacing: 8) {
-                                statusDot(isSet: !slackBotToken.isEmpty && !slackChannelId.isEmpty)
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.35))
-                                    .help(slackBotHelp)
-                            }
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .slackBotToken
-                    }
-                }
-
-                if editingField == .slackChannelId {
-                    editableRow(icon: "number", label: "Slack Channel ID") {
-                        TextField("Channel ID (e.g. C123...)", text: $slackChannelId)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "number", label: "Slack Channel ID", trailing: {
-                        AnyView(statusDot(isSet: !slackChannelId.isEmpty))
-                    })
-                    .onTapGesture {
-                        editingField = .slackChannelId
-                    }
-                }
-
-                // Telegram Bot
-                if editingField == .telegramBotToken {
-                    editableRow(icon: "paperplane.fill", label: "Telegram Bot Token") {
-                        SecureField("Bot token", text: $telegramBotToken)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                persistTelegramBotToken()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        persistTelegramBotToken()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "paperplane.fill", label: "Telegram Bot", trailing: {
-                        AnyView(
-                            HStack(spacing: 8) {
-                                statusDot(isSet: !telegramBotToken.isEmpty && !telegramChatId.isEmpty)
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.35))
-                                    .help(telegramBotHelp)
-                            }
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .telegramBotToken
-                    }
-                }
-
-                if editingField == .telegramChatId {
-                    editableRow(icon: "paperplane.fill", label: "Telegram Chat ID") {
-                        TextField("Chat ID (e.g. 123456789)", text: $telegramChatId)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                notifyTelegramConfigChanged()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        notifyTelegramConfigChanged()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "paperplane.fill", label: "Telegram Chat ID", trailing: {
-                        AnyView(statusDot(isSet: !telegramChatId.isEmpty))
-                    })
-                    .onTapGesture {
-                        editingField = .telegramChatId
-                    }
-                }
-
-                if editingField == .telegramPairingCode {
-                    editableRow(icon: "paperplane.fill", label: "Telegram Pairing Code") {
-                        TextField("PAIRCODE", text: $telegramPairingCode)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                approveTelegramPairing()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        approveTelegramPairing()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "paperplane.fill", label: "Telegram Pairing", trailing: {
-                        AnyView(
-                            Text(telegramPending.isEmpty ? "None" : "\(telegramPending.count) pending")
-                                .font(.system(size: 12))
-                                .foregroundStyle(telegramPending.isEmpty ? .white.opacity(0.5) : .orange.opacity(0.9))
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .telegramPairingCode
-                    }
-                }
-
-                if !telegramPending.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(telegramPending) { request in
-                            HStack(spacing: 8) {
-                                Text(request.username.map { "@\($0)" } ?? "Chat \(request.chatId)")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.white.opacity(0.8))
-                                Spacer()
-                                Button {
-                                    TelegramPairingStore.removePending(chatId: request.chatId)
-                                    loadTelegramPairing()
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.white.opacity(0.5))
-                                }
-                                .buttonStyle(.plain)
-                            }
+                            Text("\(openClawChannels.count) channels")
+                                .font(.system(size: 11))
+                                .foregroundStyle(openClawChannels.isEmpty ? .white.opacity(0.5) : .green.opacity(0.85))
+                            Image(systemName: openClawExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.4))
                         }
+                    )
+                })
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        openClawExpanded.toggle()
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
                 }
 
-                if let telegramPairingError {
-                    Text(telegramPairingError)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red.opacity(0.8))
-                        .padding(.horizontal, 12)
+                if openClawExpanded {
+                    openClawStatusCard
+                    openClawSetupCard
+                    openClawModelAuthCard
                 }
 
                 divider
@@ -1362,22 +1197,18 @@ struct IslandSettingsView: View {
             .padding(.vertical, 8)
         }
         .onAppear {
-            loadSecretsIfNeeded()
+            refreshOpenClawState()
+            openClawModelProfileId = openClawSelectedModelProvider.defaultProfileId
+            loadOpenClawModelApiKey(for: openClawSelectedModelProvider)
+        }
+        .onChange(of: openClawSelectedModelProvider) { _, provider in
+            openClawModelProfileId = provider.defaultProfileId
+            loadOpenClawModelApiKey(for: provider)
         }
         .onChange(of: editingField) { old, _ in
             switch old {
             case .apiKey:
                 agentBridge.sendApiKey(apiKey)
-            case .discordBotToken:
-                persistDiscordBotToken()
-            case .slackBotToken:
-                persistSlackBotToken()
-            case .telegramBotToken:
-                persistTelegramBotToken()
-            case .telegramChatId:
-                notifyTelegramConfigChanged()
-            case .telegramPairingCode:
-                approveTelegramPairing()
             default:
                 break
             }
@@ -1386,7 +1217,6 @@ struct IslandSettingsView: View {
             // Poll while Settings is visible so status updates after the user toggles permissions in System Settings.
             while !Task.isCancelled {
                 permissionRefreshToken &+= 1
-                loadTelegramPairing()
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -1969,90 +1799,596 @@ struct IslandSettingsView: View {
         }
     }
 
-    private var discordBotHelp: String {
-        [
-            "Discord bot setup:",
-            "1) Create a bot at Discord Developer Portal (Applications -> Bot).",
-            "2) Copy the bot token and paste it into \"Discord Bot\".",
-            "3) Invite the bot to your server with \"Send Messages\" permission.",
-            "4) Enable Developer Mode in Discord, then right click a channel -> Copy Channel ID.",
-        ].joined(separator: "\n")
-    }
-
-    private var slackBotHelp: String {
-        [
-            "Slack bot setup:",
-            "1) Create a Slack app (From scratch) with a Bot user.",
-            "2) Under OAuth & Permissions, add scopes: chat:write (+ chat:write.public for public channels without inviting the bot).",
-            "3) Install the app to your workspace and copy the Bot User OAuth Token (xoxb-...).",
-            "4) Copy the channel ID (starts with C or G). Invite the bot for private channels.",
-        ].joined(separator: "\n")
-    }
-
-    private var telegramBotHelp: String {
-        [
-            "Telegram bot setup:",
-            "1) Create a bot with @BotFather and copy the token.",
-            "2) Paste the token into \"Telegram Bot\".",
-            "3) DM the bot to receive a pairing code.",
-            "4) Paste the pairing code into \"Telegram Pairing Code\" to approve.",
-            "5) For groups, mention @YourBotName to trigger responses.",
-        ].joined(separator: "\n")
-    }
-
-    private func loadSecretsIfNeeded() {
-        guard !secretsLoaded else { return }
-        secretsLoaded = true
-
-        discordBotToken = KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? ""
-        slackBotToken = KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? ""
-        telegramBotToken = KeychainService.getString(forKey: SecretKeys.telegramBotToken) ?? ""
-    }
-
-    private func persistDiscordBotToken() {
-        do {
-            try KeychainService.setString(discordBotToken, forKey: SecretKeys.discordBotToken)
-        } catch {
-            // Best effort; ignore.
+    private var openClawStatusCard: some View {
+        let modelAuthCount = openClawModelProviders.values.reduce(0) { partialResult, entry in
+            partialResult + entry.profileCount
         }
-    }
-
-    private func persistSlackBotToken() {
-        do {
-            try KeychainService.setString(slackBotToken, forKey: SecretKeys.slackBotToken)
-        } catch {
-            // Best effort; ignore.
-        }
-    }
-
-    private func persistTelegramBotToken() {
-        do {
-            try KeychainService.setString(telegramBotToken, forKey: SecretKeys.telegramBotToken)
-        } catch {
-            // Best effort; ignore.
-        }
-        notifyTelegramConfigChanged()
-    }
-
-    private func notifyTelegramConfigChanged() {
-        NotificationCenter.default.post(name: .telegramConfigDidChange, object: nil)
-    }
-
-    private func loadTelegramPairing() {
-        telegramPending = TelegramPairingStore.loadPending()
-    }
-
-    private func approveTelegramPairing() {
-        telegramPairingError = nil
-        let code = telegramPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let _ = TelegramPairingStore.approve(code: code) else {
-            if !code.isEmpty {
-                telegramPairingError = "Pairing code not found or expired."
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Profile")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.6))
+                Text(openClawProfile)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer()
+                Button {
+                    refreshOpenClawState()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("Refresh")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.white.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .disabled(openClawIsBusy)
             }
+
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(openClawGatewayReachable ? Color.green.opacity(0.85) : Color.orange.opacity(0.9))
+                    .frame(width: 8, height: 8)
+                Text(openClawGatewayReachable ? "Gateway reachable" : "Gateway unavailable")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.75))
+                Spacer()
+                Text("Auth profiles: \(max(openClawAuthProfileCount, modelAuthCount))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+
+            if openClawChannels.isEmpty {
+                Text("No OpenClaw channels configured yet.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.55))
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(openClawChannels.prefix(5)) { channel in
+                        Text("• \(channel.providerDisplayName) (\(channel.accountId))")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
+                }
+            }
+
+            if !openClawPendingTelegramPairings.isEmpty {
+                Text("Telegram pairing requests: \(openClawPendingTelegramPairings.count)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.orange.opacity(0.9))
+            }
+
+            if !openClawMissingModelProvidersInUse.isEmpty {
+                Text("Missing model auth: \(openClawMissingModelProvidersInUse.sorted().joined(separator: ", "))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.orange.opacity(0.9))
+            }
+
+            if let openClawActionMessage, !openClawActionMessage.isEmpty {
+                Text(openClawActionMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.green.opacity(0.9))
+            }
+
+            if let openClawError, !openClawError.isEmpty {
+                Text(openClawError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red.opacity(0.85))
+            } else if let openClawGatewayError,
+                      !openClawGatewayReachable,
+                      !openClawGatewayError.isEmpty {
+                Text(openClawGatewayError)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange.opacity(0.85))
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
+    }
+
+    private var openClawSetupCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("", selection: $openClawSelectedProvider) {
+                ForEach(OpenClawProvider.allCases) { provider in
+                    Text(provider.title).tag(provider)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            HStack(spacing: 12) {
+                HStack(spacing: 6) {
+                    statusDot(isSet: providerPluginEnabled(openClawSelectedProvider))
+                    Text(providerPluginEnabled(openClawSelectedProvider) ? "Plugin enabled" : "Plugin disabled")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+
+                HStack(spacing: 6) {
+                    statusDot(isSet: providerIsConfigured(openClawSelectedProvider))
+                    Text(providerIsConfigured(openClawSelectedProvider) ? "Account configured" : "No account yet")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+            }
+
+            selectedOpenClawProviderForm
+
+            Button {
+                connectSelectedOpenClawProvider()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: openClawSelectedProvider.icon)
+                        .font(.system(size: 11))
+                    Text("Connect \(openClawSelectedProvider.title)")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(.black.opacity(0.9))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(selectedProviderCanConnect ? Color.white.opacity(0.9) : Color.white.opacity(0.25))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!selectedProviderCanConnect || openClawIsBusy)
+
+            Text(openClawProviderHint)
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.45))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
+    }
+
+    private var openClawModelAuthCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Model Providers")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.75))
+
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(OpenClawModelProvider.allCases) { provider in
+                    modelProviderStatusRow(provider)
+                }
+            }
+
+            Picker("", selection: $openClawSelectedModelProvider) {
+                ForEach(OpenClawModelProvider.allCases) { provider in
+                    Text(provider.title).tag(provider)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            openClawInputField(
+                title: "\(openClawSelectedModelProvider.title) API key",
+                text: $openClawModelApiKey,
+                secure: true,
+                placeholder: openClawSelectedModelProvider.envVarName
+            )
+            openClawInputField(
+                title: "Auth profile id (optional)",
+                text: $openClawModelProfileId,
+                secure: false,
+                placeholder: openClawSelectedModelProvider.defaultProfileId
+            )
+
+            HStack(spacing: 8) {
+                Button {
+                    saveModelProviderAuth()
+                } label: {
+                    Text("Save & Apply")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.black.opacity(0.9))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(openClawModelApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.white.opacity(0.25) : Color.white.opacity(0.9))
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(openClawModelApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || openClawIsBusy)
+
+                if openClawSelectedModelProvider == .anthropic,
+                   !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button {
+                        openClawModelApiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                    } label: {
+                        Text("Use Flux Key")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.08)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(openClawIsBusy)
+                }
+
+                Spacer()
+            }
+
+            Text(modelAuthHintText)
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.45))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
+    }
+
+    @ViewBuilder
+    private func modelProviderStatusRow(_ provider: OpenClawModelProvider) -> some View {
+        let status = modelProviderStatus(for: provider)
+        HStack(spacing: 6) {
+            Circle()
+                .fill(status.color)
+                .frame(width: 7, height: 7)
+            Text(status.text)
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.7))
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var selectedOpenClawProviderForm: some View {
+        switch openClawSelectedProvider {
+        case .telegram:
+            VStack(alignment: .leading, spacing: 6) {
+                openClawInputField(title: "Account (optional)", text: $openClawTelegramAccount, secure: false, placeholder: "default")
+                openClawInputField(title: "Display name (optional)", text: $openClawTelegramName, secure: false, placeholder: "Team Telegram")
+                openClawInputField(title: "Bot token", text: $openClawTelegramToken, secure: true, placeholder: "123456:ABC...")
+
+                if !openClawPendingTelegramPairings.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Pending Telegram pairing")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.5))
+
+                        ForEach(openClawPendingTelegramPairings.prefix(3)) { request in
+                            Text("• \(request.label) (\(request.code))")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.75))
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.05)))
+                }
+
+                HStack(alignment: .bottom, spacing: 8) {
+                    openClawInputField(title: "Pairing code", text: $openClawPairingCode, secure: false, placeholder: "PAIRCODE")
+
+                    Button {
+                        approveTelegramPairingCode()
+                    } label: {
+                        Text("Approve")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.black.opacity(0.9))
+                            .padding(.horizontal, 12)
+                            .frame(height: 30)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.9)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(openClawPairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || openClawIsBusy)
+                    .padding(.bottom, 1)
+                }
+            }
+        case .slack:
+            VStack(alignment: .leading, spacing: 6) {
+                openClawInputField(title: "Account (optional)", text: $openClawSlackAccount, secure: false, placeholder: "default")
+                openClawInputField(title: "Display name (optional)", text: $openClawSlackName, secure: false, placeholder: "Workspace Slack")
+                openClawInputField(title: "Bot token", text: $openClawSlackBotToken, secure: true, placeholder: "xoxb-...")
+                openClawInputField(title: "App token (optional)", text: $openClawSlackAppToken, secure: true, placeholder: "xapp-...")
+            }
+        case .discord:
+            VStack(alignment: .leading, spacing: 6) {
+                openClawInputField(title: "Account (optional)", text: $openClawDiscordAccount, secure: false, placeholder: "default")
+                openClawInputField(title: "Display name (optional)", text: $openClawDiscordName, secure: false, placeholder: "Server Discord")
+                openClawInputField(title: "Bot token", text: $openClawDiscordToken, secure: true, placeholder: "Bot token")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func openClawInputField(title: String, text: Binding<String>, secure: Bool, placeholder: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+
+            Group {
+                if secure {
+                    SecureField(placeholder, text: text)
+                } else {
+                    TextField(placeholder, text: text)
+                }
+            }
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+        }
+    }
+
+    private var selectedProviderCanConnect: Bool {
+        switch openClawSelectedProvider {
+        case .telegram:
+            return !openClawTelegramToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .slack:
+            return !openClawSlackBotToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .discord:
+            return !openClawDiscordToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private var openClawProviderHint: String {
+        switch openClawSelectedProvider {
+        case .telegram:
+            return "After connecting, Flux reloads OpenClaw. If Telegram DM policy is pairing, approve the pairing code shown by the bot."
+        case .slack:
+            return "Use a bot token. App token is optional but recommended for Socket Mode."
+        case .discord:
+            return "Use a bot token from the Discord Developer Portal."
+        }
+    }
+
+    private var modelAuthHintText: String {
+        let storeText = if let storePath = openClawModelAuthStorePath, !storePath.isEmpty {
+            "Auth store: \(storePath)"
+        } else {
+            "Auth store path unavailable."
+        }
+        return "Flux stores raw keys in macOS Keychain, then writes OpenClaw auth profiles with restricted permissions. \(storeText)"
+    }
+
+    private func providerPluginEnabled(_ provider: OpenClawProvider) -> Bool {
+        openClawPluginsEnabled[provider.rawValue] ?? false
+    }
+
+    private func providerIsConfigured(_ provider: OpenClawProvider) -> Bool {
+        openClawChannels.contains(where: { $0.provider.lowercased() == provider.rawValue })
+    }
+
+    private func modelProviderStatus(for provider: OpenClawModelProvider) -> (text: String, color: Color) {
+        let providerId = provider.rawValue
+        if openClawMissingModelProvidersInUse.contains(providerId) {
+            return ("\(provider.title): missing for active model", .orange.opacity(0.9))
+        }
+
+        if let status = openClawModelProviders[providerId], status.profileCount > 0 {
+            let detail: String
+            if status.oauthCount > 0 {
+                detail = "OAuth"
+            } else if status.tokenCount > 0 {
+                detail = "Token"
+            } else {
+                detail = "API key"
+            }
+            return ("\(provider.title): \(detail) configured (\(status.profileCount))", .green.opacity(0.85))
+        }
+
+        return ("\(provider.title): not configured", .white.opacity(0.25))
+    }
+
+    private func connectSelectedOpenClawProvider() {
+        switch openClawSelectedProvider {
+        case .telegram:
+            connectTelegram()
+        case .slack:
+            connectSlack()
+        case .discord:
+            connectDiscord()
+        }
+    }
+
+    private func loadOpenClawModelApiKey(for provider: OpenClawModelProvider) {
+        let keychainValue = (KeychainService.getString(forKey: provider.keychainKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !keychainValue.isEmpty {
+            openClawModelApiKey = keychainValue
             return
         }
-        telegramPairingCode = ""
-        loadTelegramPairing()
+
+        if provider == .anthropic {
+            openClawModelApiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            return
+        }
+
+        openClawModelApiKey = ""
+    }
+
+    private func saveModelProviderAuth() {
+        let provider = openClawSelectedModelProvider
+        let trimmedApiKey = openClawModelApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedApiKey.isEmpty else { return }
+
+        do {
+            try KeychainService.setString(trimmedApiKey, forKey: provider.keychainKey)
+        } catch {
+            openClawError = "Unable to save \(provider.title) API key to Keychain."
+            return
+        }
+
+        let profileId = openClawModelProfileId.trimmingCharacters(in: .whitespacesAndNewlines)
+        runOpenClawMutation(
+            operation: {
+                try await OpenClawSetupService.configureModelApiKey(
+                    profile: openClawProfile,
+                    provider: provider.rawValue,
+                    apiKey: trimmedApiKey,
+                    profileId: profileId.isEmpty ? nil : profileId
+                )
+            },
+            onSuccess: {
+                openClawModelApiKey = ""
+                if profileId.isEmpty {
+                    openClawModelProfileId = provider.defaultProfileId
+                }
+            },
+            reloadRuntime: true
+        )
+    }
+
+    private func connectTelegram() {
+        let token = openClawTelegramToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return }
+        let account = openClawTelegramAccount.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = openClawTelegramName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        runOpenClawMutation(
+            operation: {
+                try await OpenClawSetupService.connectTelegram(
+                    profile: openClawProfile,
+                    token: token,
+                    accountId: account.isEmpty ? nil : account,
+                    displayName: name.isEmpty ? nil : name
+                )
+            },
+            onSuccess: {
+                openClawTelegramToken = ""
+            },
+            reloadRuntime: true
+        )
+    }
+
+    private func connectSlack() {
+        let botToken = openClawSlackBotToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !botToken.isEmpty else { return }
+        let appToken = openClawSlackAppToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let account = openClawSlackAccount.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = openClawSlackName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        runOpenClawMutation(
+            operation: {
+                try await OpenClawSetupService.connectSlack(
+                    profile: openClawProfile,
+                    botToken: botToken,
+                    appToken: appToken.isEmpty ? nil : appToken,
+                    accountId: account.isEmpty ? nil : account,
+                    displayName: name.isEmpty ? nil : name
+                )
+            },
+            onSuccess: {
+                openClawSlackBotToken = ""
+                openClawSlackAppToken = ""
+            },
+            reloadRuntime: true
+        )
+    }
+
+    private func connectDiscord() {
+        let token = openClawDiscordToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return }
+        let account = openClawDiscordAccount.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = openClawDiscordName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        runOpenClawMutation(
+            operation: {
+                try await OpenClawSetupService.connectDiscord(
+                    profile: openClawProfile,
+                    token: token,
+                    accountId: account.isEmpty ? nil : account,
+                    displayName: name.isEmpty ? nil : name
+                )
+            },
+            onSuccess: {
+                openClawDiscordToken = ""
+            },
+            reloadRuntime: true
+        )
+    }
+
+    private func approveTelegramPairingCode() {
+        let code = openClawPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }
+
+        runOpenClawMutation(
+            operation: {
+                try await OpenClawSetupService.approveTelegramPairing(profile: openClawProfile, code: code)
+            },
+            onSuccess: {
+                openClawPairingCode = ""
+            }
+        )
+    }
+
+    private func refreshOpenClawState() {
+        openClawIsBusy = true
+        openClawError = nil
+
+        Task {
+            do {
+                let snapshot = try await OpenClawSetupService.snapshot(profile: openClawProfile)
+                await MainActor.run {
+                    applyOpenClawSnapshot(snapshot)
+                    openClawIsBusy = false
+                }
+            } catch {
+                await MainActor.run {
+                    openClawError = error.localizedDescription
+                    openClawIsBusy = false
+                }
+            }
+        }
+    }
+
+    private func runOpenClawMutation(
+        operation: @escaping () async throws -> String,
+        onSuccess: @escaping @MainActor () -> Void,
+        reloadRuntime: Bool = false
+    ) {
+        openClawIsBusy = true
+        openClawError = nil
+        openClawActionMessage = nil
+
+        Task {
+            do {
+                let message = try await operation()
+                if reloadRuntime {
+                    await MainActor.run {
+                        agentBridge.requestOpenClawRuntimeReload()
+                    }
+                    try? await Task.sleep(for: .seconds(2))
+                }
+                let snapshot = try await OpenClawSetupService.snapshot(profile: openClawProfile)
+                await MainActor.run {
+                    onSuccess()
+                    applyOpenClawSnapshot(snapshot)
+                    openClawActionMessage = reloadRuntime
+                        ? "\(message)\nReloaded OpenClaw runtime to apply changes."
+                        : message
+                    openClawIsBusy = false
+                }
+            } catch {
+                await MainActor.run {
+                    openClawError = error.localizedDescription
+                    openClawIsBusy = false
+                }
+            }
+        }
+    }
+
+    private func applyOpenClawSnapshot(_ snapshot: OpenClawSnapshot) {
+        openClawChannels = snapshot.channels
+        openClawAuthProfileCount = snapshot.authProfileCount
+        openClawGatewayReachable = snapshot.gatewayReachable
+        openClawGatewayError = snapshot.gatewayError
+        openClawPluginsEnabled = snapshot.pluginsEnabled
+        openClawPendingTelegramPairings = snapshot.pendingTelegramPairings
+        openClawModelAuthStorePath = snapshot.modelAuthStorePath
+        openClawModelProviders = snapshot.modelProviders
+        openClawMissingModelProvidersInUse = snapshot.missingModelProvidersInUse
     }
 
     private func editableRow<Field: View>(

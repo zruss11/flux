@@ -36,15 +36,18 @@ final class AgentBridge: @unchecked Sendable {
     private var lastSentTelegramBotToken: String?
     private var lastSentTelegramChatId: String?
     private var telegramConfigObserver: NSObjectProtocol?
+    private let legacyTelegramEnabled = ProcessInfo.processInfo.environment["FLUX_ENABLE_LEGACY_TELEGRAM"] == "1"
 
     init(port: Int = 7847) {
         self.port = port
-        telegramConfigObserver = NotificationCenter.default.addObserver(
-            forName: .telegramConfigDidChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.sendTelegramConfigFromStores()
+        if legacyTelegramEnabled {
+            telegramConfigObserver = NotificationCenter.default.addObserver(
+                forName: .telegramConfigDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.sendTelegramConfigFromStores()
+            }
         }
     }
 
@@ -77,7 +80,9 @@ final class AgentBridge: @unchecked Sendable {
 
         // Send MCP auth config proactively; doesn't depend on receiving a message first.
         sendMcpAuthIfNeeded()
-        sendTelegramConfigFromStores()
+        if legacyTelegramEnabled {
+            sendTelegramConfigFromStores()
+        }
 
         receiveMessage()
     }
@@ -100,7 +105,9 @@ final class AgentBridge: @unchecked Sendable {
 
         // Keep sidecar config in sync (user may have edited settings since connect).
         sendMcpAuthIfNeeded()
-        sendTelegramConfigFromStores()
+        if legacyTelegramEnabled {
+            sendTelegramConfigFromStores()
+        }
 
         var message: [String: Any] = [
             "type": "chat",
@@ -139,6 +146,13 @@ final class AgentBridge: @unchecked Sendable {
         send(message)
     }
 
+    func requestOpenClawRuntimeReload() {
+        let message: [String: Any] = [
+            "type": "reload_openclaw_runtime"
+        ]
+        send(message)
+    }
+
     private func send(_ dict: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let string = String(data: data, encoding: .utf8) else { return }
@@ -166,6 +180,7 @@ final class AgentBridge: @unchecked Sendable {
     }
 
     private func sendTelegramConfigFromStores() {
+        guard legacyTelegramEnabled else { return }
         let token = (KeychainService.getString(forKey: SecretKeys.telegramBotToken) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let chatId = (UserDefaults.standard.string(forKey: "telegramChatId") ?? "")

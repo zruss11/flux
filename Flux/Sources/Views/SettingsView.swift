@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var pairingError: String?
     @State private var automationService = AutomationService.shared
     @State private var showAutomationsManager = false
+    private let legacyMessagingSettingsEnabled = ProcessInfo.processInfo.environment["FLUX_ENABLE_LEGACY_MESSAGING_SETTINGS"] == "1"
 
     var body: some View {
         Form {
@@ -69,78 +70,90 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Integrations") {
-                SecureField("Discord Bot Token", text: $discordBotToken)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: discordBotToken) {
-                        persistDiscordBotToken()
-                    }
+            if legacyMessagingSettingsEnabled {
+                Section("Legacy Integrations") {
+                    SecureField("Discord Bot Token", text: $discordBotToken)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: discordBotToken) {
+                            persistDiscordBotToken()
+                        }
 
-                TextField("Discord Channel ID", text: $discordChannelId)
-                    .textFieldStyle(.roundedBorder)
-                    .help(discordBotHelp)
+                    TextField("Discord Channel ID", text: $discordChannelId)
+                        .textFieldStyle(.roundedBorder)
+                        .help(discordBotHelp)
 
-                SecureField("Slack Bot Token", text: $slackBotToken)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: slackBotToken) {
-                        persistSlackBotToken()
-                    }
+                    SecureField("Slack Bot Token", text: $slackBotToken)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: slackBotToken) {
+                            persistSlackBotToken()
+                        }
 
-                TextField("Slack Channel ID", text: $slackChannelId)
-                    .textFieldStyle(.roundedBorder)
-                    .help(slackBotHelp)
+                    TextField("Slack Channel ID", text: $slackChannelId)
+                        .textFieldStyle(.roundedBorder)
+                        .help(slackBotHelp)
 
-                SecureField("Telegram Bot Token", text: $telegramBotToken)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: telegramBotToken) {
-                        persistTelegramBotToken()
-                    }
+                    SecureField("Telegram Bot Token", text: $telegramBotToken)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: telegramBotToken) {
+                            persistTelegramBotToken()
+                        }
 
-                TextField("Telegram Chat ID", text: $telegramChatId)
-                    .textFieldStyle(.roundedBorder)
-                    .help(telegramBotHelp)
-                    .onChange(of: telegramChatId) {
-                        notifyTelegramConfigChanged()
-                    }
-            }
+                    TextField("Telegram Chat ID", text: $telegramChatId)
+                        .textFieldStyle(.roundedBorder)
+                        .help(telegramBotHelp)
+                        .onChange(of: telegramChatId) {
+                            notifyTelegramConfigChanged()
+                        }
+                }
 
-            Section("Telegram Pairing") {
-                if telegramPending.isEmpty {
-                    Text("No pending pairing requests.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(telegramPending) { request in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(request.username.map { "@\($0)" } ?? "Chat \(request.chatId)")
-                                    .font(.subheadline)
-                                Text("Chat ID: \(request.chatId)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("Remove") {
-                                TelegramPairingStore.removePending(chatId: request.chatId)
-                                loadPendingPairings()
+                Section("Legacy Telegram Pairing") {
+                    if telegramPending.isEmpty {
+                        Text("No pending pairing requests.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(telegramPending) { request in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(request.username.map { "@\($0)" } ?? "Chat \(request.chatId)")
+                                        .font(.subheadline)
+                                    Text("Chat ID: \(request.chatId)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Remove") {
+                                    TelegramPairingStore.removePending(chatId: request.chatId)
+                                    loadPendingPairings()
+                                }
                             }
                         }
                     }
-                }
 
-                HStack {
-                    TextField("Pairing code", text: $telegramPairingCode)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Approve") {
-                        approveTelegramPairing()
+                    HStack {
+                        TextField("Pairing code", text: $telegramPairingCode)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Approve") {
+                            approveTelegramPairing()
+                        }
+                        .disabled(telegramPairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    .disabled(telegramPairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
 
-                if let pairingError {
-                    Text(pairingError)
+                    if let pairingError {
+                        Text(pairingError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            } else {
+                Section("Messaging (OpenClaw)") {
+                    Text("Flux now routes channel delivery through OpenClaw.")
+                    Text("Use tools: send_openclaw_message, openclaw_channels_list, and openclaw_status.")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.secondary)
+                    Text("Setup guide: docs/bot-setup.md")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -148,8 +161,10 @@ struct SettingsView: View {
         .frame(width: 450)
         .navigationTitle("Settings")
         .onAppear {
-            loadSecretsIfNeeded()
-            loadPendingPairings()
+            if legacyMessagingSettingsEnabled {
+                loadSecretsIfNeeded()
+                loadPendingPairings()
+            }
         }
         .sheet(isPresented: $showAutomationsManager) {
             AutomationsManagerView()

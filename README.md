@@ -9,7 +9,7 @@ A native macOS app with a Dynamic Island-style notch overlay powered by Claude a
 - 🖥️ **Screen-Aware AI** — Reads window contents via Accessibility API + captures screenshots via ScreenCaptureKit. No OCR, no guessing — actual structured data from any app.
 - 🎙️ **Voice Input** — Local speech-to-text with Parakeet MLX. No API key, no cloud, runs entirely on Apple Silicon.
 - 🔧 **Custom Tool Builder** — Create AI-powered tools that combine LLM prompts with Shortcuts, shell scripts, AppleScript, and custom instructions.
-- 💬 **Multi-Channel** — Connect Discord, Slack, Telegram, WhatsApp so your AI copilot reaches you anywhere.
+- 💬 **Multi-Channel** — Route Slack/Discord/Telegram/WhatsApp delivery through OpenClaw.
 - 🏝️ **Dynamic Island UI** — Notch-anchored overlay with Liquid Glass materials. Expands contextually, stays out of your way.
 - 🧠 **Claude Agent SDK** — Powered by Claude Sonnet with custom tools for screen capture, file ops, and automation.
 
@@ -102,9 +102,10 @@ Release assets include:
 
 ## Integrations
 
-Connect Flux to your messaging platforms so your AI copilot can reach you anywhere.
+Connect Flux to messaging platforms through OpenClaw so your AI copilot can reach you anywhere.
 
-- [Discord, Slack & Telegram Bot Setup Guide](docs/bot-setup.md)
+- [OpenClaw Messaging Setup Guide](docs/bot-setup.md)
+- The Node sidecar auto-starts OpenClaw by default while Flux is running (`FLUX_OPENCLAW_AUTOSTART=0` to disable).
 
 ## License
 

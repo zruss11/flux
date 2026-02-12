@@ -4,8 +4,9 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import { startBridge } from './bridge.js';
+import { startBridgeWithOptions } from './bridge.js';
 import { createLogger } from './logger.js';
+import { OpenClawRuntime } from './openclaw/runtime.js';
 
 const log = createLogger('sidecar');
 
@@ -15,6 +16,9 @@ const __dirname = path.dirname(__filename);
 const port = parseInt(process.env.WEBSOCKET_PORT || '7847', 10);
 
 let transcriberProcess: ChildProcess | null = null;
+const openClawRuntime = new OpenClawRuntime();
+let shuttingDown = false;
+let openClawReloadInFlight = false;
 
 const venvPython = path.join(os.homedir(), '.flux', 'transcriber-venv', 'bin', 'python3');
 const hfHome = process.env.HF_HOME || path.join(os.homedir(), '.flux', 'hf');
@@ -54,14 +58,55 @@ if (fs.existsSync(venvPython)) {
 }
 
 const shutdown = () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  const finish = () => {
+    process.exit(0);
+  };
+
   if (transcriberProcess) {
-    transcriberProcess.kill();
+    try {
+      transcriberProcess.kill();
+    } catch {
+      // ignore
+    }
     transcriberProcess = null;
   }
-  process.exit(0);
+
+  void openClawRuntime
+    .stop()
+    .catch((error) => {
+      log.warn(`failed to stop OpenClaw runtime: ${String(error)}`);
+    })
+    .finally(finish);
+
+  setTimeout(finish, 4000).unref();
 };
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-startBridge(port);
+void openClawRuntime.start().catch((error) => {
+  log.warn(`OpenClaw runtime failed to start: ${String(error)}`);
+});
+
+startBridgeWithOptions(port, {
+  onReloadOpenClawRuntime: () => {
+    if (openClawReloadInFlight) return;
+    openClawReloadInFlight = true;
+    log.info('Reloading OpenClaw runtime to apply channel/plugin changes...');
+    void openClawRuntime
+      .stop()
+      .catch((error) => {
+        log.warn(`Failed to stop OpenClaw during reload: ${String(error)}`);
+      })
+      .then(() => openClawRuntime.start())
+      .catch((error) => {
+        log.warn(`Failed to restart OpenClaw during reload: ${String(error)}`);
+      })
+      .finally(() => {
+        openClawReloadInFlight = false;
+      });
+  },
+});
