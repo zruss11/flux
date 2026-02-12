@@ -34,6 +34,7 @@
 | 2026-02-11 | me | Tried `npm run build` in `sidecar/` before dependencies were installed and hit `tsc: command not found`. | Run `npm install` in `sidecar/` first when validating TypeScript on a fresh workspace. |
 | 2026-02-11 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
 | 2026-02-12 | me | Ran `apply_patch` via `exec_command`, triggering a tool warning. | Use the dedicated `apply_patch` tool directly for patches. |
+| 2026-02-12 | me | Ran `ls .claude` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
 | 2026-02-11 | me | Ran `git diff` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
 | 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
 | 2026-02-12 | me | Mentioned napkin-reading activity in a user-facing progress update. | Keep napkin usage fully silent in commentary and apply it without announcing it. |

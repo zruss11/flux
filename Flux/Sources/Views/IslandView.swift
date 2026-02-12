@@ -839,6 +839,13 @@ struct IslandSettingsView: View {
     @State private var telegramPairingError: String?
     @State private var automationService = AutomationService.shared
     @State private var automationsExpanded = false
+    @State private var dictionaryStore = CustomDictionaryStore.shared
+    @State private var dictionaryExpanded = false
+    @State private var dictionaryEditorMode: DictionaryEditorMode?
+    @State private var pendingDeleteDictionaryEntry: DictionaryEntry?
+    @State private var dictEditorWord = ""
+    @State private var dictEditorAliases = ""
+    @State private var dictEditorDescription = ""
     @State private var automationEditorMode: InlineAutomationEditorMode?
     @State private var pendingDeleteAutomation: Automation?
     @State private var automationActionError: String?
@@ -871,6 +878,11 @@ struct IslandSettingsView: View {
     private enum InlineAutomationEditorMode: Equatable {
         case create
         case edit(String) // automation ID
+    }
+
+    private enum DictionaryEditorMode: Equatable {
+        case create
+        case edit(UUID)
     }
 
     private enum ScheduleFrequencyOption: String, CaseIterable, Identifiable {
@@ -1037,6 +1049,33 @@ struct IslandSettingsView: View {
                 )
                 .onTapGesture {
                     showAppInstructionsEditor = true
+                }
+
+                // Custom Dictionary (expandable)
+                settingsRow(
+                    icon: "character.book.closed",
+                    label: "Custom Dictionary",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 6) {
+                                Text("\(dictionaryStore.entries.count) words")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.5))
+                                Image(systemName: dictionaryExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                        )
+                    }
+                )
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        dictionaryExpanded.toggle()
+                    }
+                }
+
+                if dictionaryExpanded {
+                    dictionaryInlineSection
                 }
 
                 divider
@@ -1562,6 +1601,216 @@ struct IslandSettingsView: View {
         } message: {
             Text(pendingDeleteAutomation?.name ?? "")
         }
+    }
+
+    // MARK: - Custom Dictionary Inline Section
+
+    private var dictionaryInlineSection: some View {
+        VStack(spacing: 2) {
+            ForEach(dictionaryStore.entries) { entry in
+                dictionaryInlineCard(entry)
+            }
+
+            if dictionaryEditorMode != nil {
+                dictionaryInlineEditor
+            }
+
+            if dictionaryEditorMode == nil {
+                HStack(spacing: 0) {
+                    Button {
+                        startCreatingDictionaryEntry()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 12))
+                            Text("Add Word")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(.white.opacity(0.6))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(dictionaryStore.entries.count >= dictionaryStore.maxEntries)
+
+                    Spacer()
+
+                    Text("\(dictionaryStore.entries.count) / \(dictionaryStore.maxEntries)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .padding(.trailing, 12)
+                }
+            }
+        }
+        .confirmationDialog(
+            "Delete dictionary entry?",
+            isPresented: Binding(
+                get: { pendingDeleteDictionaryEntry != nil },
+                set: { if !$0 { pendingDeleteDictionaryEntry = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let pending = pendingDeleteDictionaryEntry else { return }
+                dictionaryStore.remove(id: pending.id)
+                pendingDeleteDictionaryEntry = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteDictionaryEntry = nil
+            }
+        } message: {
+            Text(pendingDeleteDictionaryEntry?.text ?? "")
+        }
+    }
+
+    private func dictionaryInlineCard(_ entry: DictionaryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(entry.text)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+
+                Spacer()
+
+                Button {
+                    startEditingDictionaryEntry(entry)
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    pendingDeleteDictionaryEntry = entry
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if !entry.aliases.isEmpty {
+                Text(entry.aliases.joined(separator: ", "))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+            }
+
+            if !entry.description.isEmpty {
+                Text(entry.description)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.04))
+        )
+        .padding(.horizontal, 8)
+    }
+
+    private var dictionaryInlineEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(dictionaryEditorMode == .create ? "Add Word" : "Edit Word")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+
+            TextField("Word or phrase (e.g. Kubernetes)", text: $dictEditorWord)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+
+            TextField("Spoken forms, comma-separated (e.g. kuber nettys, cube er netties)", text: $dictEditorAliases)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+
+            TextField("Description (optional)", text: $dictEditorDescription)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+
+            HStack(spacing: 8) {
+                Button("Save") {
+                    saveDictionaryEntry()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.blue)
+                .disabled(dictEditorWord.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                Button("Cancel") {
+                    dictionaryEditorMode = nil
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.5))
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.06))
+        )
+        .padding(.horizontal, 8)
+    }
+
+    private func startCreatingDictionaryEntry() {
+        dictEditorWord = ""
+        dictEditorAliases = ""
+        dictEditorDescription = ""
+        dictionaryEditorMode = .create
+    }
+
+    private func startEditingDictionaryEntry(_ entry: DictionaryEntry) {
+        dictEditorWord = entry.text
+        dictEditorAliases = entry.aliases.joined(separator: ", ")
+        dictEditorDescription = entry.description
+        dictionaryEditorMode = .edit(entry.id)
+    }
+
+    private func saveDictionaryEntry() {
+        let word = dictEditorWord.trimmingCharacters(in: .whitespaces)
+        guard !word.isEmpty else { return }
+
+        let aliases = dictEditorAliases
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let description = String(dictEditorDescription.prefix(30))
+
+        switch dictionaryEditorMode {
+        case .create:
+            let entry = DictionaryEntry(
+                text: word,
+                aliases: aliases,
+                description: description
+            )
+            dictionaryStore.add(entry)
+        case .edit(let id):
+            if var existing = dictionaryStore.entries.first(where: { $0.id == id }) {
+                existing.text = word
+                existing.aliases = aliases
+                existing.description = description
+                dictionaryStore.update(existing)
+            }
+        case nil:
+            break
+        }
+
+        dictionaryEditorMode = nil
     }
 
     private func automationInlineCard(_ automation: Automation) -> some View {

@@ -296,22 +296,27 @@ final class DictationManager {
         Task { @MainActor [weak self] in
             guard let self, self.isAttemptActive(attemptId) else { return }
 
+            // Apply custom dictionary corrections.
+            let correctedText = DictionaryCorrector.apply(cleanedText, using: CustomDictionaryStore.shared.entries)
+
             var enhancedText: String?
             var enhancementMethod: DictationEntry.EnhancementMethod = .none
 
             if enhancementModeRaw == "foundationModels" {
-                enhancedText = await self.enhanceWithFoundationModels(cleanedText, appContext: appContext)
+                enhancedText = await self.enhanceWithFoundationModels(correctedText, appContext: appContext)
                 if enhancedText != nil {
                     enhancementMethod = .foundationModels
                 }
             } else if enhancementModeRaw == "claude" {
-                enhancedText = await self.enhanceWithClaude(cleanedText, appContext: appContext)
+                enhancedText = await self.enhanceWithClaude(correctedText, appContext: appContext)
                 if enhancedText != nil {
                     enhancementMethod = .claude
                 }
             }
 
-            let finalText = enhancedText ?? cleanedText
+            let finalText = enhancedText ?? correctedText
+
+            // Determine the target application before inserting.
             let targetApp = self.accessibilityReader?.focusedFieldAppName()
 
             // Insert text into the focused field, or fall back to the pasteboard.
