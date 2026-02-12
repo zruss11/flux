@@ -2,60 +2,93 @@ import Foundation
 
 struct FillerWordCleaner {
 
+    // MARK: - Compiled Regular Expressions
+
+    private static let fillerPattern = try! NSRegularExpression(
+        pattern: #"\b(um|uh|uhh|umm|hmm|er|erm)\b,?\s*"#,
+        options: .caseInsensitive
+    )
+
+    private static let repeatedWordPattern = try! NSRegularExpression(
+        pattern: #"\b(\w+)\s+\1\b"#,
+        options: .caseInsensitive
+    )
+
+    private static let multipleSpacesPattern = try! NSRegularExpression(
+        pattern: #" {2,}"#,
+        options: .caseInsensitive
+    )
+
+    private static let orphanCommaPattern = try! NSRegularExpression(
+        pattern: #",\s*,"#,
+        options: .caseInsensitive
+    )
+
+    private static let periodCommaPattern = try! NSRegularExpression(
+        pattern: #"\.\s*,"#,
+        options: .caseInsensitive
+    )
+
+    private static let spaceBeforeCommaPattern = try! NSRegularExpression(
+        pattern: #"\s+,"#
+    )
+
+    private static let recapitalizePattern = try! NSRegularExpression(
+        pattern: #"\.\s+([a-z])"#
+    )
+
+    // MARK: - Public API
+
     static func clean(_ text: String) -> String {
         var result = text
 
         // Remove standalone filler words (with optional trailing comma)
-        result = applyPattern(#"\b(um|uh|uhh|umm|hmm|er|erm)\b,?\s*"#, in: result, with: " ")
+        result = apply(regex: fillerPattern, in: result, with: " ")
 
         // Collapse repeated words ("the the" -> "the")
-        result = applyPatternKeepingGroup(#"\b(\w+)\s+\1\b"#, in: result)
+        result = applyKeepingGroup(regex: repeatedWordPattern, in: result)
 
         // Collapse multiple spaces to single space
-        result = applyPattern(#" {2,}"#, in: result, with: " ")
+        result = apply(regex: multipleSpacesPattern, in: result, with: " ")
 
         // Fix orphan commas (", ," -> ",")
-        result = applyPattern(#",\s*,"#, in: result, with: ",")
+        result = apply(regex: orphanCommaPattern, in: result, with: ",")
+
+        // Normalize space before comma (" ," -> ",")
+        result = apply(regex: spaceBeforeCommaPattern, in: result, with: ",")
 
         // Trim commas after periods (". ," -> ".")
-        result = applyPattern(#"\.\s*,"#, in: result, with: ".")
+        result = apply(regex: periodCommaPattern, in: result, with: ".")
 
         // Re-capitalize first letter after periods
         result = recapitalizeAfterPeriods(result)
 
+        // Trim whitespace before capitalizing so leading spaces don't prevent capitalization
+        result = result.trimmingCharacters(in: .whitespaces)
+
         // Capitalize the very first letter
         result = capitalizeFirst(result)
 
-        return result.trimmingCharacters(in: .whitespaces)
+        return result
     }
 
-    // MARK: - Private
+    // MARK: - Private Helpers
 
-    private static func applyPattern(_ pattern: String, in text: String, with replacement: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
-            return text
-        }
+    private static func apply(regex: NSRegularExpression, in text: String, with replacement: String) -> String {
         let range = NSRange(text.startIndex..., in: text)
         return regex.stringByReplacingMatches(in: text, range: range, withTemplate: replacement)
     }
 
-    private static func applyPatternKeepingGroup(_ pattern: String, in text: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
-            return text
-        }
+    private static func applyKeepingGroup(regex: NSRegularExpression, in text: String) -> String {
         let range = NSRange(text.startIndex..., in: text)
         return regex.stringByReplacingMatches(in: text, range: range, withTemplate: "$1")
     }
 
     private static func recapitalizeAfterPeriods(_ text: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"\.\s+([a-z])"#) else {
-            return text
-        }
-        let nsText = text as NSString
-        let range = NSRange(location: 0, length: nsText.length)
+        let range = NSRange(location: 0, length: (text as NSString).length)
         var result = text
 
-        let matches = regex.matches(in: text, range: range).reversed()
+        let matches = recapitalizePattern.matches(in: text, range: range).reversed()
         for match in matches {
             guard match.numberOfRanges >= 2,
                   let letterRange = Range(match.range(at: 1), in: result),
