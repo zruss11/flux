@@ -3,6 +3,8 @@
 ## Corrections
 | Date | Source | What Went Wrong | What To Do Instead |
 |------|--------|----------------|-------------------|
+| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
+| 2026-02-12 | me | Ran `ls .claude` before reading `.claude/napkin.md` at session start (again). | Read the napkin before any other command in a new session. |
 | 2026-02-12 | me | Ran `git status` before reading `.claude/napkin.md` at session start. | Read the napkin first in each fresh session before any other command. |
 | 2026-02-12 | me | Mentioned loading internal skills in a user-facing status update. | Keep progress updates focused on technical work only; do not mention internal skill handling. |
 | 2026-02-12 | me | Referred to the napkin/skills workflow in a user-facing progress update again. | Keep user-facing updates purely technical and never mention internal skill bookkeeping. |
@@ -37,6 +39,7 @@
 | 2026-02-12 | me | Ran `ls .claude` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
 | 2026-02-11 | me | Ran `git diff` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
 | 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
+| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start (again). | Read the napkin before any other commands in a new session. |
 | 2026-02-12 | me | Mentioned napkin-reading activity in a user-facing progress update. | Keep napkin usage fully silent in commentary and apply it without announcing it. |
 | 2026-02-12 | me | Used `find -maxdepth` and hit `fd` alias behavior (`unexpected argument '-m'`) in this shell setup. | Use `command find` (or absolute `/usr/bin/find`) when POSIX `find` flags are required. |
 
@@ -80,3 +83,5 @@
 ## Domain Notes
 - (project/domain context that matters)
 - `read_ax_tree` is frontmost-window-only, so it can miss user-visible context outside Flux itself.
+
+| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start (again). | Read the napkin before any other command in a new session. |
