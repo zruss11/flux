@@ -498,7 +498,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
         case "read_clipboard_history":
-            let limit = min(intInput("limit") ?? 10, 10)
+            let rawLimit = intInput("limit") ?? 10
+            let limit = min(max(rawLimit, 0), 10)
             let entries = Array(ClipboardMonitor.shared.store.entries.prefix(limit))
             return encodeJSON(ClipboardHistoryResponse(ok: true, entries: entries))
 
