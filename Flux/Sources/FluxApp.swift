@@ -24,6 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let automationService = AutomationService.shared
     private let dictationManager = DictationManager.shared
     private let wakeWordDetector = WakeWordDetector.shared
+    private let voiceInput = VoiceInput()
 
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
@@ -97,7 +98,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         IslandWindowManager.shared.showIsland(
             conversationStore: conversationStore,
             agentBridge: agentBridge,
-            screenCapture: screenCapture
+            screenCapture: screenCapture,
+            voiceInput: voiceInput
         )
 
         dictationManager.start(accessibilityReader: accessibilityReader)
@@ -167,7 +169,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             IslandWindowManager.shared.showIsland(
                 conversationStore: conversationStore,
                 agentBridge: agentBridge,
-                screenCapture: screenCapture
+                screenCapture: screenCapture,
+                voiceInput: voiceInput
             )
         }
 
@@ -220,7 +223,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             IslandWindowManager.shared.showIsland(
                 conversationStore: conversationStore,
                 agentBridge: agentBridge,
-                screenCapture: screenCapture
+                screenCapture: screenCapture,
+                voiceInput: voiceInput
             )
         }
 
@@ -244,7 +248,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if IslandWindowManager.shared.isShown {
             IslandWindowManager.shared.hideIsland()
         } else {
-            IslandWindowManager.shared.showIsland(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture)
+            IslandWindowManager.shared.showIsland(
+                conversationStore: conversationStore,
+                agentBridge: agentBridge,
+                screenCapture: screenCapture,
+                voiceInput: voiceInput
+            )
         }
     }
 
@@ -272,7 +281,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startWakeWordDetector() {
-        let voiceInput = VoiceInput()
         wakeWordDetector.start(
             voiceInput: voiceInput,
             conversationStore: conversationStore,

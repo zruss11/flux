@@ -29,6 +29,7 @@ struct IslandView: View {
     @Bindable var conversationStore: ConversationStore
     @Bindable var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
+    var voiceInput: VoiceInput
     var notchSize: CGSize
     @ObservedObject var windowManager: IslandWindowManager
 
@@ -551,7 +552,12 @@ struct IslandView: View {
             Group {
                 switch contentType {
                 case .chat:
-                    ChatView(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture)
+                    ChatView(
+                        conversationStore: conversationStore,
+                        agentBridge: agentBridge,
+                        screenCapture: screenCapture,
+                        voiceInput: voiceInput
+                    )
                 case .settings:
                     IslandSettingsView(agentBridge: agentBridge)
                 case .history:

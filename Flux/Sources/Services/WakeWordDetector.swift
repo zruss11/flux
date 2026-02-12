@@ -101,6 +101,9 @@ final class WakeWordDetector {
     }
 
     func stop() {
+        if state == .recording {
+            voiceInput?.stopRecording()
+        }
         tearDownListening()
         tearDownRecording()
         state = .idle
@@ -126,6 +129,31 @@ final class WakeWordDetector {
     private func beginListening() {
         guard let speechRecognizer, speechRecognizer.isAvailable else {
             Log.wakeWord.error("SFSpeechRecognizer not available")
+            state = .idle
+            return
+        }
+
+        let authStatus = SFSpeechRecognizer.authorizationStatus()
+        switch authStatus {
+        case .authorized:
+            break
+        case .notDetermined:
+            state = .idle
+            SFSpeechRecognizer.requestAuthorization { [weak self] status in
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard self.voiceInput != nil else { return }
+                    if status == .authorized {
+                        self.beginListening()
+                    } else {
+                        Log.wakeWord.error("Speech recognition authorization denied")
+                        self.state = .idle
+                    }
+                }
+            }
+            return
+        default:
+            Log.wakeWord.error("Speech recognition authorization denied")
             state = .idle
             return
         }
@@ -313,6 +341,10 @@ final class WakeWordDetector {
     // MARK: - Processing Phase
 
     private func handleCommandTranscript(_ rawTranscript: String) {
+        guard state != .idle else {
+            Log.wakeWord.debug("Ignoring transcript because wake word is disabled")
+            return
+        }
         state = .processing
         tearDownRecording()
 
@@ -372,11 +404,12 @@ final class WakeWordDetector {
         )
 
         // Expand the island to show the conversation.
-        if !IslandWindowManager.shared.isShown {
+        if !IslandWindowManager.shared.isShown, let voiceInput {
             IslandWindowManager.shared.showIsland(
                 conversationStore: conversationStore,
                 agentBridge: agentBridge,
-                screenCapture: ScreenCapture()
+                screenCapture: ScreenCapture(),
+                voiceInput: voiceInput
             )
         }
         conversationStore.openConversation(id: conversationId)

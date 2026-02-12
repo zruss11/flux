@@ -23,8 +23,8 @@ struct ChatView: View {
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
+    @Bindable var voiceInput: VoiceInput
     @State private var inputText = ""
-    @State private var voiceInput = VoiceInput()
     @State private var showSkills = false
     @State private var dollarTriggerActive = false
     @State private var selectedSkillDirNames: Set<String> = []

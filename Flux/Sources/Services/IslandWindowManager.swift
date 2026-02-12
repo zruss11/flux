@@ -69,7 +69,12 @@ final class IslandWindowManager: ObservableObject {
         return CGSize(width: notchWidth, height: safeTop)
     }
 
-    func showIsland(conversationStore: ConversationStore, agentBridge: AgentBridge, screenCapture: ScreenCapture) {
+    func showIsland(
+        conversationStore: ConversationStore,
+        agentBridge: AgentBridge,
+        screenCapture: ScreenCapture,
+        voiceInput: VoiceInput
+    ) {
         guard panel == nil else { return }
         guard let screen = preferredNotchScreen() ?? NSScreen.main else { return }
         self.targetScreen = screen
@@ -125,6 +130,7 @@ final class IslandWindowManager: ObservableObject {
             conversationStore: conversationStore,
             agentBridge: agentBridge,
             screenCapture: screenCapture,
+            voiceInput: voiceInput,
             notchSize: nSize,
             windowManager: self
         )
