@@ -7,7 +7,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 MODEL_NAME = "nvidia/parakeet-ctc-0.6b"
 HOST = "127.0.0.1"
-PORT = 7848
+PORT = 7849
 
 # Keep model cache stable and avoid re-downloading across runs.
 os.environ.setdefault("HF_HOME", os.path.join(os.path.expanduser("~"), ".flux", "hf"))

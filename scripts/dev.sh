@@ -46,6 +46,16 @@ if lsof -nP -iTCP:7847 -sTCP:LISTEN >/dev/null 2>&1; then
   fi
 fi
 
+# Avoid EADDRINUSE if a previous transcriber is still running on port 7849.
+if lsof -nP -iTCP:7849 -sTCP:LISTEN >/dev/null 2>&1; then
+  tpid="$(lsof -nP -iTCP:7849 -sTCP:LISTEN -t | head -n1 || true)"
+  if [[ -n "${tpid}" ]]; then
+    echo "[dev] Port 7849 in use by previous transcriber (pid ${tpid}). Stopping it..."
+    kill "${tpid}" >/dev/null 2>&1 || true
+    sleep 0.3
+  fi
+fi
+
 # Auto-setup transcriber if venv doesn't exist or requirements changed
 TRANSCRIBER_VENV="${HOME}/.flux/transcriber-venv"
 NEEDS_SETUP=false

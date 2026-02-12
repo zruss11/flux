@@ -42,6 +42,11 @@ final class DictationManager {
     /// Work item used to debounce the key-down event before starting dictation.
     private var debounceWorkItem: DispatchWorkItem?
 
+    /// Set when `endDictation()` fires while the async `beginDictation` Task is
+    /// still awaiting permissions.  The Task checks this flag on resume and
+    /// tears down immediately.
+    private var pendingStop = false
+
     // MARK: - Init
 
     private init() {}
@@ -88,10 +93,12 @@ final class DictationManager {
 
         if bothPressed && !isModifierHeld {
             isModifierHeld = true
+            Log.voice.info("[Dictation] Cmd+Option DOWN — scheduling debounce")
 
             // Debounce: wait 80 ms before actually starting dictation to avoid
             // accidental triggers from fast modifier taps.
             let workItem = DispatchWorkItem { [weak self] in
+                Log.voice.info("[Dictation] Debounce fired — calling beginDictation")
                 self?.beginDictation()
             }
             debounceWorkItem = workItem
@@ -99,13 +106,17 @@ final class DictationManager {
 
         } else if !bothPressed && isModifierHeld {
             isModifierHeld = false
+            Log.voice.info("[Dictation] Cmd+Option UP — isDictating=\(self.isDictating)")
 
             // Cancel the debounce if the keys were released before it fired.
             debounceWorkItem?.cancel()
             debounceWorkItem = nil
 
             if isDictating {
+                Log.voice.info("[Dictation] Calling endDictation")
                 endDictation()
+            } else {
+                Log.voice.info("[Dictation] Keys released but isDictating=false, skipping endDictation")
             }
         }
     }
@@ -113,22 +124,47 @@ final class DictationManager {
     // MARK: - Begin / End Dictation
 
     private func beginDictation() {
-        guard !isDictating else { return }
+        guard !isDictating else {
+            Log.voice.info("[Dictation] beginDictation — already dictating, skipping")
+            return
+        }
+
+        Log.voice.info("[Dictation] beginDictation — starting")
 
         let input = VoiceInput()
         input.audioLevelMeter = audioLevelMeter
         self.voiceInput = input
 
+        // Set state synchronously so that endDictation() can always see it,
+        // even if the async Task below hasn't started yet.
+        isDictating = true
+        pendingStop = false
+        recordingStartTime = Date()
+        IslandWindowManager.shared.suppressDeactivationCollapse = true
+
         Task { @MainActor [weak self] in
             guard let self else { return }
 
+            Log.voice.info("[Dictation] beginDictation Task — awaiting mic permission")
             let permitted = await input.ensureMicrophonePermission()
-            guard permitted else { return }
+            Log.voice.info("[Dictation] beginDictation Task — mic permitted=\(permitted)")
+            guard permitted else {
+                self.isDictating = false
+                self.recordingStartTime = nil
+                IslandWindowManager.shared.suppressDeactivationCollapse = false
+                return
+            }
 
-            self.isDictating = true
-            self.recordingStartTime = Date()
-
-            IslandWindowManager.shared.suppressDeactivationCollapse = true
+            // If endDictation() was called while we were awaiting permission,
+            // tear down immediately instead of starting a recording no one
+            // will ever stop.
+            if self.pendingStop {
+                Log.voice.info("[Dictation] beginDictation Task — pendingStop=true, aborting")
+                self.isDictating = false
+                self.recordingStartTime = nil
+                IslandWindowManager.shared.suppressDeactivationCollapse = false
+                return
+            }
 
             // Poll audio levels at ~60 Hz to drive the in-notch waveform.
             self.levelPollTimer = Timer.scheduledTimer(
@@ -142,14 +178,25 @@ final class DictationManager {
                 }
             }
 
+            Log.voice.info("[Dictation] beginDictation Task — calling startRecording")
             await input.startRecording { [weak self] transcript in
+                Log.voice.info("[Dictation] transcript callback fired, length=\(transcript.count)")
                 self?.handleTranscript(transcript)
             }
+            Log.voice.info("[Dictation] beginDictation Task — startRecording returned")
         }
     }
 
     private func endDictation() {
-        guard isDictating else { return }
+        guard isDictating else {
+            Log.voice.info("[Dictation] endDictation — isDictating=false, skipping")
+            return
+        }
+
+        Log.voice.info("[Dictation] endDictation — stopping, voiceInput isRecording=\(self.voiceInput?.isRecording ?? false)")
+
+        // Signal any in-flight beginDictation Task to abort after its await.
+        pendingStop = true
         isDictating = false
 
         levelPollTimer?.invalidate()

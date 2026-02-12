@@ -92,7 +92,7 @@ final class VoiceInput {
 
     func checkTranscriberHealth() async {
         do {
-            let url = URL(string: "http://localhost:7848/health")!
+            let url = URL(string: "http://localhost:7849/health")!
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
             request.timeoutInterval = 3
@@ -110,7 +110,10 @@ final class VoiceInput {
     // MARK: - Recording
 
     func startRecording(onComplete: @escaping (String) -> Void) async {
-        guard !isRecording else { return }
+        guard !isRecording else {
+            Log.voice.info("[VoiceInput] startRecording — already recording, skipping")
+            return
+        }
 
         let permitted = await ensureMicrophonePermission()
         guard permitted else {
@@ -123,22 +126,31 @@ final class VoiceInput {
         if #available(macOS 26.0, *) {
             // Prefer Apple's new on-device live transcription when available.
             let speechPermitted = await ensureSpeechRecognitionPermission()
+            Log.voice.info("[VoiceInput] macOS 26+ — speechPermitted=\(speechPermitted)")
             if speechPermitted, await beginLiveRecording() {
+                Log.voice.info("[VoiceInput] Live recording started successfully")
                 return
             }
+            Log.voice.info("[VoiceInput] Live recording failed or not permitted, falling back to batch")
         }
 
+        Log.voice.info("[VoiceInput] Starting batch recording")
         beginBatchRecording()
     }
 
     func stopRecording() {
-        guard isRecording else { return }
+        guard isRecording else {
+            Log.voice.info("[VoiceInput] stopRecording — not recording, skipping")
+            return
+        }
 
         if #available(macOS 26.0, *), let session = liveSessionAny as? LiveSpeechSession {
+            Log.voice.info("[VoiceInput] stopRecording — stopping live session")
             stopLiveRecording(session: session)
             return
         }
 
+        Log.voice.info("[VoiceInput] stopRecording — stopping batch recording")
         audioEngine?.stop()
         if tapInstalled {
             audioEngine?.inputNode.removeTap(onBus: 0)
@@ -156,6 +168,7 @@ final class VoiceInput {
             return
         }
 
+        Log.voice.info("[VoiceInput] stopRecording — transcribing \(pcmData.count) bytes of audio")
         let callback = onComplete
         onComplete = nil
 
@@ -166,6 +179,7 @@ final class VoiceInput {
                 let transcribedText = try await self.transcribe(wavFile: wavURL)
                 try? FileManager.default.removeItem(at: wavURL)
 
+                Log.voice.info("[VoiceInput] Transcription result: \(transcribedText.prefix(100))")
                 self.transcript = transcribedText
                 if !transcribedText.isEmpty {
                     callback?(transcribedText)
@@ -423,7 +437,7 @@ final class VoiceInput {
     private func transcribe(wavFile: URL) async throws -> String {
         let wavData = try Data(contentsOf: wavFile)
 
-        var request = URLRequest(url: URL(string: "http://localhost:7848/transcribe")!)
+        var request = URLRequest(url: URL(string: "http://localhost:7849/transcribe")!)
         request.httpMethod = "POST"
         request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
         request.httpBody = wavData
