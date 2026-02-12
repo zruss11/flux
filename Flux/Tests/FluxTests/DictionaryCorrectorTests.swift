@@ -73,4 +73,24 @@ final class DictionaryCorrectorTests: XCTestCase {
         let input = "The quick brown fox jumps over the lazy dog."
         XCTAssertEqual(DictionaryCorrector.apply(input, using: entries), input)
     }
+
+    func testNonWordCharacterAliases() {
+        let entries = [
+            DictionaryEntry(text: "C++", aliases: ["c plus plus"]),
+            DictionaryEntry(text: ".NET", aliases: ["dot net"]),
+            DictionaryEntry(text: "C#", aliases: ["c sharp"]),
+        ]
+        let result = DictionaryCorrector.apply("I use c plus plus and dot net and c sharp", using: entries)
+        XCTAssertEqual(result, "I use C++ and .NET and C#")
+    }
+
+    func testNoCascadingRewrites() {
+        let entries = [
+            DictionaryEntry(text: "foo", aliases: ["bar"]),
+            DictionaryEntry(text: "baz", aliases: ["foo"]),
+        ]
+        // "bar" should become "foo", but "foo" should NOT then become "baz".
+        let result = DictionaryCorrector.apply("I said bar", using: entries)
+        XCTAssertEqual(result, "I said foo")
+    }
 }
