@@ -823,6 +823,7 @@ struct IslandSettingsView: View {
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
+    @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
     @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
 
@@ -958,6 +959,19 @@ struct IslandSettingsView: View {
                     trailing: {
                         AnyView(
                             Toggle("", isOn: $dictationAutoCleanFillers)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.mini)
+                        )
+                    }
+                )
+
+                settingsRow(
+                    icon: "speaker.wave.2",
+                    label: "Dictation sounds",
+                    trailing: {
+                        AnyView(
+                            Toggle("", isOn: $dictationSoundsEnabled)
                                 .toggleStyle(.switch)
                                 .labelsHidden()
                                 .controlSize(.mini)

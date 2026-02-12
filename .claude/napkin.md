@@ -12,6 +12,7 @@
 | 2026-02-12 | me | Switched hotkey dictation to batch Parakeet without first checking port allocation; transcriber and MCP bridge both targeted `127.0.0.1:7848`. | Before routing features to local services, verify runtime ports (`lsof` + repo defaults) and move conflicting services to dedicated ports. |
 | 2026-02-12 | me | Mentioned reading/using the napkin flow in a user-facing progress update. | Apply napkin silently; never reference it in commentary/final responses. |
 | 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
+| 2026-02-12 | me | Used Git pathspec-style exclude syntax in `rg` and got `No such file or directory` for `:(exclude).git`. | Use plain `rg` from repo root (or correct `--glob` excludes) instead of Git pathspec syntax. |
 | 2026-02-10 | me | Ran git commands despite an attached review brief saying the full diff/history was already provided. | When a review request includes the full diff/log, review directly from that artifact unless explicitly asked to re-run git commands. |
 | 2026-02-11 | me | Used `security find-identity` without limiting keychains in `scripts/dev.sh`, which can trigger repeated admin-password prompts for the System keychain. | Only search user keychains (for example via `security list-keychains -d user`) or require an explicit `FLUX_CODESIGN_IDENTITY`. |
 | 2026-02-11 | me | Used Bash 4-only `mapfile` in a script that may run under macOS's default Bash 3.2. | Use a `while IFS= read -r ...` loop (Bash 3.2-compatible) or explicitly depend on a newer Bash. |
@@ -31,7 +32,10 @@
 | 2026-02-11 | me | Added block-based NotificationCenter observer on a `@MainActor` app delegate and hit Swift 6 Sendable/data-race compiler errors. | Prefer selector-based observers (or main-actor isolated async hops) when notification payloads would otherwise cross actor boundaries unsafely. |
 | 2026-02-11 | me | Mentioned using the napkin skill in a user-facing progress update. | Keep napkin usage silent; apply it without announcing the skill. |
 | 2026-02-11 | me | Tried `npm run build` in `sidecar/` before dependencies were installed and hit `tsc: command not found`. | Run `npm install` in `sidecar/` first when validating TypeScript on a fresh workspace. |
-| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
+| 2026-02-11 | me | Ran `git diff` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
+| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
+| 2026-02-12 | me | Mentioned napkin-reading activity in a user-facing progress update. | Keep napkin usage fully silent in commentary and apply it without announcing it. |
+| 2026-02-12 | me | Used `find -maxdepth` and hit `fd` alias behavior (`unexpected argument '-m'`) in this shell setup. | Use `command find` (or absolute `/usr/bin/find`) when POSIX `find` flags are required. |
 
 ## User Preferences
 - (accumulate here as you learn them)
@@ -64,6 +68,8 @@
 - For modifier hold gestures on background apps, add an independent `DispatchSourceTimer` polling `CGEventSource.flagsState(.combinedSessionState)` to drive press/release transitions; AppKit monitor callbacks alone can miss state changes.
 - For hold-to-dictate while Flux is backgrounded, prefer batch on-device Apple Speech transcription mode over live `SpeechTranscriber`; live speech results can be unreliable when the app is not frontmost.
 - In sidecar session maps, tie idle timers to actual eviction (not just ending streams) and clean up related Telegram/pending-tool state so long-lived processes do not leak memory.
+- In `scripts/dev.sh`, copying only the executable into `Flux Dev.app` causes `Bundle.module` startup crashes; copy SwiftPM `*.bundle` resource directories from `Build/Products/Debug` into `Contents/Resources` as part of app install/update.
+- Flux sidecar transcriber startup should check `http://127.0.0.1:7848/health` first and reuse existing listeners; otherwise stale/orphan listeners can trigger noisy `Errno 48` failures on launch.
 
 ## Patterns That Don't Work
 - (approaches that failed and why)

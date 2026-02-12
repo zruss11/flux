@@ -166,6 +166,7 @@ final class DictationManager {
 
             self.isDictating = true
             self.recordingStartTime = Date()
+            AudioFeedbackService.shared.play(.dictationStart)
 
             IslandWindowManager.shared.suppressDeactivationCollapse = true
 
@@ -256,6 +257,7 @@ final class DictationManager {
 
         Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] stopping recorder")
         // Stop recording; transcript/failure arrives via callbacks.
+        AudioFeedbackService.shared.play(.dictationStop)
         voiceInput?.stopRecording()
     }
 
@@ -312,6 +314,8 @@ final class DictationManager {
             } else {
                 Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] inserted into focused field")
             }
+
+            AudioFeedbackService.shared.play(.dictationSuccess)
 
             // Persist the entry in history.
             let entry = DictationEntry(
