@@ -34,6 +34,8 @@
 | 2026-02-11 | me | Tried `npm run build` in `sidecar/` before dependencies were installed and hit `tsc: command not found`. | Run `npm install` in `sidecar/` first when validating TypeScript on a fresh workspace. |
 | 2026-02-11 | me | Ran `git diff` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
 | 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
+| 2026-02-12 | me | Mentioned napkin-reading activity in a user-facing progress update. | Keep napkin usage fully silent in commentary and apply it without announcing it. |
+| 2026-02-12 | me | Used `find -maxdepth` and hit `fd` alias behavior (`unexpected argument '-m'`) in this shell setup. | Use `command find` (or absolute `/usr/bin/find`) when POSIX `find` flags are required. |
 
 ## User Preferences
 - (accumulate here as you learn them)
@@ -66,6 +68,8 @@
 - For modifier hold gestures on background apps, add an independent `DispatchSourceTimer` polling `CGEventSource.flagsState(.combinedSessionState)` to drive press/release transitions; AppKit monitor callbacks alone can miss state changes.
 - For hold-to-dictate while Flux is backgrounded, prefer batch on-device Apple Speech transcription mode over live `SpeechTranscriber`; live speech results can be unreliable when the app is not frontmost.
 - In sidecar session maps, tie idle timers to actual eviction (not just ending streams) and clean up related Telegram/pending-tool state so long-lived processes do not leak memory.
+- In `scripts/dev.sh`, copying only the executable into `Flux Dev.app` causes `Bundle.module` startup crashes; copy SwiftPM `*.bundle` resource directories from `Build/Products/Debug` into `Contents/Resources` as part of app install/update.
+- Flux sidecar transcriber startup should check `http://127.0.0.1:7848/health` first and reuse existing listeners; otherwise stale/orphan listeners can trigger noisy `Errno 48` failures on launch.
 
 ## Patterns That Don't Work
 - (approaches that failed and why)
