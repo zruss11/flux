@@ -648,6 +648,8 @@ Important guidelines:
 - For straightforward requests that don't require screen information, proceed directly with the appropriate action`;
 
   // Inject live app context so the agent knows what the user is working in.
+  // NOTE: This prompt is built once at session start. If the user switches apps
+  // mid-conversation, the context won't update until the next query session.
   if (lastActiveApp) {
     prompt += `\n\nThe user is currently using: ${lastActiveApp.appName} (${lastActiveApp.bundleId}).`;
     prompt += '\nTailor your responses to the context of this application when relevant.';

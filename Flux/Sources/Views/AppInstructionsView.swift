@@ -96,7 +96,6 @@ struct AppInstructionsView: View {
                 .padding(4)
             }
         }
-        .padding()
         .onAppear { reload() }
     }
 

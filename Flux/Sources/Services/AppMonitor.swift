@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import os
 
 /// Monitors the frontmost application and emits updates when the active app changes.
@@ -6,6 +7,7 @@ import os
 /// Observes `NSWorkspace.didActivateApplicationNotification` and debounces rapid
 /// app switches (200ms). On each change the `onActiveAppChanged` closure fires with
 /// app name, bundle identifier, and PID.
+@Observable
 @MainActor
 final class AppMonitor {
     static let shared = AppMonitor()
@@ -47,9 +49,11 @@ final class AppMonitor {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard let self,
-                  let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-            self.scheduleUpdate(for: app)
+            MainActor.assumeIsolated {
+                guard let self,
+                      let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+                self.scheduleUpdate(for: app)
+            }
         }
     }
 

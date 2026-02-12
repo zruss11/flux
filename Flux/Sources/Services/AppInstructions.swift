@@ -87,8 +87,11 @@ final class AppInstructions {
     }
 
     private func save() {
-        if let data = try? JSONEncoder().encode(instructions) {
+        do {
+            let data = try JSONEncoder().encode(instructions)
             UserDefaults.standard.set(data, forKey: Self.storageKey)
+        } catch {
+            Log.appMonitor.error("Failed to save app instructions: \(error)")
         }
         NotificationCenter.default.post(name: .appInstructionsDidChange, object: nil)
     }
