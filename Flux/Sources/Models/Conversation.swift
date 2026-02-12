@@ -51,6 +51,8 @@ final class ConversationStore {
     }
     var activeWorktreeBranch: String?
     private var runningConversationIds: Set<UUID> = []
+    private(set) var scrollRevision: Int = 0
+    private(set) var lastScrollConversationId: UUID?
 
     // MARK: - Persistence Paths
 
@@ -142,9 +144,14 @@ final class ConversationStore {
         return conversation
     }
 
-    func addMessage(to conversationId: UUID, role: Message.Role, content: String) {
+    func addMessage(
+        to conversationId: UUID,
+        role: Message.Role,
+        content: String,
+        imageAttachments: [MessageImageAttachment] = []
+    ) {
         guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
-        let message = Message(role: role, content: content)
+        let message = Message(role: role, content: content, imageAttachments: imageAttachments)
         conversations[index].messages.append(message)
 
         // Update summary
@@ -176,6 +183,8 @@ final class ConversationStore {
 
         saveConversation(conversations[index])
         saveIndex()
+        lastScrollConversationId = conversationId
+        scrollRevision &+= 1
     }
 
     func updateLastAssistantMessage(in conversationId: UUID, content: String) {
@@ -190,6 +199,8 @@ final class ConversationStore {
               let lastIndex = conversations[index].messages.lastIndex(where: { $0.role == .assistant }) else { return }
         conversations[index].messages[lastIndex].content.append(chunk)
         debouncedSave(conversations[index])
+        lastScrollConversationId = conversationId
+        scrollRevision &+= 1
     }
 
     // MARK: - Tool Call Tracking
@@ -205,6 +216,8 @@ final class ConversationStore {
             message.toolCalls.append(info)
             conversations[index].messages.append(message)
         }
+        lastScrollConversationId = conversationId
+        scrollRevision &+= 1
     }
 
     func completeToolCall(in conversationId: UUID, toolUseId: String, resultPreview: String?) {
@@ -215,6 +228,8 @@ final class ConversationStore {
                 conversations[convIndex].messages[msgIndex].toolCalls[tcIndex].status = .complete
                 conversations[convIndex].messages[msgIndex].toolCalls[tcIndex].resultPreview = resultPreview
                 saveConversation(conversations[convIndex])
+                lastScrollConversationId = conversationId
+                scrollRevision &+= 1
                 return
             }
         }
@@ -471,20 +486,72 @@ struct Message: Identifiable, Codable {
     let id: UUID
     var role: Role
     var content: String
+    var imageAttachments: [MessageImageAttachment]
     var toolCalls: [ToolCallInfo]
     let timestamp: Date
 
-    init(id: UUID = UUID(), role: Role, content: String, toolCalls: [ToolCallInfo] = [], timestamp: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        content: String,
+        imageAttachments: [MessageImageAttachment] = [],
+        toolCalls: [ToolCallInfo] = [],
+        timestamp: Date = Date()
+    ) {
         self.id = id
         self.role = role
         self.content = content
+        self.imageAttachments = imageAttachments
         self.toolCalls = toolCalls
         self.timestamp = timestamp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case role
+        case content
+        case imageAttachments
+        case toolCalls
+        case timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        role = try container.decode(Role.self, forKey: .role)
+        content = try container.decode(String.self, forKey: .content)
+        imageAttachments = try container.decodeIfPresent([MessageImageAttachment].self, forKey: .imageAttachments) ?? []
+        toolCalls = try container.decodeIfPresent([ToolCallInfo].self, forKey: .toolCalls) ?? []
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(role, forKey: .role)
+        try container.encode(content, forKey: .content)
+        try container.encode(imageAttachments, forKey: .imageAttachments)
+        try container.encode(toolCalls, forKey: .toolCalls)
+        try container.encode(timestamp, forKey: .timestamp)
     }
 
     enum Role: String, Codable, Sendable {
         case user
         case assistant
         case system
+    }
+}
+
+struct MessageImageAttachment: Identifiable, Codable, Hashable, Sendable {
+    let id: UUID
+    let fileName: String
+    let mediaType: String
+    let base64Data: String
+
+    init(id: UUID = UUID(), fileName: String, mediaType: String, base64Data: String) {
+        self.id = id
+        self.fileName = fileName
+        self.mediaType = mediaType
+        self.base64Data = base64Data
     }
 }
