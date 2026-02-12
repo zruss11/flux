@@ -77,12 +77,29 @@ final class AppMonitor {
     }
 
     private func scheduleUpdate(for app: NSRunningApplication) {
+        if isFluxApp(app) {
+            clearActiveAppForFlux()
+            return
+        }
         debounceItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             self?.setActiveApp(from: app)
         }
         debounceItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + debounceInterval, execute: item)
+    }
+
+    private func isFluxApp(_ app: NSRunningApplication) -> Bool {
+        app.bundleIdentifier == Bundle.main.bundleIdentifier
+    }
+
+    private func clearActiveAppForFlux() {
+        debounceItem?.cancel()
+        debounceItem = nil
+        if currentApp != nil {
+            Log.appMonitor.info("Flux activated; clearing active app state")
+        }
+        currentApp = nil
     }
 
     private func setActiveApp(from app: NSRunningApplication) {
@@ -95,7 +112,7 @@ final class AppMonitor {
         // Clear tracked app when Flux activates so that returning to the same
         // app (A → Flux → A) always re-fires the callback with fresh data.
         if bundleId == Bundle.main.bundleIdentifier {
-            currentApp = nil
+            clearActiveAppForFlux()
             return
         }
 

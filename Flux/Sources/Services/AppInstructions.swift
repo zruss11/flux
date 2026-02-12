@@ -90,9 +90,9 @@ final class AppInstructions {
         do {
             let data = try JSONEncoder().encode(instructions)
             UserDefaults.standard.set(data, forKey: Self.storageKey)
+            NotificationCenter.default.post(name: .appInstructionsDidChange, object: nil)
         } catch {
             Log.appMonitor.error("Failed to save app instructions: \(error)")
         }
-        NotificationCenter.default.post(name: .appInstructionsDidChange, object: nil)
     }
 }

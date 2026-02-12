@@ -657,6 +657,9 @@ Important guidelines:
   if (lastActiveApp) {
     prompt += `\n\nThe user is currently using: ${lastActiveApp.appName} (${lastActiveApp.bundleId}).`;
     prompt += '\nTailor your responses to the context of this application when relevant.';
+    if (lastActiveApp.appInstruction) {
+      prompt += `\n\nApp-specific instructions:\n${lastActiveApp.appInstruction}`;
+    }
   }
 
   return prompt;

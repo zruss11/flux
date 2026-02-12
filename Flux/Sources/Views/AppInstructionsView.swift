@@ -50,13 +50,11 @@ struct AppInstructionsView: View {
                 if selectedApp != nil || isPickingApp {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
+                            let wasEditingApp = selectedApp != nil
                             selectedApp = nil
                             draftInstruction = ""
                             editingInstructionId = nil
-                            if selectedApp == nil {
-                                isPickingApp = false
-                            }
-                            isPickingApp = selectedApp != nil
+                            isPickingApp = wasEditingApp
                         }
                     } label: {
                         HStack(spacing: 4) {
