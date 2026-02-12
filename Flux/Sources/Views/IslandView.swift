@@ -199,7 +199,9 @@ struct IslandView: View {
                 .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
                 .padding(.top, hasNotch ? 0 : windowManager.topOffset)
 
-            // Clipboard notification that drops below the island
+            let notificationBaseOffset = currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset)
+
+            // Clipboard notification that drops below the island.
             if windowManager.showingClipboardNotification {
                 ClipboardNotificationView()
                     .transition(
@@ -208,11 +210,24 @@ struct IslandView: View {
                             removal: .opacity
                         )
                     )
-                    .offset(y: currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset))
+                    .offset(y: notificationBaseOffset)
+            }
+
+            // Dictation failure notification shown below clipboard notification.
+            if windowManager.showingDictationNotification {
+                DictationNotificationView(message: windowManager.dictationNotificationMessage)
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity
+                        )
+                    )
+                    .offset(y: notificationBaseOffset + (windowManager.showingClipboardNotification ? 44 : 0))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingClipboardNotification)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingDictationNotification)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 clearClosedIndicatorsWorkItem?.cancel()
@@ -656,6 +671,34 @@ private struct ClipboardNotificationView: View {
         .overlay(
             Capsule()
                 .stroke(.white.opacity(0.15), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
+    }
+}
+
+private struct DictationNotificationView: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.bubble.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.red.opacity(0.9))
+
+            Text(message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            Capsule()
+                .fill(.black)
+        )
+        .overlay(
+            Capsule()
+                .stroke(.red.opacity(0.35), lineWidth: 0.8)
         )
         .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
     }
