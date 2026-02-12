@@ -189,8 +189,10 @@ final class ScreenCapture {
     }
 
     private func windowFrameToScreenCoords(_ windowFrame: CGRect) -> CGRect {
-        guard let mainScreen = NSScreen.screens.first else { return windowFrame }
-        let screenHeight = mainScreen.frame.height
+        let screen = NSScreen.screens.first(where: { $0.frame.intersects(windowFrame) })
+            ?? NSScreen.screens.first
+        guard let screen else { return windowFrame }
+        let screenHeight = screen.frame.height
         return CGRect(
             x: windowFrame.origin.x,
             y: screenHeight - windowFrame.origin.y - windowFrame.height,
