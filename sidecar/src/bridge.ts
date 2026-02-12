@@ -595,6 +595,10 @@ You have access to the following tools:
 - mcp__flux__capture_screen: Captures a visual screenshot of the screen
 - mcp__flux__read_selected_text: Reads currently selected text
 
+**Session Context Tools** (use these to understand what the user was recently doing across their desktop):
+- mcp__flux__read_session_history: Read which apps/windows the user recently visited (with timestamps)
+- mcp__flux__get_session_context_summary: Get a human-readable text summary of recent app activity
+
 **Action Tools** (use these to perform tasks on behalf of the user):
 - mcp__flux__execute_applescript: Execute AppleScript commands
 - mcp__flux__run_shell_command: Run shell commands
