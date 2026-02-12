@@ -51,6 +51,12 @@ final class SessionHistoryStore {
         save()
     }
 
+    func flush() {
+        saveTimer?.invalidate()
+        saveTimer = nil
+        save()
+    }
+
     // MARK: - Persistence
 
     private func load() {

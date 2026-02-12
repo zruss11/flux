@@ -47,6 +47,7 @@ final class SessionContextManager {
     func stop() {
         // Complete current session before stopping
         completeCurrentSession()
+        historyStore.flush()
 
         if let observer = workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
@@ -60,11 +61,11 @@ final class SessionContextManager {
         let appName = app.localizedName ?? "Unknown"
         let bundleId = app.bundleIdentifier
 
-        // Skip Flux itself
-        guard bundleId != fluxBundleId else { return }
-
         // Complete previous session
         completeCurrentSession()
+
+        // Skip Flux itself
+        guard bundleId != fluxBundleId else { return }
 
         // Read window title via lightweight AX call
         let pid = app.processIdentifier
