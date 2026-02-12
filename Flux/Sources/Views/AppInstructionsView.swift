@@ -107,6 +107,7 @@ struct AppInstructionsView: View {
         let bundleId = draftBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
         let appName = draftAppName.trimmingCharacters(in: .whitespacesAndNewlines)
         let instruction = draftInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bundleId.isEmpty, !instruction.isEmpty else { return }
         let name = appName.isEmpty ? bundleId : appName
         AppInstructions.shared.upsert(
             .init(bundleId: bundleId, appName: name, instruction: instruction)

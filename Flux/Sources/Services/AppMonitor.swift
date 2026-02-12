@@ -31,7 +31,6 @@ final class AppMonitor {
     private var debounceItem: DispatchWorkItem?
     private let debounceInterval: TimeInterval = 0.2
     private var observer: NSObjectProtocol?
-    private var lastActivationWasFlux = false
 
     private init() {}
 
@@ -85,15 +84,15 @@ final class AppMonitor {
 
         let newApp = ActiveApp(appName: appName, bundleId: bundleId, pid: pid)
 
-        // Ignore our own app activations — don't report Flux as the active app.
+        // Clear tracked app when Flux activates so that returning to the same
+        // app (A → Flux → A) always re-fires the callback with fresh data.
         if bundleId == Bundle.main.bundleIdentifier {
-            lastActivationWasFlux = true
+            currentApp = nil
             return
         }
 
-        // Skip if unchanged, unless we just activated Flux in between.
-        if newApp == currentApp && !lastActivationWasFlux { return }
-        lastActivationWasFlux = false
+        // Skip if unchanged.
+        if newApp == currentApp { return }
 
         currentApp = newApp
 

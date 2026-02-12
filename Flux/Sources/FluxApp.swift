@@ -113,7 +113,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self, let activeApp = AppMonitor.shared.currentApp else { return }
+            guard let self else { return }
+            let activeApp = AppMonitor.shared.currentApp ?? AppMonitor.shared.recentApps.first
+            guard let activeApp else { return }
             let instruction = AppInstructions.shared.instruction(forBundleId: activeApp.bundleId)
             self.agentBridge.sendActiveAppUpdate(
                 appName: activeApp.appName,

@@ -257,7 +257,6 @@ export function startBridge(port: number): void {
 
       // Fail any pending tool calls waiting on Swift.
       flushPendingToolCalls('Flux is offline. Open the app to reconnect.');
-      lastActiveApp = null;
     });
 
     ws.on('error', (error) => {
