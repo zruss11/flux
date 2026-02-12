@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage("telegramChatId") private var telegramChatId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
+    @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
@@ -67,6 +68,13 @@ struct SettingsView: View {
                 Button("Manage Automations") {
                     showAutomationsManager = true
                 }
+            }
+
+            Section("Desktop Activity") {
+                Toggle("Capture in-app context", isOn: $inAppContextTrackingEnabled)
+                Text("When enabled, Flux stores lightweight focused-window context for recent app sessions.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Integrations") {
