@@ -108,7 +108,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         IslandWindowManager.shared.showIsland(
             conversationStore: conversationStore,
-            agentBridge: agentBridge
+            agentBridge: agentBridge,
+            screenCapture: screenCapture
         )
 
         dictationManager.start(accessibilityReader: accessibilityReader)
@@ -171,7 +172,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !islandWasShown {
             IslandWindowManager.shared.showIsland(
                 conversationStore: conversationStore,
-                agentBridge: agentBridge
+                agentBridge: agentBridge,
+                screenCapture: screenCapture
             )
         }
 
@@ -223,7 +225,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !islandWasShown {
             IslandWindowManager.shared.showIsland(
                 conversationStore: conversationStore,
-                agentBridge: agentBridge
+                agentBridge: agentBridge,
+                screenCapture: screenCapture
             )
         }
 
@@ -247,7 +250,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if IslandWindowManager.shared.isShown {
             IslandWindowManager.shared.hideIsland()
         } else {
-            IslandWindowManager.shared.showIsland(conversationStore: conversationStore, agentBridge: agentBridge)
+            IslandWindowManager.shared.showIsland(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture)
         }
     }
 

@@ -28,6 +28,7 @@ enum IslandContentType: Equatable {
 struct IslandView: View {
     @Bindable var conversationStore: ConversationStore
     @Bindable var agentBridge: AgentBridge
+    var screenCapture: ScreenCapture
     var notchSize: CGSize
     @ObservedObject var windowManager: IslandWindowManager
 
@@ -546,7 +547,7 @@ struct IslandView: View {
             Group {
                 switch contentType {
                 case .chat:
-                    ChatView(conversationStore: conversationStore, agentBridge: agentBridge)
+                    ChatView(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture)
                 case .settings:
                     IslandSettingsView(agentBridge: agentBridge)
                 case .history:

@@ -22,6 +22,7 @@ struct SkillsVisibleKey: PreferenceKey {
 struct ChatView: View {
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
+    var screenCapture: ScreenCapture
     @State private var inputText = ""
     @State private var voiceInput = VoiceInput()
     @State private var showSkills = false
@@ -35,6 +36,8 @@ struct ChatView: View {
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
 
     private let maxAttachmentBytes = 10 * 1024 * 1024
+
+    private let shareScreenFileName = "__flux_screenshot.jpg"
 
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImageAttachments.isEmpty
@@ -245,6 +248,47 @@ struct ChatView: View {
                 .buttonStyle(.plain)
 
                 SkillsPillButton(isPresented: $showSkills)
+
+                Button {
+                    Task {
+                        let hasScreenshot = pendingImageAttachments.contains { $0.fileName == shareScreenFileName }
+                        if hasScreenshot {
+                            pendingImageAttachments.removeAll { $0.fileName == shareScreenFileName }
+                        } else {
+                            if let base64 = await screenCapture.captureMainDisplay() {
+                                let attachment = MessageImageAttachment(
+                                    fileName: shareScreenFileName,
+                                    mediaType: "image/jpeg",
+                                    base64Data: base64
+                                )
+                                pendingImageAttachments.append(attachment)
+                            }
+                        }
+                    }
+                } label: {
+                    let isActive = pendingImageAttachments.contains { $0.fileName == shareScreenFileName }
+                    HStack(spacing: 4) {
+                        Image(systemName: "display")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(isActive ? 0.9 : 0.6))
+                        Text("Share Screen")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(isActive ? 0.9 : 0.6))
+                            .lineLimit(1)
+                    }
+                    .fixedSize()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(isActive ? 0.15 : 0.06))
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(Color.white.opacity(isActive ? 0.2 : 0.1), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
             }
             .padding(.top, 8)
             .padding(.bottom, 12)
