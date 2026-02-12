@@ -148,6 +148,66 @@ final class AccessibilityReader {
         return true
     }
 
+    /// A snapshot of the currently focused AX element, captured before async work
+    /// so that replacement targets the correct element even if focus changes.
+    struct CapturedFocusedElement {
+        let element: AXUIElement
+        let appPID: pid_t?
+    }
+
+    /// Captures the currently focused UI element for later use.
+    func captureFocusedElement() -> CapturedFocusedElement? {
+        guard AXIsProcessTrusted() else { return nil }
+        let systemWide = AXUIElementCreateSystemWide()
+
+        var focusedElement: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedElement)
+        guard result == .success, let element = focusedElement else { return nil }
+        guard CFGetTypeID(element) == AXUIElementGetTypeID() else { return nil }
+
+        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        return CapturedFocusedElement(element: element as! AXUIElement, appPID: pid)
+    }
+
+    /// Replaces the selected text in a previously captured element.
+    func replaceSelectedText(_ text: String, in captured: CapturedFocusedElement) -> Bool {
+        let axElement = captured.element
+
+        // Attempt 1: Set via kAXSelectedTextAttribute (replaces only the selection)
+        let selectedResult = AXUIElementSetAttributeValue(axElement, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
+        if selectedResult == .success {
+            return true
+        }
+
+        // Attempt 2: Pasteboard fallback — re-activate the target app first
+        if let pid = captured.appPID,
+           let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate()
+        }
+
+        let savedPasteboard = NSPasteboard.general.string(forType: .string)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+
+        let source = CGEventSource(stateID: .hidSystemState)
+        let vKeyCode: CGKeyCode = 9
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true)
+        keyDown?.flags = .maskCommand
+        keyDown?.post(tap: .cghidEventTap)
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false)
+        keyUp?.flags = .maskCommand
+        keyUp?.post(tap: .cghidEventTap)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            if let original = savedPasteboard {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(original, forType: .string)
+            }
+        }
+
+        return true
+    }
+
     func focusedFieldAppName() -> String? {
         NSWorkspace.shared.frontmostApplication?.localizedName
     }
