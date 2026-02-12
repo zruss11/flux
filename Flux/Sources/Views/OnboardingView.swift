@@ -146,7 +146,9 @@ struct OnboardingView: View {
         let appURL = Bundle.main.bundleURL
         let config = NSWorkspace.OpenConfiguration()
         NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in
-            NSApp.terminate(nil)
+            Task { @MainActor in
+                NSApp.terminate(nil)
+            }
         }
     }
 }

@@ -8,7 +8,11 @@ struct FluxApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView()
+            EmptyView()
+        }
+        .commands {
+            // Settings now live entirely inside IslandView.
+            CommandGroup(replacing: .appSettings) { }
         }
     }
 }
@@ -28,6 +32,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
     private var functionKeyMonitor: EventMonitor?
+    private var appInstructionsObserver: NSObjectProtocol?
     private var isFunctionKeyPressed = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -94,6 +99,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         agentBridge.connect()
 
+        // Start monitoring frontmost app changes and forward to sidecar.
+        let appMonitor = AppMonitor.shared
+        appMonitor.onActiveAppChanged = { [weak self] activeApp in
+            let instruction = AppInstructions.shared.instruction(forBundleId: activeApp.bundleId)
+            self?.agentBridge.sendActiveAppUpdate(
+                appName: activeApp.appName,
+                bundleId: activeApp.bundleId,
+                pid: activeApp.pid,
+                appInstruction: instruction?.instruction
+            )
+        }
+        appMonitor.start()
+
+        // If per-app instructions change while Flux is active, immediately resend the current app context.
+        appInstructionsObserver = NotificationCenter.default.addObserver(
+            forName: .appInstructionsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            let activeApp = AppMonitor.shared.currentApp ?? AppMonitor.shared.recentApps.first
+            guard let activeApp else { return }
+            let instruction = AppInstructions.shared.instruction(forBundleId: activeApp.bundleId)
+            self.agentBridge.sendActiveAppUpdate(
+                appName: activeApp.appName,
+                bundleId: activeApp.bundleId,
+                pid: activeApp.pid,
+                appInstruction: instruction?.instruction
+            )
+        }
+
         IslandWindowManager.shared.showIsland(
             conversationStore: conversationStore,
             agentBridge: agentBridge,
@@ -117,7 +153,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Log.app.info("Flux terminating")
         functionKeyMonitor?.stop()
         functionKeyMonitor = nil
+        if let appInstructionsObserver {
+            NotificationCenter.default.removeObserver(appInstructionsObserver)
+        }
+        appInstructionsObserver = nil
         dictationManager.stop()
+        AppMonitor.shared.stop()
         SessionContextManager.shared.stop()
         clipboardMonitor.stop()
     }
@@ -576,10 +617,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
-            return "Slack bot token not set. Open Flux Settings and set Slack Bot Token + Slack Channel ID."
+            return "Slack bot token not set. Open Island Settings and set Slack Bot + Slack Channel ID."
         }
         guard !channel.isEmpty else {
-            return "Slack channel ID not set. Open Flux Settings and set Slack Channel ID."
+            return "Slack channel ID not set. Open Island Settings and set Slack Channel ID."
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Slack message text is empty."
@@ -626,10 +667,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
-            return "Discord bot token not set. Open Flux Settings and set Discord Bot Token + Discord Channel ID."
+            return "Discord bot token not set. Open Island Settings and set Discord Bot + Discord Channel ID."
         }
         guard !channelId.isEmpty else {
-            return "Discord channel ID not set. Open Flux Settings and set Discord Channel ID."
+            return "Discord channel ID not set. Open Island Settings and set Discord Channel ID."
         }
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Discord message content is empty."
@@ -673,10 +714,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
-            return "Telegram bot token not set. Open Flux Settings and set Telegram Bot Token + Telegram Chat ID."
+            return "Telegram bot token not set. Open Island Settings and set Telegram Bot + Telegram Chat ID."
         }
         guard !chatId.isEmpty else {
-            return "Telegram chat ID not set. Open Flux Settings and set Telegram Chat ID."
+            return "Telegram chat ID not set. Open Island Settings and set Telegram Chat ID."
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Telegram message text is empty."

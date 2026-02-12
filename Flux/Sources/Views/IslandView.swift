@@ -849,6 +849,8 @@ struct IslandSettingsView: View {
     @State private var automationEditorMode: InlineAutomationEditorMode?
     @State private var pendingDeleteAutomation: Automation?
     @State private var automationActionError: String?
+    @State private var showAppInstructionsEditor = false
+    @State private var appInstructionsCount = 0
 
     // Automation editor fields
     @State private var editorName = ""
@@ -1028,6 +1030,26 @@ struct IslandSettingsView: View {
                         )
                     }
                 )
+
+                settingsRow(
+                    icon: "app.badge",
+                    label: "Per-App Instructions",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 6) {
+                                Text(appInstructionsCount == 0 ? "None" : "\(appInstructionsCount) set")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(appInstructionsCount == 0 ? .white.opacity(0.5) : .green.opacity(0.85))
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.35))
+                            }
+                        )
+                    }
+                )
+                .onTapGesture {
+                    showAppInstructionsEditor = true
+                }
 
                 // Custom Dictionary (expandable)
                 settingsRow(
@@ -1473,6 +1495,10 @@ struct IslandSettingsView: View {
         }
         .onAppear {
             loadSecretsIfNeeded()
+            reloadAppInstructionsCount()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appInstructionsDidChange)) { _ in
+            reloadAppInstructionsCount()
         }
         .onChange(of: editingField) { old, _ in
             switch old {
@@ -1499,6 +1525,10 @@ struct IslandSettingsView: View {
                 loadTelegramPairing()
                 try? await Task.sleep(for: .seconds(1))
             }
+        }
+        .sheet(isPresented: $showAppInstructionsEditor) {
+            AppInstructionsView()
+                .frame(width: 600, height: 680)
         }
     }
 
@@ -2373,6 +2403,10 @@ struct IslandSettingsView: View {
         }
         telegramPairingCode = ""
         loadTelegramPairing()
+    }
+
+    private func reloadAppInstructionsCount() {
+        appInstructionsCount = AppInstructions.shared.instructions.count
     }
 
     private func editableRow<Field: View>(
