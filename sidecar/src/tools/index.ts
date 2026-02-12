@@ -271,6 +271,52 @@ export const baseTools: ToolDefinition[] = [
       required: ['branchName'],
     },
   },
+  {
+    name: 'read_session_history',
+    description:
+      "Read the user's recent app session history. Shows which apps and windows the user has visited with timestamps. Useful for understanding what the user was working on or offering to resume context.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        appName: {
+          type: 'string',
+          description: 'Optional filter by app name (case-insensitive partial match)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of sessions to return (default: 10)',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_session_context_summary',
+    description:
+      "Get a human-readable text summary of the user's recent app activity. Use this to understand what the user has been doing across their desktop.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Maximum number of sessions to summarize (default: 10)',
+        },
+      },
+    },
+  },
+  {
+    name: 'read_clipboard_history',
+    description:
+      "Read the user's recent clipboard history (last 10 copied items). Each entry includes the copied text, timestamp, source application, and content type (plainText, url, or filePath). Use this when the user references something they copied earlier.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Maximum number of entries to return (default: 10, max: 10)',
+        },
+      },
+    },
+  },
 ];
 
 const mcp = new McpManager();

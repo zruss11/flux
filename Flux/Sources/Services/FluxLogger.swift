@@ -42,6 +42,9 @@ enum Log {
     /// Keychain and secret management
     static let keychain = Logger(subsystem: subsystem, category: "keychain")
 
+    /// Clipboard monitoring and history
+    static let clipboard = Logger(subsystem: subsystem, category: "clipboard")
+
     /// UI-layer diagnostics
     static let ui = Logger(subsystem: subsystem, category: "ui")
 }

@@ -82,6 +82,7 @@ final class AccessibilityReader {
         }
 
         // Attempt 3: Pasteboard fallback (simulate Cmd+V)
+        ClipboardMonitor.shared.beginSelfCopy()
         let savedPasteboard = NSPasteboard.general.string(forType: .string)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -100,6 +101,7 @@ final class AccessibilityReader {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(original, forType: .string)
             }
+            ClipboardMonitor.shared.endSelfCopy()
         }
 
         return true

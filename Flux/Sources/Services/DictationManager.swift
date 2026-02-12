@@ -219,8 +219,10 @@ final class DictationManager {
             let inserted = self.accessibilityReader?.insertTextAtFocusedField(finalText) ?? false
 
             if !inserted {
+                ClipboardMonitor.shared.beginSelfCopy()
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(finalText, forType: .string)
+                ClipboardMonitor.shared.endSelfCopy()
             }
 
             // Persist the entry in history.
