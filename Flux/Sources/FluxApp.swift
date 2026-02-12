@@ -23,6 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let toolRunner = ToolRunner()
     private let automationService = AutomationService.shared
     private let dictationManager = DictationManager.shared
+    private let clipboardMonitor = ClipboardMonitor.shared
 
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
@@ -101,6 +102,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         dictationManager.start(accessibilityReader: accessibilityReader)
         SessionContextManager.shared.start()
+        clipboardMonitor.start()
 
         // Auto-start tour on first launch after permissions are granted
         if !UserDefaults.standard.bool(forKey: "hasCompletedTour") {
@@ -117,6 +119,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         functionKeyMonitor = nil
         dictationManager.stop()
         SessionContextManager.shared.stop()
+        clipboardMonitor.stop()
     }
 
     private func setupStatusItem() {
@@ -512,6 +515,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let limit = intInput("limit") ?? 10
             return SessionContextManager.shared.historyStore.contextSummaryText(limit: limit)
 
+        case "read_clipboard_history":
+            let rawLimit = intInput("limit") ?? 10
+            let limit = min(max(rawLimit, 0), 10)
+            let entries = Array(ClipboardMonitor.shared.store.entries.prefix(limit))
+            return encodeJSON(ClipboardHistoryResponse(ok: true, entries: entries))
+
         default:
             return "Unknown tool: \(toolName)"
         }
@@ -553,6 +562,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private struct SetWorktreeResponse: Codable {
         let ok: Bool
         let branchName: String?
+    }
+
+    private struct ClipboardHistoryResponse: Codable {
+        let ok: Bool
+        let entries: [ClipboardEntry]
     }
 
     private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {

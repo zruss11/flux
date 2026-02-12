@@ -594,6 +594,7 @@ You have access to the following tools:
 - mcp__flux__read_ax_tree: Reads accessibility tree text from the frontmost window
 - mcp__flux__capture_screen: Captures a visual screenshot of the screen
 - mcp__flux__read_selected_text: Reads currently selected text
+- mcp__flux__read_clipboard_history: Reads recent clipboard history (last 10 copied items with source app and timestamp)
 
 **Session Context Tools** (use these to understand what the user was recently doing across their desktop):
 - mcp__flux__read_session_history: Read which apps/windows the user recently visited (with timestamps)
