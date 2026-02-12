@@ -212,6 +212,78 @@ final class AccessibilityReader {
         NSWorkspace.shared.frontmostApplication?.localizedName
     }
 
+    func getCaretBounds() -> CGRect? {
+        guard AXIsProcessTrusted() else { return nil }
+        let systemWide = AXUIElementCreateSystemWide()
+
+        var focusedElement: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElement
+        )
+        guard result == .success, let element = focusedElement else { return nil }
+        guard CFGetTypeID(element) == AXUIElementGetTypeID() else { return nil }
+
+        // Try the focused element first, then walk up to 2 parent levels
+        var current: AXUIElement = element as! AXUIElement
+        for _ in 0..<3 {
+            if let frame = axFrame(of: current) {
+                return frame
+            }
+            var parent: CFTypeRef?
+            let parentResult = AXUIElementCopyAttributeValue(
+                current,
+                kAXParentAttribute as CFString,
+                &parent
+            )
+            guard parentResult == .success,
+                  let parentElement = parent,
+                  CFGetTypeID(parentElement) == AXUIElementGetTypeID()
+            else { break }
+            current = parentElement as! AXUIElement
+        }
+
+        return nil
+    }
+
+    private func axFrame(of element: AXUIElement) -> CGRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXPositionAttribute as CFString,
+            &positionValue
+        ) == .success,
+        AXUIElementCopyAttributeValue(
+            element,
+            kAXSizeAttribute as CFString,
+            &sizeValue
+        ) == .success
+        else { return nil }
+
+        var position = CGPoint.zero
+        var size = CGSize.zero
+
+        guard let positionValue,
+              let sizeValue,
+              CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID()
+        else { return nil }
+
+        let posAXValue = positionValue as! AXValue
+        let sizeAXValue = sizeValue as! AXValue
+
+        guard AXValueGetValue(posAXValue, .cgPoint, &position),
+              AXValueGetValue(sizeAXValue, .cgSize, &size)
+        else { return nil }
+
+        guard size.width > 0 && size.height > 0 else { return nil }
+
+        return CGRect(origin: position, size: size)
+    }
+
     func readVisibleWindowsContext(
         maxApps: Int?,
         maxWindowsPerApp: Int?,

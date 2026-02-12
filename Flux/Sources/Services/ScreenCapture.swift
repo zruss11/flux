@@ -18,7 +18,7 @@ final class ScreenCapture {
         return hasAccess
     }
 
-    func captureMainDisplay() async -> String? {
+    func captureMainDisplay(caretRect: CGRect? = nil) async -> String? {
         do {
             guard CGPreflightScreenCaptureAccess() else { return nil }
             if let last = lastCaptureAt, Date().timeIntervalSince(last) < minSecondsBetweenCaptures {
@@ -35,10 +35,19 @@ final class ScreenCapture {
             config.height = Int(display.height)
             config.pixelFormat = kCVPixelFormatType_32BGRA
 
-            let image = try await SCScreenshotManager.captureImage(
+            var image = try await SCScreenshotManager.captureImage(
                 contentFilter: filter,
                 configuration: config
             )
+
+            if let caretRect {
+                let displayBounds = CGRect(
+                    x: 0, y: 0,
+                    width: CGFloat(display.width),
+                    height: CGFloat(display.height)
+                )
+                image = annotateImage(image, caretRect: caretRect, displayBounds: displayBounds)
+            }
 
             return cgImageToBase64JPEG(image, maxDimension: 1600, quality: 0.7)
         } catch {
@@ -47,7 +56,7 @@ final class ScreenCapture {
         }
     }
 
-    func captureFrontmostWindow() async -> String? {
+    func captureFrontmostWindow(caretRect: CGRect? = nil) async -> String? {
         do {
             guard CGPreflightScreenCaptureAccess() else { return nil }
             if let last = lastCaptureAt, Date().timeIntervalSince(last) < minSecondsBetweenCaptures {
@@ -71,10 +80,14 @@ final class ScreenCapture {
             config.height = Int(window.frame.height * 2)
             config.pixelFormat = kCVPixelFormatType_32BGRA
 
-            let image = try await SCScreenshotManager.captureImage(
+            var image = try await SCScreenshotManager.captureImage(
                 contentFilter: filter,
                 configuration: config
             )
+
+            if let caretRect {
+                image = annotateImage(image, caretRect: caretRect, displayBounds: window.frame)
+            }
 
             return cgImageToBase64JPEG(image, maxDimension: 1600, quality: 0.7)
         } catch {
@@ -120,5 +133,57 @@ final class ScreenCapture {
         ctx.interpolationQuality = .medium
         ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
         return ctx.makeImage()
+    }
+
+    private func annotateImage(
+        _ image: CGImage,
+        caretRect: CGRect,
+        displayBounds: CGRect
+    ) -> CGImage {
+        let imgWidth = image.width
+        let imgHeight = image.height
+
+        let scaleX = CGFloat(imgWidth) / displayBounds.width
+        let scaleY = CGFloat(imgHeight) / displayBounds.height
+
+        let rectInImage = CGRect(
+            x: (caretRect.origin.x - displayBounds.origin.x) * scaleX,
+            y: (caretRect.origin.y - displayBounds.origin.y) * scaleY,
+            width: caretRect.width * scaleX,
+            height: caretRect.height * scaleY
+        )
+
+        let clampedRect = rectInImage.intersection(
+            CGRect(x: 0, y: 0, width: CGFloat(imgWidth), height: CGFloat(imgHeight))
+        )
+        guard !clampedRect.isNull && clampedRect.width > 1 && clampedRect.height > 1 else {
+            return image
+        }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let ctx = CGContext(
+            data: nil,
+            width: imgWidth,
+            height: imgHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else { return image }
+
+        // Flip to top-left origin to match screen coordinates
+        ctx.translateBy(x: 0, y: CGFloat(imgHeight))
+        ctx.scaleBy(x: 1, y: -1)
+
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: imgWidth, height: imgHeight))
+
+        let lineWidth: CGFloat = 3.0 * max(scaleX, scaleY)
+        ctx.setStrokeColor(CGColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0))
+        ctx.setLineWidth(lineWidth)
+        let strokeRect = clampedRect.insetBy(dx: lineWidth / 2, dy: lineWidth / 2)
+        ctx.stroke(strokeRect)
+
+        return ctx.makeImage() ?? image
     }
 }
