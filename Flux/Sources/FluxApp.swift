@@ -24,6 +24,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let automationService = AutomationService.shared
     private let dictationManager = DictationManager.shared
     private let clipboardMonitor = ClipboardMonitor.shared
+    private let watcherService = WatcherService.shared
+    private let watcherAlertsConversationId = UUID(uuidString: "5F9E3C52-8A47-4F9D-9C39-CFFB2E7F2A11")!
 
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
@@ -72,6 +74,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func launchMainApp() {
         Log.app.info("Launching main app — connecting bridge")
         setupBridgeCallbacks()
+        setupWatcherCallbacks()
         setupFunctionKeyMonitor()
         automationService.configureRunner { [weak self] request in
             guard let self else { return false }
@@ -103,6 +106,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         dictationManager.start(accessibilityReader: accessibilityReader)
         SessionContextManager.shared.start()
         clipboardMonitor.start()
+        watcherService.startAll()
 
         // Auto-start tour on first launch after permissions are granted
         if !UserDefaults.standard.bool(forKey: "hasCompletedTour") {
@@ -120,6 +124,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         dictationManager.stop()
         SessionContextManager.shared.stop()
         clipboardMonitor.stop()
+        watcherService.onChatAlert = nil
     }
 
     private func setupStatusItem() {
@@ -312,6 +317,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.conversationStore.setConversationRunning(uuid, isRunning: isWorking)
             }
         }
+    }
+
+    private func setupWatcherCallbacks() {
+        watcherService.onChatAlert = { [weak self] alert in
+            guard let self else { return }
+            Task { @MainActor in
+                self.routeWatcherAlertToChat(alert)
+            }
+        }
+    }
+
+    private func routeWatcherAlertToChat(_ alert: WatcherAlert) {
+        let conversation = conversationStore.ensureConversationExists(
+            id: watcherAlertsConversationId,
+            title: "Watcher Alerts"
+        )
+
+        var content = "[\(alert.watcherName)] \(alert.title)\n\n\(alert.summary)"
+        if let sourceUrl = alert.sourceUrl, !sourceUrl.isEmpty {
+            content += "\n\nSource: \(sourceUrl)"
+        }
+
+        conversationStore.addMessage(
+            to: conversation.id,
+            role: .system,
+            content: content
+        )
     }
 
     private func handleToolRequest(toolName: String, input: [String: Any]) async -> String {
