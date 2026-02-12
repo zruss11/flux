@@ -37,7 +37,10 @@ final class SessionContextManager {
 
     private init() {}
 
+    /// Starts desktop session tracking and registers the app-activation observer.
     func start() {
+        guard workspaceObserver == nil, windowPollTimer == nil else { return }
+
         UserDefaults.standard.register(defaults: [
             Self.inAppContextTrackingEnabledKey: true
         ])
@@ -62,6 +65,7 @@ final class SessionContextManager {
         }
     }
 
+    /// Stops desktop session tracking and flushes pending history writes.
     func stop() {
         // Complete current session before stopping
         completeCurrentSession()
@@ -75,9 +79,11 @@ final class SessionContextManager {
         windowPollTimer = nil
     }
 
+    /// Handles app switches by ending the previous session and starting a new one.
     private func handleAppActivation(_ app: NSRunningApplication) {
         let appName = app.localizedName ?? "Unknown"
         let bundleId = app.bundleIdentifier
+        let isContextTrackingEnabled = UserDefaults.standard.bool(forKey: Self.inAppContextTrackingEnabledKey)
 
         // Complete previous session
         completeCurrentSession()
@@ -87,18 +93,29 @@ final class SessionContextManager {
 
         // Read window title via lightweight AX call
         let pid = app.processIdentifier
-        let windowTitle = readWindowTitle(pid: pid)
+        let windowTitle = isContextTrackingEnabled ? readWindowTitle(pid: pid) : nil
 
         currentAppName = appName
         currentBundleId = bundleId
         currentWindowTitle = windowTitle
         currentPid = pid
         currentSessionStart = Date()
-        refreshContextSummary(pid: pid)
+        if isContextTrackingEnabled {
+            refreshContextSummary(pid: pid)
+        } else {
+            currentContextSummary = nil
+        }
     }
 
+    /// Polls focused window metadata while the same app remains active.
     private func pollWindowTitle() {
         guard let pid = currentPid else { return }
+        guard UserDefaults.standard.bool(forKey: Self.inAppContextTrackingEnabledKey) else {
+            currentWindowTitle = nil
+            currentContextSummary = nil
+            return
+        }
+
         let newTitle = readWindowTitle(pid: pid)
         if newTitle != currentWindowTitle, let newTitle {
             currentWindowTitle = newTitle
@@ -106,16 +123,17 @@ final class SessionContextManager {
         refreshContextSummary(pid: pid)
     }
 
+    /// Finalizes and records the in-progress session.
     private func completeCurrentSession() {
         guard let appName = currentAppName, let startedAt = currentSessionStart else { return }
-        let contextSummary = UserDefaults.standard.bool(forKey: Self.inAppContextTrackingEnabledKey)
-            ? currentContextSummary
-            : nil
+        let isContextTrackingEnabled = UserDefaults.standard.bool(forKey: Self.inAppContextTrackingEnabledKey)
+        let contextSummary = isContextTrackingEnabled ? currentContextSummary : nil
+        let windowTitle = isContextTrackingEnabled ? currentWindowTitle : nil
 
         let session = AppSession(
             appName: appName,
             bundleId: currentBundleId,
-            windowTitle: currentWindowTitle,
+            windowTitle: windowTitle,
             startedAt: startedAt,
             endedAt: Date(),
             contextSummary: contextSummary
@@ -153,6 +171,7 @@ final class SessionContextManager {
         return title as? String
     }
 
+    /// Refreshes the session's in-app context summary when tracking is enabled.
     private func refreshContextSummary(pid: Int32) {
         guard UserDefaults.standard.bool(forKey: Self.inAppContextTrackingEnabledKey) else {
             currentContextSummary = nil
@@ -167,6 +186,7 @@ final class SessionContextManager {
         currentContextSummary = readFocusedContextSummary(pid: pid)
     }
 
+    /// Builds a compact summary of the currently focused AX element for session history.
     private func readFocusedContextSummary(pid: Int32) -> String? {
         let appElement = AXUIElementCreateApplication(pid)
         guard let focusedElement = readAXElementAttribute(kAXFocusedUIElementAttribute as CFString, from: appElement) else {
@@ -210,6 +230,7 @@ final class SessionContextManager {
         return summary.isEmpty ? nil : sanitize(summary, limit: 320)
     }
 
+    /// Returns true if element content should be redacted in stored summaries.
     private func shouldRedactValue(role: String?, subrole: String?) -> Bool {
         if subrole == "AXSecureTextField" {
             return true
@@ -218,6 +239,7 @@ final class SessionContextManager {
         return Self.editableRoles.contains(role)
     }
 
+    /// Reads an AX attribute expected to contain another AX element.
     private func readAXElementAttribute(_ attribute: CFString, from element: AXUIElement) -> AXUIElement? {
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, attribute, &value)
@@ -227,6 +249,7 @@ final class SessionContextManager {
         return value as! AXUIElement
     }
 
+    /// Reads an AX attribute and normalizes string-like results to trimmed text.
     private func readAXStringAttribute(_ attribute: CFString, from element: AXUIElement) -> String? {
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, attribute, &value)
@@ -246,6 +269,7 @@ final class SessionContextManager {
         return nil
     }
 
+    /// Converts captured UI text to a single-line, bounded-length string.
     private func sanitize(_ text: String, limit: Int) -> String {
         let singleLine = text
             .replacingOccurrences(of: "\r", with: " ")

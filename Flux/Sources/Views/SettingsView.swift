@@ -72,7 +72,7 @@ struct SettingsView: View {
 
             Section("Desktop Activity") {
                 Toggle("Capture in-app context", isOn: $inAppContextTrackingEnabled)
-                Text("When enabled, Flux stores lightweight focused-window context for recent app sessions.")
+                Text("Flux always stores app name and timestamps. Enable this to also store window titles and lightweight focused-window context.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
