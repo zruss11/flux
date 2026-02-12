@@ -174,11 +174,9 @@ final class VoiceInput {
             }
 
             Log.voice.error("Missing live speech session while stopping recording")
-            let callback = onComplete
             let failureCallback = onFailure
             cleanUp()
             failureCallback?("Live transcription session ended unexpectedly.")
-            callback?("")
 
         case .batchOnDevice:
             stopBatchRecording()
@@ -189,6 +187,7 @@ final class VoiceInput {
 
     @available(macOS 26.0, *)
     private func beginLiveRecording() async -> Bool {
+        let failureCallback = onFailure
         let engine = AVAudioEngine()
         self.audioEngine = engine
 
@@ -198,7 +197,7 @@ final class VoiceInput {
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             Log.voice.error("No audio input available")
             cleanUp()
-            onFailure?("No audio input device available.")
+            failureCallback?("No audio input device available.")
             return false
         }
 
@@ -244,12 +243,13 @@ final class VoiceInput {
                 tapInstalled = false
             }
             cleanUp()
-            onFailure?("Unable to start live transcription.")
+            failureCallback?("Unable to start live transcription.")
             return false
         }
     }
 
     private func beginBatchRecording() -> Bool {
+        let failureCallback = onFailure
         let engine = AVAudioEngine()
         self.audioEngine = engine
 
@@ -259,7 +259,7 @@ final class VoiceInput {
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             Log.voice.error("No audio input available")
             cleanUp()
-            onFailure?("No audio input device available.")
+            failureCallback?("No audio input device available.")
             return false
         }
 
@@ -267,7 +267,7 @@ final class VoiceInput {
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             Log.voice.error("Failed to create batch audio converter")
             cleanUp()
-            onFailure?("Unable to prepare batch dictation audio pipeline.")
+            failureCallback?("Unable to prepare batch dictation audio pipeline.")
             return false
         }
 
@@ -301,7 +301,7 @@ final class VoiceInput {
                 tapInstalled = false
             }
             cleanUp()
-            onFailure?("Unable to start batch dictation recording.")
+            failureCallback?("Unable to start batch dictation recording.")
             return false
         }
     }

@@ -62,7 +62,7 @@
 - For a global "hold fn" gesture on macOS, listen to `.flagsChanged`, check `.function` in modifier flags, and gate with a `wasPressed` latch so the action fires once per hold.
 - For global hold-to-dictate shortcuts (`Cmd+Option`), pair `.flagsChanged` with a `CGEventSource.flagsState(.combinedSessionState)` timer failsafe; missed modifier-up events can leave audio capture running.
 - For modifier hold gestures on background apps, add an independent `DispatchSourceTimer` polling `CGEventSource.flagsState(.combinedSessionState)` to drive press/release transitions; AppKit monitor callbacks alone can miss state changes.
-- For hold-to-dictate while Flux is backgrounded, prefer batch Parakeet transcription over live SpeechTranscriber; live speech results can be unreliable when the app is not frontmost.
+- For hold-to-dictate while Flux is backgrounded, prefer batch on-device Apple Speech transcription mode over live `SpeechTranscriber`; live speech results can be unreliable when the app is not frontmost.
 - In sidecar session maps, tie idle timers to actual eviction (not just ending streams) and clean up related Telegram/pending-tool state so long-lived processes do not leak memory.
 
 ## Patterns That Don't Work
