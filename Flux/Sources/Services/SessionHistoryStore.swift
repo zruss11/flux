@@ -29,11 +29,11 @@ final class SessionHistoryStore {
         let filtered = appName.map { name in
             sessions.filter { $0.appName.localizedCaseInsensitiveContains(name) }
         } ?? sessions
-        return Array(filtered.prefix(limit))
+        return Array(filtered.prefix(max(limit, 0)))
     }
 
     func contextSummaryText(limit: Int = 10) -> String {
-        let recent = Array(sessions.prefix(limit))
+        let recent = Array(sessions.prefix(max(limit, 0)))
         if recent.isEmpty { return "No recent app activity recorded." }
 
         let formatter = RelativeDateTimeFormatter()
