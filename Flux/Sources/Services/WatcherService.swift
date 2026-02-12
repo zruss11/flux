@@ -55,11 +55,42 @@ final class WatcherService {
 
     /// Start all enabled watchers. Call once after app launch.
     func startAll() {
+        ensureDefaultGitHubWatcher()
+
         for watcher in watchers where watcher.enabled {
             let normalized = sanitizeWatcher(watcher)
             let creds = loadCredentialsFromKeychain(for: normalized)
             engine.startWatcher(normalized, credentials: creds)
         }
+    }
+
+    /// If no GitHub watcher exists yet, create one automatically.
+    /// Uses `gh` CLI for auth so no credentials are needed.
+    private func ensureDefaultGitHubWatcher() {
+        let hasGitHub = watchers.contains { $0.type == .github }
+        guard !hasGitHub else { return }
+
+        let repos = UserDefaults.standard.string(forKey: "githubWatchedRepos") ?? ""
+        Log.app.info("WatcherService: Auto-creating default GitHub watcher (gh CLI)")
+        createWatcher(
+            name: "GitHub",
+            type: .github,
+            intervalSeconds: 300,
+            notificationMode: .both,
+            settings: [
+                "watchNotifications": "true",
+                "watchCicd": "true",
+                "repos": repos,
+            ]
+        )
+    }
+
+    /// Update the repos list for the GitHub watcher and restart it.
+    func updateGitHubRepos(_ repos: String) {
+        guard let index = watchers.firstIndex(where: { $0.type == .github }) else { return }
+        var watcher = watchers[index]
+        watcher.settings["repos"] = repos
+        updateWatcher(watcher)
     }
 
     // MARK: - Watcher CRUD

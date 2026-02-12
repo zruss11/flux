@@ -596,6 +596,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let entries = Array(ClipboardMonitor.shared.store.entries.prefix(limit))
             return encodeJSON(ClipboardHistoryResponse(ok: true, entries: entries))
 
+        case "check_github_status":
+            let repo = (input["repo"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return await checkGitHubStatus(repo: repo)
+
+        case "manage_github_repos":
+            let action = (input["action"] as? String ?? "list").lowercased()
+            let repo = (input["repo"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return manageGitHubRepos(action: action, repo: repo)
+
         default:
             return "Unknown tool: \(toolName)"
         }
@@ -642,6 +651,209 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private struct ClipboardHistoryResponse: Codable {
         let ok: Bool
         let entries: [ClipboardEntry]
+    }
+
+    private struct GitHubReposResponse: Codable {
+        let ok: Bool
+        let repos: [String]
+        let message: String?
+    }
+
+    private func manageGitHubRepos(action: String, repo: String) -> String {
+        let key = "githubWatchedRepos"
+        let raw = UserDefaults.standard.string(forKey: key) ?? ""
+        var repos = raw.components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        switch action {
+        case "add":
+            guard !repo.isEmpty else {
+                return encodeJSON(GitHubReposResponse(ok: false, repos: repos, message: "Missing repo parameter."))
+            }
+            if repos.contains(repo) {
+                return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Repo '\(repo)' is already watched."))
+            }
+            repos.append(repo)
+            let joined = repos.joined(separator: ",")
+            UserDefaults.standard.set(joined, forKey: key)
+            WatcherService.shared.updateGitHubRepos(joined)
+            return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Added '\(repo)'."))
+
+        case "remove":
+            guard !repo.isEmpty else {
+                return encodeJSON(GitHubReposResponse(ok: false, repos: repos, message: "Missing repo parameter."))
+            }
+            guard repos.contains(repo) else {
+                return encodeJSON(GitHubReposResponse(ok: false, repos: repos, message: "Repo '\(repo)' is not in the watch list."))
+            }
+            repos.removeAll { $0 == repo }
+            let joined = repos.joined(separator: ",")
+            UserDefaults.standard.set(joined, forKey: key)
+            WatcherService.shared.updateGitHubRepos(joined)
+            return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Removed '\(repo)'."))
+
+        default: // "list"
+            return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: nil))
+        }
+    }
+
+    // MARK: - GitHub Status (gh CLI)
+
+    private struct GitHubStatusAlert: Codable {
+        let type: String   // "ci" or "notification"
+        let title: String
+        let repo: String
+        let branch: String?
+        let status: String?
+        let url: String
+        let updatedAt: String
+    }
+
+    private struct GitHubStatusResponse: Codable {
+        let ok: Bool
+        let authenticated: Bool
+        let alerts: [GitHubStatusAlert]
+        let error: String?
+    }
+
+    private func checkGitHubStatus(repo: String?) async -> String {
+        // Verify gh CLI is authenticated
+        let authResult = await shellGH(["auth", "status", "--active"])
+        guard authResult.exitCode == 0 else {
+            return encodeJSON(GitHubStatusResponse(
+                ok: false,
+                authenticated: false,
+                alerts: [],
+                error: "gh CLI not authenticated. Run `gh auth login` in terminal."
+            ))
+        }
+
+        var alerts: [GitHubStatusAlert] = []
+
+        // 1. Check CI failures
+        var runArgs = ["run", "list", "--status", "failure", "--limit", "10",
+                       "--json", "databaseId,name,headBranch,updatedAt,conclusion,url,workflowName"]
+        if let repo = repo, !repo.isEmpty {
+            runArgs += ["--repo", repo]
+        }
+        let ciResult = await shellGH(runArgs)
+        if ciResult.exitCode == 0, !ciResult.output.isEmpty,
+           let data = ciResult.output.data(using: .utf8),
+           let runs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            for run in runs {
+                let name = run["workflowName"] as? String ?? run["name"] as? String ?? "Workflow"
+                let branch = run["headBranch"] as? String
+                let conclusion = run["conclusion"] as? String ?? "failure"
+                let url = run["url"] as? String ?? ""
+                let updatedAt = run["updatedAt"] as? String ?? ""
+
+                // Derive repo from the URL: https://github.com/owner/repo/actions/runs/123
+                let repoName: String
+                if let r = repo {
+                    repoName = r
+                } else if let urlRepo = extractRepoFromUrl(url) {
+                    repoName = urlRepo
+                } else {
+                    repoName = ""
+                }
+
+                alerts.append(GitHubStatusAlert(
+                    type: "ci",
+                    title: "CI Failed: \(name)",
+                    repo: repoName,
+                    branch: branch,
+                    status: conclusion,
+                    url: url,
+                    updatedAt: updatedAt
+                ))
+            }
+        }
+
+        // 2. Check recent notifications
+        var notifArgs = ["api", "notifications", "--jq", "."]
+        if let repo = repo, !repo.isEmpty {
+            notifArgs += ["-f", "all=false"]
+        }
+        let notifResult = await shellGH(notifArgs)
+        if notifResult.exitCode == 0, !notifResult.output.isEmpty,
+           let data = notifResult.output.data(using: .utf8),
+           let notifications = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            for notif in notifications.prefix(10) {
+                guard let subject = notif["subject"] as? [String: Any],
+                      let title = subject["title"] as? String,
+                      let repoObj = notif["repository"] as? [String: Any],
+                      let repoFullName = repoObj["full_name"] as? String else { continue }
+
+                // If repo filter is specified, skip non-matching notifications
+                if let filterRepo = repo, !filterRepo.isEmpty,
+                   !repoFullName.lowercased().contains(filterRepo.lowercased()) {
+                    continue
+                }
+
+                let updatedAt = notif["updated_at"] as? String ?? ""
+                let repoHtmlUrl = repoObj["html_url"] as? String ?? "https://github.com/\(repoFullName)"
+
+                alerts.append(GitHubStatusAlert(
+                    type: "notification",
+                    title: title,
+                    repo: repoFullName,
+                    branch: nil,
+                    status: notif["reason"] as? String,
+                    url: repoHtmlUrl,
+                    updatedAt: updatedAt
+                ))
+            }
+        }
+
+        return encodeJSON(GitHubStatusResponse(
+            ok: true,
+            authenticated: true,
+            alerts: alerts,
+            error: nil
+        ))
+    }
+
+    /// Extract owner/repo from a GitHub actions URL.
+    private func extractRepoFromUrl(_ url: String) -> String? {
+        // https://github.com/owner/repo/actions/runs/12345
+        guard let range = url.range(of: #"github\.com/([^/]+/[^/]+)"#, options: .regularExpression) else {
+            return nil
+        }
+        return String(url[range]).replacingOccurrences(of: "github.com/", with: "")
+    }
+
+    /// Runs a `gh` CLI command synchronously and returns the output.
+    private func shellGH(_ arguments: [String]) async -> (output: String, exitCode: Int32) {
+        let process = Process()
+        let pipe = Pipe()
+
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["gh"] + arguments
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        var env = ProcessInfo.processInfo.environment
+        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        let currentPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
+        process.environment = env
+
+        return await withCheckedContinuation { continuation in
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: ("", Int32(1)))
+                return
+            }
+
+            DispatchQueue.global(qos: .utility).async {
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                continuation.resume(returning: (output, process.terminationStatus))
+            }
+        }
     }
 
     private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {

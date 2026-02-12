@@ -602,7 +602,7 @@ struct IslandView: View {
                 case .chat:
                     ChatView(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture)
                 case .settings:
-                    IslandSettingsView(agentBridge: agentBridge)
+                    IslandSettingsView(conversationStore: conversationStore, agentBridge: agentBridge)
                 case .history:
                     ChatHistoryView(
                         conversationStore: conversationStore,
@@ -852,6 +852,7 @@ private struct ClosedWaveformBars: View {
 // MARK: - In-Island Settings
 
 struct IslandSettingsView: View {
+    @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
 
     @AppStorage("anthropicApiKey") private var apiKey = ""
@@ -859,6 +860,7 @@ struct IslandSettingsView: View {
     @AppStorage("slackChannelId") private var slackChannelId = ""
     @AppStorage("telegramChatId") private var telegramChatId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
+    @AppStorage("githubWatchedRepos") private var githubWatchedRepos = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
     @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
@@ -889,6 +891,14 @@ struct IslandSettingsView: View {
     @State private var automationActionError: String?
     @State private var showAppInstructionsEditor = false
     @State private var appInstructionsCount = 0
+    @State private var githubReposExpanded = false
+    @State private var githubRepoActionError: String?
+    @State private var showRepoProjectPicker = false
+    @State private var showCloneFromURLSheet = false
+    @State private var cloneGitURL = ""
+    @State private var cloneLocationPath = Self.defaultCloneLocationPath
+    @State private var cloneInProgress = false
+    @State private var cloneErrorMessage: String?
 
     // Automation editor fields
     @State private var editorName = ""
@@ -932,6 +942,17 @@ struct IslandSettingsView: View {
         case monthly = "Monthly"
 
         var id: String { rawValue }
+    }
+
+    private static var defaultCloneLocationPath: String {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        let development = home.appendingPathComponent("Development", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: development.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            return development.path
+        }
+        return home.path
     }
 
     var body: some View {
@@ -1457,6 +1478,36 @@ struct IslandSettingsView: View {
 
                 divider
 
+                // GitHub Watched Repos
+                settingsRow(
+                    icon: "chevron.left.forwardslash.chevron.right",
+                    label: "GitHub Repos",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 6) {
+                                let count = githubReposList.count
+                                Text(count == 0 ? "None" : "\(count)")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(count > 0 ? .green.opacity(0.85) : .white.opacity(0.5))
+                                Image(systemName: githubReposExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                        )
+                    }
+                )
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        githubReposExpanded.toggle()
+                    }
+                }
+
+                if githubReposExpanded {
+                    githubReposInlineSection
+                }
+
+                divider
+
                 settingsRow(icon: "eye.fill", label: "Accessibility", trailing: {
                     AnyView(
                         Text(accessibilityEnabled ? "Enabled" : "Enable")
@@ -1567,6 +1618,22 @@ struct IslandSettingsView: View {
         .sheet(isPresented: $showAppInstructionsEditor) {
             AppInstructionsView()
                 .frame(width: 600, height: 680)
+        }
+        .sheet(isPresented: $showRepoProjectPicker) {
+            WorkspaceFolderPickerView(
+                conversationStore: conversationStore,
+                onSelect: { url in
+                    handleOpenProjectSelection(url)
+                },
+                onCancel: {
+                    showRepoProjectPicker = false
+                }
+            )
+            .frame(width: 640, height: 500)
+        }
+        .sheet(isPresented: $showCloneFromURLSheet) {
+            cloneFromURLSheet
+                .frame(width: 860, height: 360)
         }
     }
 
@@ -2298,6 +2365,397 @@ struct IslandSettingsView: View {
                 NotificationPayloadKey.conversationTitle: "Automation: \(automation.name)",
             ]
         )
+    }
+
+    private var githubReposList: [String] {
+        githubWatchedRepos
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var githubReposInlineSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Repos to watch for CI failures (owner/repo)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .padding(.horizontal, 12)
+
+            if let githubRepoActionError {
+                Text(githubRepoActionError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red.opacity(0.9))
+                    .padding(.horizontal, 12)
+            }
+
+            // Existing repos
+            ForEach(githubReposList, id: \.self) { repo in
+                HStack(spacing: 8) {
+                    Image(systemName: "book.closed.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.4))
+
+                    Text(repo)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Button {
+                        removeGithubRepo(repo)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.04)))
+                .padding(.horizontal, 8)
+            }
+
+            Menu {
+                Button {
+                    githubRepoActionError = nil
+                    showRepoProjectPicker = true
+                } label: {
+                    Label("Open project", systemImage: "folder")
+                }
+
+                Button {
+                    githubRepoActionError = nil
+                    cloneErrorMessage = nil
+                    cloneGitURL = ""
+                    cloneLocationPath = Self.defaultCloneLocationPath
+                    showCloneFromURLSheet = true
+                } label: {
+                    Label("Clone from URL", systemImage: "globe")
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.6))
+
+                    Text("Add repository")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+
+                    Spacer()
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+            }
+            .menuStyle(.borderlessButton)
+            .padding(.horizontal, 8)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var cloneFromURLSheet: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Clone from URL")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+
+                Spacer()
+
+                Button {
+                    showCloneFromURLSheet = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Git URL")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                TextField("https://github.com/user/repo.git", text: $cloneGitURL)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.95))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.white.opacity(0.02))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color(red: 1.0, green: 0.8, blue: 0.74).opacity(0.9), lineWidth: 2)
+                    )
+                    .onSubmit {
+                        cloneRepositoryFromURL()
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Clone location")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                HStack(spacing: 12) {
+                    TextField("", text: $cloneLocationPath)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(.white.opacity(0.02))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+
+                    Button("Browse...") {
+                        browseForCloneLocation()
+                    }
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.white.opacity(0.02))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let cloneErrorMessage {
+                Text(cloneErrorMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red.opacity(0.9))
+            }
+
+            HStack {
+                Spacer()
+                Button(cloneInProgress ? "Cloning..." : "Clone repository") {
+                    cloneRepositoryFromURL()
+                }
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.black.opacity(cloneInProgress ? 0.5 : 0.9))
+                .padding(.horizontal, 26)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(.white.opacity(cloneInProgress ? 0.5 : 0.78))
+                )
+                .buttonStyle(.plain)
+                .disabled(cloneInProgress || cloneGitURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(.horizontal, 30)
+        .padding(.vertical, 24)
+        .background(Color.black.opacity(0.98))
+    }
+
+    @discardableResult
+    private func addGithubRepo(_ repoIdentifier: String) -> Bool {
+        let repo = repoIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !repo.isEmpty else { return false }
+
+        var repos = githubReposList
+        guard !repos.contains(repo) else { return false }
+
+        repos.append(repo)
+        githubWatchedRepos = repos.joined(separator: ",")
+        syncGithubReposToWatcher()
+        return true
+    }
+
+    private func handleOpenProjectSelection(_ projectURL: URL) {
+        showRepoProjectPicker = false
+        githubRepoActionError = nil
+        conversationStore.workspacePath = projectURL.path
+
+        Task {
+            let repoIdentifier = await resolveGitHubRepoFromProject(at: projectURL)
+            await MainActor.run {
+                guard let repoIdentifier else {
+                    githubRepoActionError = "Could not detect a GitHub origin remote for this project."
+                    return
+                }
+                if !addGithubRepo(repoIdentifier) {
+                    githubRepoActionError = "\(repoIdentifier) is already in your watch list."
+                }
+            }
+        }
+    }
+
+    private func cloneRepositoryFromURL() {
+        cloneErrorMessage = nil
+
+        let gitURL = cloneGitURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let repoIdentifier = parseGitHubRepoIdentifier(from: gitURL) else {
+            cloneErrorMessage = "Enter a valid GitHub URL (for example: https://github.com/user/repo.git)."
+            return
+        }
+
+        let destinationPath = cloneLocationPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destinationPath.isEmpty else {
+            cloneErrorMessage = "Choose a clone location."
+            return
+        }
+
+        let destinationURL = URL(fileURLWithPath: destinationPath, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        } catch {
+            cloneErrorMessage = "Unable to use clone location: \(error.localizedDescription)"
+            return
+        }
+
+        cloneInProgress = true
+
+        Task {
+            let cloneResult = await runGit(arguments: ["clone", gitURL], currentDirectory: destinationURL)
+            await MainActor.run {
+                cloneInProgress = false
+
+                guard cloneResult.exitCode == 0 else {
+                    cloneErrorMessage = cloneResult.output.isEmpty ? "Clone failed." : cloneResult.output
+                    return
+                }
+
+                let added = addGithubRepo(repoIdentifier)
+                if !added {
+                    githubRepoActionError = "\(repoIdentifier) is already in your watch list."
+                } else {
+                    githubRepoActionError = nil
+                }
+
+                let repoName = repoIdentifier.split(separator: "/").last.map(String.init) ?? "repository"
+                conversationStore.workspacePath = destinationURL.appendingPathComponent(repoName, isDirectory: true).path
+
+                showCloneFromURLSheet = false
+                cloneGitURL = ""
+            }
+        }
+    }
+
+    private func browseForCloneLocation() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "Choose Clone Location"
+        panel.prompt = "Select"
+        panel.directoryURL = URL(fileURLWithPath: cloneLocationPath, isDirectory: true)
+
+        if panel.runModal() == .OK, let selectedURL = panel.url {
+            cloneLocationPath = selectedURL.path
+        }
+    }
+
+    private func resolveGitHubRepoFromProject(at projectURL: URL) async -> String? {
+        let originResult = await runGit(arguments: ["-C", projectURL.path, "remote", "get-url", "origin"])
+        guard originResult.exitCode == 0 else { return nil }
+        return parseGitHubRepoIdentifier(from: originResult.output)
+    }
+
+    private func parseGitHubRepoIdentifier(from gitURL: String) -> String? {
+        let trimmed = gitURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        func normalizedSlug(_ slug: String) -> String? {
+            var cleaned = slug.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if cleaned.hasSuffix(".git") {
+                cleaned.removeLast(4)
+            }
+            let parts = cleaned.split(separator: "/", omittingEmptySubsequences: true)
+            guard parts.count >= 2 else { return nil }
+            return "\(parts[0])/\(parts[1])"
+        }
+
+        if trimmed.hasPrefix("git@github.com:") {
+            return normalizedSlug(String(trimmed.dropFirst("git@github.com:".count)))
+        }
+
+        if trimmed.hasPrefix("ssh://git@github.com/") {
+            return normalizedSlug(String(trimmed.dropFirst("ssh://git@github.com/".count)))
+        }
+
+        if let url = URL(string: trimmed),
+           let host = url.host?.lowercased(),
+           host == "github.com" || host == "www.github.com" {
+            return normalizedSlug(url.path)
+        }
+
+        if !trimmed.contains("://"), !trimmed.contains("@"), !trimmed.contains(":") {
+            return normalizedSlug(trimmed)
+        }
+
+        return nil
+    }
+
+    private func runGit(arguments: [String], currentDirectory: URL? = nil) async -> (output: String, exitCode: Int32) {
+        let process = Process()
+        let pipe = Pipe()
+
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.currentDirectoryURL = currentDirectory
+
+        var env = ProcessInfo.processInfo.environment
+        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        let currentPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
+        process.environment = env
+
+        return await withCheckedContinuation { continuation in
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: (error.localizedDescription, Int32(1)))
+                return
+            }
+
+            DispatchQueue.global(qos: .utility).async {
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                continuation.resume(returning: (output, process.terminationStatus))
+            }
+        }
+    }
+
+    private func removeGithubRepo(_ repo: String) {
+        var repos = githubReposList
+        repos.removeAll { $0 == repo }
+        githubWatchedRepos = repos.joined(separator: ",")
+        syncGithubReposToWatcher()
+    }
+
+    private func syncGithubReposToWatcher() {
+        WatcherService.shared.updateGitHubRepos(githubWatchedRepos)
     }
 
     private var divider: some View {

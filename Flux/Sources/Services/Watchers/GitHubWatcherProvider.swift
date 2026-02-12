@@ -1,31 +1,25 @@
 import Foundation
 import os
 
-/// Polls GitHub API for notifications (PRs, issues, mentions, review requests)
-/// and CI/CD workflow failures.
+/// Polls GitHub via the `gh` CLI for notifications (PRs, issues, mentions,
+/// review requests) and CI/CD workflow failures.
 ///
-/// Requires: `github_token` credential (PAT or OAuth token).
+/// Requires: The `gh` CLI installed and authenticated (`gh auth login`).
 struct GitHubWatcherProvider: WatcherProvider {
     let type: Watcher.WatcherType = .github
 
-    private static let apiBase = "https://api.github.com"
-
-    /// Polls GitHub notifications and workflow failures and returns normalized alerts.
+    /// Polls GitHub notifications and workflow failures via `gh` CLI.
     func check(
         config: Watcher,
         credentials: [String: String],
         previousState: [String: String]?
     ) async throws -> WatcherCheckResult {
-        guard let token = credentials["github_token"], !token.isEmpty else {
-            Log.app.warning("GitHubWatcher: no github_token credential provided")
+        // Verify gh CLI is available and authenticated.
+        let authCheck = try await runGH(["auth", "status", "--active"])
+        guard authCheck.exitCode == 0 else {
+            Log.app.warning("GitHubWatcher: gh CLI not authenticated — run `gh auth login`")
             return WatcherCheckResult(alerts: [])
         }
-
-        let headers: [String: String] = [
-            "Authorization": "Bearer \(token)",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        ]
 
         let lastCheckISO = previousState?["lastCheckISO"]
             ?? ISO8601DateFormatter().string(from: Date().addingTimeInterval(-300))
@@ -35,7 +29,7 @@ struct GitHubWatcherProvider: WatcherProvider {
         // 1. Notifications (PRs, issues, mentions, review requests)
         let watchNotifications = config.settings["watchNotifications"] != "false"
         if watchNotifications {
-            let notifAlerts = try await checkNotifications(config: config, headers: headers, since: lastCheckISO)
+            let notifAlerts = try await checkNotifications(config: config, since: lastCheckISO)
             alerts.append(contentsOf: notifAlerts)
         }
 
@@ -47,7 +41,7 @@ struct GitHubWatcherProvider: WatcherProvider {
             .filter { !$0.isEmpty } ?? []
         if watchCicd && !repos.isEmpty {
             for repo in repos {
-                let ciAlerts = try await checkWorkflowRuns(config: config, headers: headers, repo: repo, since: lastCheckISO)
+                let ciAlerts = try await checkWorkflowRuns(config: config, repo: repo, since: lastCheckISO)
                 alerts.append(contentsOf: ciAlerts)
             }
         }
@@ -60,23 +54,19 @@ struct GitHubWatcherProvider: WatcherProvider {
 
     // MARK: - Notifications
 
-    /// Retrieves user notifications from GitHub and maps each into a watcher alert.
-    private func checkNotifications(config: Watcher, headers: [String: String], since: String) async throws -> [WatcherAlert] {
+    /// Retrieves user notifications from GitHub via `gh api` and maps each into a watcher alert.
+    private func checkNotifications(config: Watcher, since: String) async throws -> [WatcherAlert] {
         let encodedSince = since.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? since
-        let urlString = "\(Self.apiBase)/notifications?since=\(encodedSince)&all=false"
-        guard let url = URL(string: urlString) else {
-            throw WatcherError.apiError("GitHub: could not construct notifications URL")
-        }
+        let result = try await runGH([
+            "api", "notifications",
+            "--jq", ".",
+            "-f", "since=\(encodedSince)",
+            "-f", "all=false",
+        ])
+        guard result.exitCode == 0, !result.output.isEmpty else { return [] }
 
-        var req = URLRequest(url: url)
-        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            throw WatcherError.apiError("GitHub notifications API error (\((resp as? HTTPURLResponse)?.statusCode ?? -1))")
-        }
-
-        guard let notifications = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+        guard let data = result.output.data(using: .utf8),
+              let notifications = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return []
         }
 
@@ -121,42 +111,37 @@ struct GitHubWatcherProvider: WatcherProvider {
 
     // MARK: - CI/CD
 
-    /// Retrieves recent failed workflow runs for a repository.
-    private func checkWorkflowRuns(config: Watcher, headers: [String: String], repo: String, since: String) async throws -> [WatcherAlert] {
+    /// Retrieves recent failed workflow runs for a repository via `gh run list`.
+    private func checkWorkflowRuns(config: Watcher, repo: String, since: String) async throws -> [WatcherAlert] {
         guard let normalizedRepo = validateRepo(repo) else {
             Log.app.warning("GitHubWatcher: skipping invalid repo '\(repo)'")
             return []
         }
 
-        let urlString = "\(Self.apiBase)/repos/\(normalizedRepo)/actions/runs?status=failure&per_page=5"
-        guard let url = URL(string: urlString) else {
-            Log.app.warning("GitHubWatcher: invalid workflow runs URL for repo '\(normalizedRepo)'")
-            return []
-        }
+        let result = try await runGH([
+            "run", "list",
+            "--repo", normalizedRepo,
+            "--status", "failure",
+            "--limit", "5",
+            "--json", "databaseId,name,headBranch,updatedAt,conclusion,url,status",
+        ])
+        guard result.exitCode == 0, !result.output.isEmpty else { return [] }
 
-        var req = URLRequest(url: url)
-        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            throw WatcherError.apiError("GitHub Actions API error for \(normalizedRepo)")
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let runs = json["workflow_runs"] as? [[String: Any]] else {
+        guard let data = result.output.data(using: .utf8),
+              let runs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return []
         }
 
         let sinceDate = ISO8601DateFormatter().date(from: since) ?? Date.distantPast
 
         return runs.compactMap { run -> WatcherAlert? in
-            guard let runId = run["id"] as? Int,
+            guard let runId = run["databaseId"] as? Int,
                   let name = run["name"] as? String,
-                  let branch = run["head_branch"] as? String,
-                  let updatedAtStr = run["updated_at"] as? String,
+                  let branch = run["headBranch"] as? String,
+                  let updatedAtStr = run["updatedAt"] as? String,
                   let updatedAt = ISO8601DateFormatter().date(from: updatedAtStr),
                   updatedAt > sinceDate,
-                  let htmlUrl = run["html_url"] as? String else {
+                  let htmlUrl = run["url"] as? String else {
                 return nil
             }
 
@@ -175,6 +160,46 @@ struct GitHubWatcherProvider: WatcherProvider {
                 timestamp: updatedAt,
                 dedupeKey: "gh-ci:\(runId)"
             )
+        }
+    }
+
+    // MARK: - gh CLI Runner
+
+    private struct GHResult: Sendable {
+        let output: String
+        let exitCode: Int32
+    }
+
+    /// Runs a `gh` CLI command and captures stdout.
+    private func runGH(_ arguments: [String]) async throws -> GHResult {
+        let process = Process()
+        let pipe = Pipe()
+
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["gh"] + arguments
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        // Inherit PATH so `gh` can be found in common install locations.
+        var env = ProcessInfo.processInfo.environment
+        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        let currentPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
+        process.environment = env
+
+        return try await withCheckedThrowingContinuation { continuation in
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+                return
+            }
+
+            DispatchQueue.global(qos: .utility).async {
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                continuation.resume(returning: GHResult(output: output, exitCode: process.terminationStatus))
+            }
         }
     }
 

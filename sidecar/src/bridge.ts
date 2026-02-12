@@ -640,6 +640,10 @@ You have access to the following tools:
 - mcp__flux__send_discord_message: Send messages via Discord
 - mcp__flux__send_telegram_message: Send messages via Telegram
 
+**GitHub / CI Tools**:
+- mcp__flux__check_github_status: Check GitHub CI/CD status and notifications via gh CLI. Returns recent CI failures and notifications. Pass optional repo (owner/repo) to filter.
+- mcp__flux__manage_github_repos: Manage the list of watched GitHub repos (list/add/remove). Use this when the user asks to watch or stop watching a repo.
+
 **Delegation Tool**:
 - TeamCreate: For complex tasks requiring research, planning, or multi-step workflows, spin up a small agent team to delegate work
 

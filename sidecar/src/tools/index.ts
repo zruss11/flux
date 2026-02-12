@@ -317,6 +317,42 @@ export const baseTools: ToolDefinition[] = [
       },
     },
   },
+  {
+    name: 'check_github_status',
+    description:
+      'Check GitHub CI/CD status and notifications using the gh CLI. Returns recent CI failures and GitHub notifications. Requires the user to have authenticated with `gh auth login`.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        repo: {
+          type: 'string',
+          description:
+            'Optional owner/repo to filter results (e.g. "octocat/hello-world"). If omitted, returns results across all repos.',
+        },
+      },
+    },
+  },
+  {
+    name: 'manage_github_repos',
+    description:
+      'Manage the list of GitHub repos that Flux watches for CI failures and notifications. Use action "list" to see current repos, "add" to add a repo, or "remove" to remove one.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'add', 'remove'],
+          description: 'The action to perform: list, add, or remove.',
+        },
+        repo: {
+          type: 'string',
+          description:
+            'The owner/repo to add or remove (e.g. "octocat/hello-world"). Required for add/remove.',
+        },
+      },
+      required: ['action'],
+    },
+  },
 ];
 
 const mcp = new McpManager();
