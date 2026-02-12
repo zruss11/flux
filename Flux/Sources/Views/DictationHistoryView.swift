@@ -50,8 +50,10 @@ struct DictationHistoryView: View {
                                 Spacer()
 
                                 Button {
+                                    ClipboardMonitor.shared.beginSelfCopy()
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(entry.finalText, forType: .string)
+                                    ClipboardMonitor.shared.endSelfCopy()
                                 } label: {
                                     Image(systemName: "doc.on.doc")
                                         .font(.system(size: 12))
