@@ -29,6 +29,10 @@ struct FillerWordCleaner {
         options: .caseInsensitive
     )
 
+    private static let spaceBeforeCommaPattern = try! NSRegularExpression(
+        pattern: #"\s+,"#
+    )
+
     private static let recapitalizePattern = try! NSRegularExpression(
         pattern: #"\.\s+([a-z])"#
     )
@@ -50,16 +54,22 @@ struct FillerWordCleaner {
         // Fix orphan commas (", ," -> ",")
         result = apply(regex: orphanCommaPattern, in: result, with: ",")
 
+        // Normalize space before comma (" ," -> ",")
+        result = apply(regex: spaceBeforeCommaPattern, in: result, with: ",")
+
         // Trim commas after periods (". ," -> ".")
         result = apply(regex: periodCommaPattern, in: result, with: ".")
 
         // Re-capitalize first letter after periods
         result = recapitalizeAfterPeriods(result)
 
+        // Trim whitespace before capitalizing so leading spaces don't prevent capitalization
+        result = result.trimmingCharacters(in: .whitespaces)
+
         // Capitalize the very first letter
         result = capitalizeFirst(result)
 
-        return result.trimmingCharacters(in: .whitespaces)
+        return result
     }
 
     // MARK: - Private Helpers
