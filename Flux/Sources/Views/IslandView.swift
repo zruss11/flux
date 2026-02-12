@@ -63,7 +63,7 @@ struct IslandView: View {
     }
 
     private let closedDictationWidthBoost: CGFloat = 80
-    private let closedDictationAppIconWidth: CGFloat = 36
+    private let closedRightSlotFixedWidth: CGFloat = 36
 
     private var isDictatingClosed: Bool {
         !isExpanded && DictationManager.shared.isDictating
@@ -73,8 +73,13 @@ struct IslandView: View {
         isDictatingClosed ? closedDictationWidthBoost : 0
     }
 
-    private var closedDictationAppIconSlotWidth: CGFloat {
-        isDictatingClosed ? closedDictationAppIconWidth : 0
+    /// Show the right slot when CI repos are configured OR dictation is active.
+    private var showRightSlot: Bool {
+        isDictatingClosed || CIStatusMonitor.shared.aggregateStatus != .idle
+    }
+
+    private var closedRightSlotWidth: CGFloat {
+        showRightSlot ? closedRightSlotFixedWidth : 0
     }
 
     /// The icon of the app that was active when dictation started.
@@ -132,7 +137,7 @@ struct IslandView: View {
         notchSize.width
             + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
             + (isDictatingClosed ? closedDictationWidthBoost : 0)
-            + closedDictationAppIconSlotWidth
+            + closedRightSlotWidth
     }
     private var closedHeight: CGFloat { notchSize.height }
     private var expandedWidth: CGFloat { 480 }
@@ -410,7 +415,7 @@ struct IslandView: View {
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
 
-            // App icon slot — shows the focused app's icon during dictation
+            // Right slot — CI status dot or app icon during dictation
             ZStack {
                 if isDictatingClosed, let icon = dictationAppIcon {
                     Image(nsImage: icon)
@@ -419,9 +424,13 @@ struct IslandView: View {
                         .frame(width: 20, height: 20)
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                         .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                } else if CIStatusMonitor.shared.aggregateStatus != .idle {
+                    CIStatusDot(status: CIStatusMonitor.shared.aggregateStatus)
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
                 }
             }
-            .frame(width: closedDictationAppIconSlotWidth, height: closedHeight)
+            .frame(width: closedRightSlotWidth, height: closedHeight)
+            .padding(.trailing, 5)
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)
@@ -429,6 +438,7 @@ struct IslandView: View {
         .animation(.easeInOut(duration: 0.2), value: isHovering)
         .animation(.easeInOut(duration: 0.2), value: showActivity)
         .animation(.easeInOut(duration: 0.25), value: isDictatingClosed)
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: CIStatusMonitor.shared.aggregateStatus)
     }
 
     // MARK: - Opened Header
