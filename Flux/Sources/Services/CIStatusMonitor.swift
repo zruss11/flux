@@ -100,14 +100,20 @@ final class CIStatusMonitor {
                 "--json", "conclusion,status",
             ])
 
-            guard result.exitCode == 0, !result.output.isEmpty else {
+            Log.app.info("CIStatusMonitor: \(repo) exitCode=\(result.exitCode) output=\(result.output)")
+
+            guard result.exitCode == 0 else {
                 return .unknown
             }
 
             guard let data = result.output.data(using: .utf8),
-                  let runs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-                  let latest = runs.first else {
+                  let runs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
                 return .unknown
+            }
+
+            // No workflow runs at all — repo has no CI, treat as neutral/passing
+            guard let latest = runs.first else {
+                return .passing
             }
 
             let status = latest["status"] as? String ?? ""
