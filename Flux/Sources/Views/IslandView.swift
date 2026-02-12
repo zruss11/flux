@@ -781,6 +781,7 @@ struct IslandSettingsView: View {
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
+    @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
@@ -942,6 +943,19 @@ struct IslandSettingsView: View {
                                     .foregroundStyle(.white.opacity(0.75))
                             }
                             .menuStyle(.borderlessButton)
+                        )
+                    }
+                )
+
+                settingsRow(
+                    icon: "desktopcomputer",
+                    label: "Capture in-app context",
+                    trailing: {
+                        AnyView(
+                            Toggle("", isOn: $inAppContextTrackingEnabled)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.mini)
                         )
                     }
                 )

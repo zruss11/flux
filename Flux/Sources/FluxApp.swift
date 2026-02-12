@@ -101,6 +101,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         dictationManager.start(accessibilityReader: accessibilityReader)
+        SessionContextManager.shared.start()
         clipboardMonitor.start()
 
         // Auto-start tour on first launch after permissions are granted
@@ -117,6 +118,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         functionKeyMonitor?.stop()
         functionKeyMonitor = nil
         dictationManager.stop()
+        SessionContextManager.shared.stop()
         clipboardMonitor.stop()
     }
 
@@ -496,6 +498,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 return encodeJSON(AutomationErrorResponse(ok: false, error: error.localizedDescription))
             }
+
+        case "read_session_history":
+            let appName = input["appName"] as? String
+            let limit = intInput("limit") ?? 10
+            let sessions = SessionContextManager.shared.historyStore.recentSessions(appName: appName, limit: limit)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = .prettyPrinted
+            if let data = try? encoder.encode(sessions), let json = String(data: data, encoding: .utf8) {
+                return json
+            }
+            return "Failed to read session history"
+
+        case "get_session_context_summary":
+            let limit = intInput("limit") ?? 10
+            return SessionContextManager.shared.historyStore.contextSummaryText(limit: limit)
 
         case "read_clipboard_history":
             let rawLimit = intInput("limit") ?? 10
