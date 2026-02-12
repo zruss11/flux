@@ -106,7 +106,7 @@ struct ChatView: View {
                                     return
                                 }
                                 await voiceInput.startRecording { transcript in
-                                    inputText = transcript
+                                    inputText = DictionaryCorrector.apply(transcript, using: CustomDictionaryStore.shared.entries)
                                     sendMessage()
                                 }
                             }
