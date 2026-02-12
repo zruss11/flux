@@ -188,16 +188,19 @@ final class ScreenCapture {
         return ctx.makeImage() ?? image
     }
 
+    nonisolated static func windowFrameToScreenCoords(_ windowFrame: CGRect, screenFrame: CGRect) -> CGRect {
+        CGRect(
+            x: windowFrame.origin.x - screenFrame.origin.x,
+            y: screenFrame.maxY - windowFrame.origin.y - windowFrame.height,
+            width: windowFrame.width,
+            height: windowFrame.height
+        )
+    }
+
     private func windowFrameToScreenCoords(_ windowFrame: CGRect) -> CGRect {
         let screen = NSScreen.screens.first(where: { $0.frame.intersects(windowFrame) })
             ?? NSScreen.screens.first
         guard let screen else { return windowFrame }
-        let screenHeight = screen.frame.height
-        return CGRect(
-            x: windowFrame.origin.x,
-            y: screenHeight - windowFrame.origin.y - windowFrame.height,
-            width: windowFrame.width,
-            height: windowFrame.height
-        )
+        return Self.windowFrameToScreenCoords(windowFrame, screenFrame: screen.frame)
     }
 }

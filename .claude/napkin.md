@@ -22,6 +22,8 @@
 | 2026-02-11 | me | Added block-based NotificationCenter observer on a `@MainActor` app delegate and hit Swift 6 Sendable/data-race compiler errors. | Prefer selector-based observers (or main-actor isolated async hops) when notification payloads would otherwise cross actor boundaries unsafely. |
 | 2026-02-11 | me | Mentioned using the napkin skill in a user-facing progress update. | Keep napkin usage silent; apply it without announcing the skill. |
 | 2026-02-11 | me | Tried `npm run build` in `sidecar/` before dependencies were installed and hit `tsc: command not found`. | Run `npm install` in `sidecar/` first when validating TypeScript on a fresh workspace. |
+| 2026-02-11 | me | Opened napkin SKILL.md before reading .claude/napkin.md at session start. | Read .claude/napkin.md before any other file or command, including skill docs. |
+| 2026-02-11 | me | Tried to use `python` but only `python3` is available in this environment. | Use `python3` for scripts instead of `python`. |
 
 ## User Preferences
 - (accumulate here as you learn them)
