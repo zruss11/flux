@@ -40,10 +40,22 @@ final class AppInstructions {
 
     /// Add or update an instruction. If an instruction with the same `bundleId` exists, it is replaced.
     func upsert(_ instruction: Instruction) {
-        if let index = instructions.firstIndex(where: { $0.bundleId == instruction.bundleId }) {
-            instructions[index] = instruction
+        let trimmedBundleId = instruction.bundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBundleId.isEmpty else { return }
+
+        let trimmedAppName = instruction.appName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInstruction = instruction.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInstruction.isEmpty else { return }
+
+        var updated = instruction
+        updated.bundleId = trimmedBundleId
+        updated.appName = trimmedAppName.isEmpty ? trimmedBundleId : trimmedAppName
+        updated.instruction = trimmedInstruction
+
+        if let index = instructions.firstIndex(where: { $0.bundleId == updated.bundleId }) {
+            instructions[index] = updated
         } else {
-            instructions.append(instruction)
+            instructions.append(updated)
         }
         save()
     }
@@ -65,12 +77,19 @@ final class AppInstructions {
 
     private func load() {
         guard let data = UserDefaults.standard.data(forKey: Self.storageKey) else { return }
-        instructions = (try? JSONDecoder().decode([Instruction].self, from: data)) ?? []
+        if let decoded = try? JSONDecoder().decode([Instruction].self, from: data) {
+            instructions = decoded
+            return
+        }
+
+        instructions = []
+        UserDefaults.standard.removeObject(forKey: Self.storageKey)
     }
 
     private func save() {
         if let data = try? JSONEncoder().encode(instructions) {
             UserDefaults.standard.set(data, forKey: Self.storageKey)
         }
+        NotificationCenter.default.post(name: .appInstructionsDidChange, object: nil)
     }
 }

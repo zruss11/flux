@@ -61,8 +61,17 @@ struct AppInstructionsView: View {
                         TextField("Bundle ID", text: $draftBundleId)
                             .textFieldStyle(.roundedBorder)
                     }
-                    TextField("Instruction (e.g. \"Be casual, use emoji\")", text: $draftInstruction)
-                        .textFieldStyle(.roundedBorder)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Instruction")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $draftInstruction)
+                            .frame(minHeight: 72)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .strokeBorder(.separator)
+                            )
+                    }
                     HStack {
                         Spacer()
 
@@ -78,7 +87,10 @@ struct AppInstructionsView: View {
                         Button("Add") {
                             addInstruction()
                         }
-                        .disabled(draftBundleId.isEmpty || draftInstruction.isEmpty)
+                        .disabled(
+                            draftBundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                draftInstruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
                     }
                 }
                 .padding(4)
@@ -93,9 +105,12 @@ struct AppInstructionsView: View {
     }
 
     private func addInstruction() {
-        let name = draftAppName.isEmpty ? draftBundleId : draftAppName
+        let bundleId = draftBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let appName = draftAppName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let instruction = draftInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = appName.isEmpty ? bundleId : appName
         AppInstructions.shared.upsert(
-            .init(bundleId: draftBundleId, appName: name, instruction: draftInstruction)
+            .init(bundleId: bundleId, appName: name, instruction: instruction)
         )
         draftBundleId = ""
         draftAppName = ""
