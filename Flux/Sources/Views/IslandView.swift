@@ -63,6 +63,7 @@ struct IslandView: View {
     }
 
     private let closedDictationWidthBoost: CGFloat = 80
+    private let closedDictationAppIconWidth: CGFloat = 36
 
     private var isDictatingClosed: Bool {
         !isExpanded && DictationManager.shared.isDictating
@@ -70,6 +71,29 @@ struct IslandView: View {
 
     private var closedDictationSlotWidth: CGFloat {
         isDictatingClosed ? closedDictationWidthBoost : 0
+    }
+
+    private var closedDictationAppIconSlotWidth: CGFloat {
+        isDictatingClosed ? closedDictationAppIconWidth : 0
+    }
+
+    /// The icon of the app that was active when dictation started.
+    private var dictationAppIcon: NSImage? {
+        let bundleId: String? = AppMonitor.shared.currentApp?.bundleId
+            ?? AppMonitor.shared.recentApps.first?.bundleId
+        guard let bundleId else { return nil }
+
+        // Try InstalledAppProvider first (cached, higher quality)
+        if let discovered = InstalledAppProvider.shared.app(forBundleId: bundleId) {
+            return discovered.icon
+        }
+
+        // Fallback: get icon from the running application directly
+        if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) {
+            return runningApp.icon
+        }
+
+        return nil
     }
 
     private var hasPendingToolCalls: Bool {
@@ -108,6 +132,7 @@ struct IslandView: View {
         notchSize.width
             + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
             + (isDictatingClosed ? closedDictationWidthBoost : 0)
+            + closedDictationAppIconSlotWidth
     }
     private var closedHeight: CGFloat { notchSize.height }
     private var expandedWidth: CGFloat { 480 }
@@ -384,6 +409,19 @@ struct IslandView: View {
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
+
+            // App icon slot — shows the focused app's icon during dictation
+            ZStack {
+                if isDictatingClosed, let icon = dictationAppIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                }
+            }
+            .frame(width: closedDictationAppIconSlotWidth, height: closedHeight)
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)
