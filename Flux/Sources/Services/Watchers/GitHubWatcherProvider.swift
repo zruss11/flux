@@ -10,6 +10,7 @@ struct GitHubWatcherProvider: WatcherProvider {
 
     private static let apiBase = "https://api.github.com"
 
+    /// Polls GitHub notifications and workflow failures and returns normalized alerts.
     func check(
         config: Watcher,
         credentials: [String: String],
@@ -40,7 +41,10 @@ struct GitHubWatcherProvider: WatcherProvider {
 
         // 2. CI/CD (failed workflow runs)
         let watchCicd = config.settings["watchCicd"] != "false"
-        let repos = config.settings["repos"]?.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) } ?? []
+        let repos = config.settings["repos"]?
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
         if watchCicd && !repos.isEmpty {
             for repo in repos {
                 let ciAlerts = try await checkWorkflowRuns(config: config, headers: headers, repo: repo, since: lastCheckISO)
@@ -56,9 +60,15 @@ struct GitHubWatcherProvider: WatcherProvider {
 
     // MARK: - Notifications
 
+    /// Retrieves user notifications from GitHub and maps each into a watcher alert.
     private func checkNotifications(config: Watcher, headers: [String: String], since: String) async throws -> [WatcherAlert] {
-        let urlString = "\(Self.apiBase)/notifications?since=\(since.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? since)&all=false"
-        var req = URLRequest(url: URL(string: urlString)!)
+        let encodedSince = since.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? since
+        let urlString = "\(Self.apiBase)/notifications?since=\(encodedSince)&all=false"
+        guard let url = URL(string: urlString) else {
+            throw WatcherError.apiError("GitHub: could not construct notifications URL")
+        }
+
+        var req = URLRequest(url: url)
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
 
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -75,6 +85,7 @@ struct GitHubWatcherProvider: WatcherProvider {
         }
     }
 
+    /// Converts a raw GitHub notification object into a watcher alert.
     private func notificationToAlert(_ notif: [String: Any], config: Watcher) -> WatcherAlert? {
         guard let id = notif["id"] as? String,
               let subject = notif["subject"] as? [String: Any],
@@ -110,14 +121,25 @@ struct GitHubWatcherProvider: WatcherProvider {
 
     // MARK: - CI/CD
 
+    /// Retrieves recent failed workflow runs for a repository.
     private func checkWorkflowRuns(config: Watcher, headers: [String: String], repo: String, since: String) async throws -> [WatcherAlert] {
-        let urlString = "\(Self.apiBase)/repos/\(repo)/actions/runs?status=failure&per_page=5"
-        var req = URLRequest(url: URL(string: urlString)!)
+        guard let normalizedRepo = validateRepo(repo) else {
+            Log.app.warning("GitHubWatcher: skipping invalid repo '\(repo)'")
+            return []
+        }
+
+        let urlString = "\(Self.apiBase)/repos/\(normalizedRepo)/actions/runs?status=failure&per_page=5"
+        guard let url = URL(string: urlString) else {
+            Log.app.warning("GitHubWatcher: invalid workflow runs URL for repo '\(normalizedRepo)'")
+            return []
+        }
+
+        var req = URLRequest(url: url)
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
 
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            throw WatcherError.apiError("GitHub Actions API error for \(repo)")
+            throw WatcherError.apiError("GitHub Actions API error for \(normalizedRepo)")
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -147,7 +169,7 @@ struct GitHubWatcherProvider: WatcherProvider {
                 watcherName: config.name,
                 priority: .high,
                 title: "🔴 CI Failed: \(name)",
-                summary: "\(repo) · Branch: \(branch) · \(conclusion)",
+                summary: "\(normalizedRepo) · Branch: \(branch) · \(conclusion)",
                 sourceUrl: htmlUrl,
                 suggestedActions: ["View logs", "Retry workflow", "Open PR"],
                 timestamp: updatedAt,
@@ -158,6 +180,7 @@ struct GitHubWatcherProvider: WatcherProvider {
 
     // MARK: - Helpers
 
+    /// Maps GitHub notification reasons to watcher alert priority.
     private func classifyNotifPriority(reason: String) -> WatcherAlert.Priority {
         switch reason {
         case "review_requested", "assign": return .high
@@ -167,6 +190,7 @@ struct GitHubWatcherProvider: WatcherProvider {
         }
     }
 
+    /// Chooses an emoji marker for notification type and reason.
     private func notifTypeEmoji(type: String, reason: String) -> String {
         if reason == "review_requested" { return "👀" }
         if reason == "assign" { return "📌" }
@@ -182,6 +206,7 @@ struct GitHubWatcherProvider: WatcherProvider {
         }
     }
 
+    /// Produces human-readable notification reason text.
     private func formatReason(_ reason: String) -> String {
         let map: [String: String] = [
             "review_requested": "Review requested",
@@ -198,6 +223,7 @@ struct GitHubWatcherProvider: WatcherProvider {
         return map[reason] ?? reason
     }
 
+    /// Returns default action suggestions for a GitHub notification reason.
     private func suggestedActions(for reason: String) -> [String] {
         switch reason {
         case "review_requested": return ["Review PR", "View diff", "Approve"]
@@ -208,6 +234,7 @@ struct GitHubWatcherProvider: WatcherProvider {
         }
     }
 
+    /// Converts supported API resource URLs to equivalent GitHub web URLs.
     private func apiUrlToHtml(apiUrl: String, repoHtmlUrl: String) -> String {
         // Convert api.github.com/repos/owner/repo/pulls/123 → github.com/owner/repo/pull/123
         guard let range = apiUrl.range(of: #"api\.github\.com/repos/([^/]+/[^/]+)/(pulls|issues|releases)/(\d+)"#, options: .regularExpression) else {
@@ -222,5 +249,15 @@ struct GitHubWatcherProvider: WatcherProvider {
         let type = parts[2] == "pulls" ? "pull" : parts[2]
         let num = parts[3]
         return "https://github.com/\(repo)/\(type)/\(num)"
+    }
+
+    /// Validates `owner/repo` repo identifiers used for workflow checks.
+    private func validateRepo(_ repo: String) -> String? {
+        let trimmed = repo.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        return trimmed
     }
 }

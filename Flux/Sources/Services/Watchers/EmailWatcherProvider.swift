@@ -9,6 +9,7 @@ struct EmailWatcherProvider: WatcherProvider {
 
     private static let gmailBase = "https://gmail.googleapis.com/gmail/v1/users/me"
 
+    /// Polls Gmail unread messages and converts new items into watcher alerts.
     func check(
         config: Watcher,
         credentials: [String: String],
@@ -19,6 +20,7 @@ struct EmailWatcherProvider: WatcherProvider {
             return WatcherCheckResult(alerts: [])
         }
 
+        let pollStartEpochMs = Int(Date().timeIntervalSince1970 * 1000)
         let lastCheckMs = Int(previousState?["lastCheckEpochMs"] ?? "")
             ?? Int(Date().addingTimeInterval(-300).timeIntervalSince1970 * 1000)
         let afterSeconds = lastCheckMs / 1000
@@ -31,10 +33,13 @@ struct EmailWatcherProvider: WatcherProvider {
         let labelQuery = labels.isEmpty ? "in:INBOX" : labels.map { "in:\($0)" }.joined(separator: " ")
 
         let query = "is:unread after:\(afterSeconds) \(labelQuery)"
-        let listURL = "\(Self.gmailBase)/messages?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")&maxResults=\(maxResults)"
+        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        guard let listURL = URL(string: "\(Self.gmailBase)/messages?q=\(encodedQuery)&maxResults=\(maxResults)") else {
+            throw WatcherError.apiError("Gmail: could not construct list URL")
+        }
 
         // List unread messages
-        var listReq = URLRequest(url: URL(string: listURL)!)
+        var listReq = URLRequest(url: listURL)
         listReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         let (listData, listResp) = try await URLSession.shared.data(for: listReq)
@@ -45,7 +50,7 @@ struct EmailWatcherProvider: WatcherProvider {
 
         let listJSON = try JSONSerialization.jsonObject(with: listData) as? [String: Any]
         guard let messageRefs = listJSON?["messages"] as? [[String: Any]], !messageRefs.isEmpty else {
-            return WatcherCheckResult(alerts: [], nextState: ["lastCheckEpochMs": "\(Int(Date().timeIntervalSince1970 * 1000))"])
+            return WatcherCheckResult(alerts: [], nextState: ["lastCheckEpochMs": "\(pollStartEpochMs)"])
         }
 
         // Fetch details for each message
@@ -59,13 +64,16 @@ struct EmailWatcherProvider: WatcherProvider {
 
         return WatcherCheckResult(
             alerts: alerts,
-            nextState: ["lastCheckEpochMs": "\(Int(Date().timeIntervalSince1970 * 1000))"]
+            nextState: ["lastCheckEpochMs": "\(pollStartEpochMs)"]
         )
     }
 
+    /// Fetches Gmail message metadata and maps it into a watcher alert.
     private func fetchMessageAlert(messageId: String, token: String, config: Watcher) async throws -> WatcherAlert {
-        let url = "\(Self.gmailBase)/messages/\(messageId)?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date"
-        var req = URLRequest(url: URL(string: url)!)
+        guard let url = URL(string: "\(Self.gmailBase)/messages/\(messageId)?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date") else {
+            throw WatcherError.apiError("Gmail: could not construct message URL for \(messageId)")
+        }
+        var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -95,11 +103,47 @@ struct EmailWatcherProvider: WatcherProvider {
             summary: "From: \(from)\n\(snippet)",
             sourceUrl: "https://mail.google.com/mail/u/0/#inbox/\(threadId)",
             suggestedActions: ["Open in Gmail", "Reply", "Archive"],
-            timestamp: ISO8601DateFormatter().date(from: dateStr ?? "") ?? Date(),
+            timestamp: Self.parseEmailDate(dateStr) ?? Date(),
             dedupeKey: "email:\(messageId)"
         )
     }
 
+    /// Parses RFC 2822-style email dates from Gmail message headers.
+    private static func parseEmailDate(_ rawValue: String?) -> Date? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let normalized = trimmed.replacingOccurrences(
+            of: "\\s*\\(.*\\)$",
+            with: "",
+            options: .regularExpression
+        )
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+
+        let formats = [
+            "EEE, dd MMM yyyy HH:mm:ss Z",
+            "EEE, d MMM yyyy HH:mm:ss Z",
+            "dd MMM yyyy HH:mm:ss Z",
+            "d MMM yyyy HH:mm:ss Z",
+            "EEE, dd MMM yyyy HH:mm:ss zzz",
+            "EEE, d MMM yyyy HH:mm:ss zzz",
+        ]
+
+        for format in formats {
+            formatter.dateFormat = format
+            if let parsed = formatter.date(from: normalized) {
+                return parsed
+            }
+        }
+
+        return nil
+    }
+
+    /// Assigns priority based on Gmail labels, subject keywords, and optional VIP senders.
     private func classifyPriority(labelIds: [String], subject: String, from: String, config: Watcher) -> WatcherAlert.Priority {
         let subjectLower = subject.lowercased()
 
