@@ -7,7 +7,7 @@ export const baseTools: ToolDefinition[] = [
   {
     name: 'capture_screen',
     description:
-      'Capture a screenshot of the main display or the frontmost window. Returns a base64-encoded image (JPEG/PNG depending on app implementation).',
+      'Capture a screenshot of the main display or the frontmost window. When highlight_caret is true, a red rectangle is drawn around the currently focused UI element to show cursor position.',
     input_schema: {
       type: 'object',
       properties: {
@@ -15,6 +15,11 @@ export const baseTools: ToolDefinition[] = [
           type: 'string',
           enum: ['display', 'window'],
           description: 'Whether to capture the full display or just the frontmost window',
+        },
+        highlight_caret: {
+          type: 'boolean',
+          description:
+            'When true, draws a red rectangle around the currently focused UI element (text field, button, etc.) on the screenshot.',
         },
       },
       required: ['target'],

@@ -326,10 +326,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         switch toolName {
         case "capture_screen":
             let target = input["target"] as? String ?? "display"
+            let highlightCaret = input["highlight_caret"] as? Bool ?? false
+            let caretRect: CGRect? = highlightCaret ? accessibilityReader.getCaretBounds() : nil
             if target == "window" {
-                return await screenCapture.captureFrontmostWindow() ?? "Failed to capture window"
+                return await screenCapture.captureFrontmostWindow(caretRect: caretRect) ?? "Failed to capture window"
             } else {
-                return await screenCapture.captureMainDisplay() ?? "Failed to capture display"
+                return await screenCapture.captureMainDisplay(caretRect: caretRect) ?? "Failed to capture display"
             }
 
         case "read_ax_tree":
