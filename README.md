@@ -7,7 +7,7 @@ A native macOS app with a Dynamic Island-style notch overlay powered by Claude a
 ## Features
 
 - 🖥️ **Screen-Aware AI** — Reads window contents via Accessibility API + captures screenshots via ScreenCaptureKit. No OCR, no guessing — actual structured data from any app.
-- 🎙️ **Voice Input** — Local speech-to-text with Parakeet MLX. No API key, no cloud, runs entirely on Apple Silicon.
+- 🎙️ **Voice Input** — On-device speech transcription with Apple Speech APIs (`SpeechAnalyzer` + `SpeechTranscriber`) on macOS 26+.
 - 🔧 **Custom Tool Builder** — Create AI-powered tools that combine LLM prompts with Shortcuts, shell scripts, AppleScript, and custom instructions.
 - 💬 **Multi-Channel** — Connect Discord, Slack, Telegram, WhatsApp so your AI copilot reaches you anywhere.
 - 🏝️ **Dynamic Island UI** — Notch-anchored overlay with Liquid Glass materials. Expands contextually, stays out of your way.
