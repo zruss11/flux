@@ -127,6 +127,7 @@ final class DictationManager {
 
             self.isDictating = true
             self.recordingStartTime = Date()
+            AudioFeedbackService.shared.play(.dictationStart)
 
             IslandWindowManager.shared.suppressDeactivationCollapse = true
 
@@ -170,6 +171,7 @@ final class DictationManager {
         }
 
         // Stop recording; the transcript will arrive via the `handleTranscript` callback.
+        AudioFeedbackService.shared.play(.dictationStop)
         voiceInput?.stopRecording()
     }
 
@@ -179,6 +181,7 @@ final class DictationManager {
         let trimmed = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !trimmed.isEmpty else {
+            AudioFeedbackService.shared.play(.error)
             barLevels = Array(repeating: 0, count: 16)
             isProcessing = false
             IslandWindowManager.shared.suppressDeactivationCollapse = false
@@ -222,6 +225,8 @@ final class DictationManager {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(finalText, forType: .string)
             }
+
+            AudioFeedbackService.shared.play(.dictationSuccess)
 
             // Persist the entry in history.
             let entry = DictationEntry(

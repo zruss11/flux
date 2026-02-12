@@ -152,6 +152,7 @@ final class VoiceInput {
 
         guard !pcmData.isEmpty else {
             Log.voice.warning("No audio data recorded")
+            AudioFeedbackService.shared.play(.error)
             cleanUp()
             return
         }
@@ -172,6 +173,7 @@ final class VoiceInput {
                 }
             } catch {
                 Log.voice.error("Transcription error: \(error)")
+                AudioFeedbackService.shared.play(.error)
             }
         }
     }

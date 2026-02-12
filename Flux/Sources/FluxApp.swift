@@ -23,6 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let toolRunner = ToolRunner()
     private let automationService = AutomationService.shared
     private let dictationManager = DictationManager.shared
+    private let audioFeedback = AudioFeedbackService.shared
 
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
