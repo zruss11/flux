@@ -7,6 +7,9 @@ struct SettingsView: View {
     @AppStorage("telegramChatId") private var telegramChatId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
+    @AppStorage("handsFreeEnabled") private var handsFreeEnabled = false
+    @AppStorage("wakePhrase") private var wakePhrase = "Hey Flux"
+    @AppStorage("handsFreesilenceTimeout") private var silenceTimeout = 1.5
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
@@ -38,6 +41,33 @@ struct SettingsView: View {
                 Text("Controls how Flux generates titles for new chats.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Hands-Free") {
+                Toggle("Enable Hands-Free Mode", isOn: $handsFreeEnabled)
+                    .onChange(of: handsFreeEnabled) {
+                        NotificationCenter.default.post(name: .handsFreeConfigDidChange, object: nil)
+                    }
+
+                if handsFreeEnabled {
+                    TextField("Wake Phrase", text: $wakePhrase)
+                        .textFieldStyle(.roundedBorder)
+
+                    Text("Say this phrase to activate Flux. Default: \"Hey Flux\"")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Stepper(
+                        "Silence Timeout: \(String(format: "%.1f", silenceTimeout))s",
+                        value: $silenceTimeout,
+                        in: 0.5...5.0,
+                        step: 0.5
+                    )
+
+                    Text("How long to wait after you stop speaking before sending the message.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("MCP") {

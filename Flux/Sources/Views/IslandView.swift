@@ -366,6 +366,10 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 22, height: 22)
+                } else if WakeWordDetector.shared.isEnabled {
+                    Circle()
+                        .fill(.green.opacity(0.6))
+                        .frame(width: 6, height: 6)
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)

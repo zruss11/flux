@@ -23,6 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let toolRunner = ToolRunner()
     private let automationService = AutomationService.shared
     private let dictationManager = DictationManager.shared
+    private let wakeWordDetector = WakeWordDetector.shared
 
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
@@ -100,6 +101,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         dictationManager.start(accessibilityReader: accessibilityReader)
+        setupHandsFreeObserver()
+
+        // Auto-start hands-free if previously enabled.
+        if UserDefaults.standard.bool(forKey: "handsFreeEnabled") {
+            startWakeWordDetector()
+        }
 
         // Auto-start tour on first launch after permissions are granted
         if !UserDefaults.standard.bool(forKey: "hasCompletedTour") {
@@ -115,6 +122,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         functionKeyMonitor?.stop()
         functionKeyMonitor = nil
         dictationManager.stop()
+        wakeWordDetector.stop()
     }
 
     private func setupStatusItem() {
@@ -242,6 +250,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitFromMenu() {
         NSApp.terminate(nil)
+    }
+
+    private func setupHandsFreeObserver() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleHandsFreeConfigChanged),
+            name: .handsFreeConfigDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func handleHandsFreeConfigChanged() {
+        if UserDefaults.standard.bool(forKey: "handsFreeEnabled") {
+            if !wakeWordDetector.isEnabled {
+                startWakeWordDetector()
+            }
+        } else {
+            wakeWordDetector.stop()
+        }
+    }
+
+    private func startWakeWordDetector() {
+        let voiceInput = VoiceInput()
+        wakeWordDetector.start(
+            voiceInput: voiceInput,
+            conversationStore: conversationStore,
+            agentBridge: agentBridge
+        )
     }
 
     private func setupBridgeCallbacks() {

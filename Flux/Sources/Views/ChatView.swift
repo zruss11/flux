@@ -112,10 +112,19 @@ struct ChatView: View {
                             }
                         }
                     } label: {
-                        Image(systemName: voiceInput.isRecording ? "mic.fill" : "mic")
-                            .font(.system(size: 14))
-                            .foregroundStyle(voiceInput.isRecording ? .red : .white.opacity(0.5))
-                            .frame(width: 28, height: 28)
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: voiceInput.isRecording ? "mic.fill" : "mic")
+                                .font(.system(size: 14))
+                                .foregroundStyle(voiceInput.isRecording ? .red : .white.opacity(0.5))
+                                .frame(width: 28, height: 28)
+
+                            if WakeWordDetector.shared.isEnabled && !voiceInput.isRecording {
+                                Circle()
+                                    .fill(.green)
+                                    .frame(width: 6, height: 6)
+                                    .offset(x: -2, y: 2)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
 
