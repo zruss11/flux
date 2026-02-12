@@ -22,10 +22,14 @@ struct DictationHistoryView: View {
                         VStack(spacing: 0) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(entry.finalText)
+                                    Text(previewText(for: entry))
                                         .lineLimit(2)
                                         .font(.system(size: 12))
-                                        .foregroundStyle(.white.opacity(0.9))
+                                        .foregroundStyle(
+                                            entry.status == .failed
+                                                ? .red.opacity(0.8)
+                                                : .white.opacity(0.9)
+                                        )
 
                                     HStack(spacing: 6) {
                                         Text(entry.timestamp, style: .relative)
@@ -35,6 +39,14 @@ struct DictationHistoryView: View {
                                         Text("\(String(format: "%.0f", entry.duration))s")
                                             .font(.system(size: 10))
                                             .foregroundStyle(.white.opacity(0.4))
+
+                                        Text(entry.status == .failed ? "Failed" : "Success")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(
+                                                entry.status == .failed
+                                                    ? .red.opacity(0.85)
+                                                    : .green.opacity(0.75)
+                                            )
 
                                         if let targetApp = entry.targetApp {
                                             Text(targetApp)
@@ -49,15 +61,19 @@ struct DictationHistoryView: View {
 
                                 Spacer()
 
+                                let canCopy = !entry.finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                 Button {
+                                    ClipboardMonitor.shared.beginSelfCopy()
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(entry.finalText, forType: .string)
+                                    ClipboardMonitor.shared.endSelfCopy()
                                 } label: {
                                     Image(systemName: "doc.on.doc")
                                         .font(.system(size: 12))
-                                        .foregroundStyle(.white.opacity(0.5))
+                                        .foregroundStyle(canCopy ? .white.opacity(0.5) : .white.opacity(0.2))
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(!canCopy)
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -74,35 +90,57 @@ struct DictationHistoryView: View {
 
                             if expandedEntryId == entry.id {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    if entry.rawTranscript != entry.cleanedText {
+                                    if entry.status == .failed {
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text("Raw")
+                                            Text("Error")
                                                 .font(.system(size: 10, weight: .semibold))
                                                 .foregroundStyle(.white.opacity(0.3))
-                                            Text(entry.rawTranscript)
+                                            Text(entry.failureReason ?? "Unknown error")
                                                 .font(.system(size: 11))
-                                                .foregroundStyle(.white.opacity(0.5))
+                                                .foregroundStyle(.red.opacity(0.8))
                                         }
-                                    }
 
-                                    if entry.cleanedText != entry.finalText {
+                                        if !entry.rawTranscript.isEmpty {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Raw")
+                                                    .font(.system(size: 10, weight: .semibold))
+                                                    .foregroundStyle(.white.opacity(0.3))
+                                                Text(entry.rawTranscript)
+                                                    .font(.system(size: 11))
+                                                    .foregroundStyle(.white.opacity(0.5))
+                                            }
+                                        }
+                                    } else {
+                                        if entry.rawTranscript != entry.cleanedText {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Raw")
+                                                    .font(.system(size: 10, weight: .semibold))
+                                                    .foregroundStyle(.white.opacity(0.3))
+                                                Text(entry.rawTranscript)
+                                                    .font(.system(size: 11))
+                                                    .foregroundStyle(.white.opacity(0.5))
+                                            }
+                                        }
+
+                                        if entry.cleanedText != entry.finalText {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Cleaned")
+                                                    .font(.system(size: 10, weight: .semibold))
+                                                    .foregroundStyle(.white.opacity(0.3))
+                                                Text(entry.cleanedText)
+                                                    .font(.system(size: 11))
+                                                    .foregroundStyle(.white.opacity(0.6))
+                                            }
+                                        }
+
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text("Cleaned")
+                                            Text("Final")
                                                 .font(.system(size: 10, weight: .semibold))
                                                 .foregroundStyle(.white.opacity(0.3))
-                                            Text(entry.cleanedText)
+                                            Text(entry.finalText)
                                                 .font(.system(size: 11))
-                                                .foregroundStyle(.white.opacity(0.6))
+                                                .foregroundStyle(.white.opacity(0.8))
                                         }
-                                    }
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Final")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(.white.opacity(0.3))
-                                        Text(entry.finalText)
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(.white.opacity(0.8))
                                     }
 
                                     Text(entry.enhancementMethod.rawValue)
@@ -134,5 +172,18 @@ struct DictationHistoryView: View {
                 .padding(.vertical, 8)
             }
         }
+    }
+
+    private func previewText(for entry: DictationEntry) -> String {
+        if entry.status == .failed {
+            return entry.failureReason ?? "Dictation failed"
+        }
+
+        let final = entry.finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !final.isEmpty {
+            return final
+        }
+
+        return "(empty transcript)"
     }
 }

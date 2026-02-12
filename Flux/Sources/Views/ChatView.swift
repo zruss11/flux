@@ -1,5 +1,6 @@
 import AppKit
 import MarkdownUI
+import Speech
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -31,6 +32,7 @@ struct ChatView: View {
     @State private var skillSearchQuery = ""
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
+    @State private var showSpeechPermissionAlert = false
     @State private var worktreeEnabled = false
     @State private var imageImportErrorMessage: String?
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
@@ -45,6 +47,20 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // "Pick up where you left off" pill when chat is empty
+            if conversationStore.activeConversation?.messages.isEmpty ?? true,
+               let recent = SessionContextManager.shared.historyStore.sessions.first {
+                RecentContextPill(session: recent) {
+                    inputText = "What was I doing in \(recent.appName)?"
+                    if let windowTitle = recent.windowTitle, !windowTitle.isEmpty {
+                        inputText += " The window was titled \"\(windowTitle)\"."
+                    }
+                    sendMessage()
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            }
+
             // Messages
             ScrollViewReader { scrollProxy in
                 ScrollView {
@@ -105,9 +121,12 @@ struct ChatView: View {
                                     showMicPermissionAlert = true
                                     return
                                 }
-                                await voiceInput.startRecording { transcript in
+                                let started = await voiceInput.startRecording(mode: .live) { transcript in
                                     inputText = transcript
                                     sendMessage()
+                                }
+                                if !started && SFSpeechRecognizer.authorizationStatus() != .authorized {
+                                    showSpeechPermissionAlert = true
                                 }
                             }
                         }
@@ -374,6 +393,16 @@ struct ChatView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Flux needs microphone access for voice input. Please enable it in System Settings > Privacy & Security > Microphone.")
+        }
+        .alert("Speech Recognition Access Required", isPresented: $showSpeechPermissionAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Flux needs Speech Recognition access for on-device transcription. Please enable it in System Settings > Privacy & Security > Speech Recognition.")
         }
         .alert("Image Import Failed", isPresented: Binding(
             get: { imageImportErrorMessage != nil },

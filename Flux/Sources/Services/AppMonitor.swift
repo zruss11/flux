@@ -30,12 +30,12 @@ final class AppMonitor {
     private let maxHistory = 10
     private var debounceItem: DispatchWorkItem?
     private let debounceInterval: TimeInterval = 0.2
-    private var observer: NSObjectProtocol?
+    private var isObserving = false
 
     private init() {}
 
     func start() {
-        guard observer == nil else { return }
+        guard !isObserving else { return }
         Log.appMonitor.info("AppMonitor starting")
 
         // Capture initial state.
@@ -43,30 +43,38 @@ final class AppMonitor {
             setActiveApp(from: frontmost)
         }
 
-        observer = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            MainActor.assumeIsolated {
-                guard let self,
-                      let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-                self.scheduleUpdate(for: app)
-            }
-        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleApplicationActivated(_:)),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
+        isObserving = true
     }
 
     func stop() {
-        if let observer {
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        if isObserving {
+            NSWorkspace.shared.notificationCenter.removeObserver(
+                self,
+                name: NSWorkspace.didActivateApplicationNotification,
+                object: nil
+            )
         }
-        observer = nil
+        isObserving = false
         debounceItem?.cancel()
         debounceItem = nil
         Log.appMonitor.info("AppMonitor stopped")
     }
 
     // MARK: - Private
+
+    @objc
+    private func handleApplicationActivated(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+            return
+        }
+        scheduleUpdate(for: app)
+    }
 
     private func scheduleUpdate(for app: NSRunningApplication) {
         debounceItem?.cancel()
