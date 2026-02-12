@@ -386,9 +386,11 @@ final class DictationManager {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .milliseconds(40), leeway: .milliseconds(10))
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
             let held = Self.isHotkeyHeldGlobally()
-            self.updateModifierState(isHeld: held)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.updateModifierState(isHeld: held)
+            }
         }
         timer.resume()
         modifierPollTimer = timer
@@ -428,12 +430,14 @@ final class DictationManager {
         cancelStopWatchdog()
 
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.handleRecordingFailure(
-                "Timed out waiting for transcription result.",
-                attemptId: attemptId,
-                recordHistory: true
-            )
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.handleRecordingFailure(
+                    "Timed out waiting for transcription result.",
+                    attemptId: attemptId,
+                    recordHistory: true
+                )
+            }
         }
         stopWatchdogWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + transcriptionStopTimeout, execute: workItem)
