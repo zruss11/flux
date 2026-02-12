@@ -29,7 +29,8 @@ final class AudioFeedbackService {
         for sound in Sound.allCases {
             guard let url = Bundle.module.url(
                 forResource: sound.rawValue,
-                withExtension: "caf"
+                withExtension: "caf",
+                subdirectory: "Sounds"
             ) else {
                 Log.audio.warning("Sound file not found: \(sound.rawValue).caf")
                 continue
