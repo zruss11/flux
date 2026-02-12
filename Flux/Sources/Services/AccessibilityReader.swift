@@ -163,8 +163,10 @@ final class AccessibilityReader {
         var position = CGPoint.zero
         var size = CGSize.zero
 
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
+        guard let posAXValue = positionValue as? AXValue,
+              let sizeAXValue = sizeValue as? AXValue,
+              AXValueGetValue(posAXValue, .cgPoint, &position),
+              AXValueGetValue(sizeAXValue, .cgSize, &size)
         else { return nil }
 
         guard size.width > 0 && size.height > 0 else { return nil }

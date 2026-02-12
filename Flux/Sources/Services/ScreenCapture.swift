@@ -86,8 +86,7 @@ final class ScreenCapture {
             )
 
             if let caretRect {
-                let windowBounds = windowFrameToScreenCoords(window.frame)
-                image = annotateImage(image, caretRect: caretRect, displayBounds: windowBounds)
+                image = annotateImage(image, caretRect: caretRect, displayBounds: window.frame)
             }
 
             return cgImageToBase64JPEG(image, maxDimension: 1600, quality: 0.7)
@@ -186,21 +185,5 @@ final class ScreenCapture {
         ctx.stroke(strokeRect)
 
         return ctx.makeImage() ?? image
-    }
-
-    nonisolated static func windowFrameToScreenCoords(_ windowFrame: CGRect, screenFrame: CGRect) -> CGRect {
-        CGRect(
-            x: windowFrame.origin.x - screenFrame.origin.x,
-            y: screenFrame.maxY - windowFrame.origin.y - windowFrame.height,
-            width: windowFrame.width,
-            height: windowFrame.height
-        )
-    }
-
-    private func windowFrameToScreenCoords(_ windowFrame: CGRect) -> CGRect {
-        let screen = NSScreen.screens.first(where: { $0.frame.intersects(windowFrame) })
-            ?? NSScreen.screens.first
-        guard let screen else { return windowFrame }
-        return Self.windowFrameToScreenCoords(windowFrame, screenFrame: screen.frame)
     }
 }
