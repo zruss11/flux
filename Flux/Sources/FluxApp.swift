@@ -143,7 +143,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SessionContextManager.shared.start()
         clipboardMonitor.start()
         watcherService.startAll()
-        CIStatusMonitor.shared.start()
 
         // Auto-start tour on first launch after permissions are granted
         if !UserDefaults.standard.bool(forKey: "hasCompletedTour") {
@@ -167,7 +166,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SessionContextManager.shared.stop()
         clipboardMonitor.stop()
         watcherService.onChatAlert = nil
-        CIStatusMonitor.shared.stop()
     }
 
     private func setupStatusItem() {
