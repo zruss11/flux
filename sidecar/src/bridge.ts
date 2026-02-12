@@ -45,7 +45,15 @@ interface SetTelegramConfigMessage {
   defaultChatId: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage;
+interface ActiveAppUpdateMessage {
+  type: 'active_app_update';
+  appName: string;
+  bundleId: string;
+  pid: number;
+  appInstruction?: string;
+}
+
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -143,6 +151,9 @@ const mcpAuthTokens = new Map<string, string>();
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
 let mcpBridgeUrl = '';
+
+/** Currently active (frontmost) app, updated live by the Swift client. */
+let lastActiveApp: { appName: string; bundleId: string; pid: number; appInstruction?: string } | null = null;
 
 interface ConversationSession {
   conversationId: string;
@@ -269,9 +280,22 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
         defaultChatId: message.defaultChatId ?? '',
       });
       break;
+    case 'active_app_update':
+      handleActiveAppUpdate(message);
+      break;
     default:
       log.warn('Unknown message type:', (message as Record<string, unknown>).type);
   }
+}
+
+function handleActiveAppUpdate(message: ActiveAppUpdateMessage): void {
+  lastActiveApp = {
+    appName: message.appName ?? 'Unknown',
+    bundleId: message.bundleId ?? 'unknown',
+    pid: message.pid ?? 0,
+    appInstruction: message.appInstruction,
+  };
+  log.info(`Active app updated: ${lastActiveApp.appName} (${lastActiveApp.bundleId})`);
 }
 
 function handleMcpAuth(message: McpAuthMessage): void {
@@ -585,7 +609,7 @@ function flushPendingToolCompletions(session: ConversationSession): void {
 }
 
 function buildFluxSystemPrompt(): string {
-  return [
+  const lines = [
     'You are Flux, a macOS AI desktop copilot.',
     'Use Flux tools to read the screen and act on the desktop.',
     'Screen context tools: mcp__flux__read_visible_windows (multi-window), mcp__flux__read_ax_tree (frontmost), mcp__flux__capture_screen (visual), mcp__flux__read_selected_text (selection).',
@@ -593,7 +617,19 @@ function buildFluxSystemPrompt(): string {
     'For complex tasks, spin up a small agent team with TeamCreate and delegate research or planning.',
     'Be concise and helpful. Ask clarifying questions when needed.',
     'Keep memory usage silent; apply it without announcing the skill.',
-  ].join('\n');
+  ];
+
+  // Inject live app context so the agent knows what the user is working in.
+  if (lastActiveApp) {
+    lines.push('');
+    lines.push(`The user is currently using: ${lastActiveApp.appName} (${lastActiveApp.bundleId}).`);
+    lines.push('Tailor your responses to the context of this application when relevant.');
+    if (lastActiveApp.appInstruction) {
+      lines.push(`Custom instruction for this app: ${lastActiveApp.appInstruction}`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 function getSession(conversationId: string): ConversationSession {

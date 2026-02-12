@@ -69,6 +69,10 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Per-App Instructions") {
+                AppInstructionsView()
+            }
+
             Section("Integrations") {
                 SecureField("Discord Bot Token", text: $discordBotToken)
                     .textFieldStyle(.roundedBorder)

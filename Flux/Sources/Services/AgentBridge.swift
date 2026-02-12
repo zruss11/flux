@@ -139,6 +139,20 @@ final class AgentBridge: @unchecked Sendable {
         send(message)
     }
 
+    /// Notify the sidecar of a frontmost-app change so it can adapt the system prompt.
+    func sendActiveAppUpdate(appName: String, bundleId: String, pid: Int32, appInstruction: String? = nil) {
+        var message: [String: Any] = [
+            "type": "active_app_update",
+            "appName": appName,
+            "bundleId": bundleId,
+            "pid": pid
+        ]
+        if let instruction = appInstruction, !instruction.isEmpty {
+            message["appInstruction"] = instruction
+        }
+        send(message)
+    }
+
     private func send(_ dict: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let string = String(data: data, encoding: .utf8) else { return }

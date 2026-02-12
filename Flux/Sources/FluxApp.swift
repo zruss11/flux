@@ -93,6 +93,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         agentBridge.connect()
 
+        // Start monitoring frontmost app changes and forward to sidecar.
+        let appMonitor = AppMonitor.shared
+        appMonitor.onActiveAppChanged = { [weak self] activeApp in
+            let instruction = AppInstructions.shared.instruction(forBundleId: activeApp.bundleId)
+            self?.agentBridge.sendActiveAppUpdate(
+                appName: activeApp.appName,
+                bundleId: activeApp.bundleId,
+                pid: activeApp.pid,
+                appInstruction: instruction?.instruction
+            )
+        }
+        appMonitor.start()
+
         IslandWindowManager.shared.showIsland(
             conversationStore: conversationStore,
             agentBridge: agentBridge
@@ -114,6 +127,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         functionKeyMonitor?.stop()
         functionKeyMonitor = nil
         dictationManager.stop()
+        AppMonitor.shared.stop()
     }
 
     private func setupStatusItem() {
