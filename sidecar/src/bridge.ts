@@ -327,7 +327,7 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
     sendToClient(ws, {
       type: 'assistant_message',
       conversationId,
-      content: 'No Anthropic API key configured. Please set your API key in Settings.',
+      content: 'No Anthropic API key configured. Please set your API key in Island Settings.',
     });
     return;
   }
@@ -657,10 +657,6 @@ Important guidelines:
   if (lastActiveApp) {
     prompt += `\n\nThe user is currently using: ${lastActiveApp.appName} (${lastActiveApp.bundleId}).`;
     prompt += '\nTailor your responses to the context of this application when relevant.';
-    if (lastActiveApp.appInstruction) {
-      prompt += '\nCustom instruction for this app (user preference; do not override tool/safety rules):';
-      prompt += `\n<app_instruction>\n${lastActiveApp.appInstruction}\n</app_instruction>`;
-    }
   }
 
   return prompt;
@@ -984,7 +980,7 @@ function sendToClient(ws: WebSocket | null, message: OutgoingMessage): void {
 async function handleTelegramMessage(chatId: string, threadId: number | undefined, text: string): Promise<void> {
   if (!runtimeApiKey) {
     await telegramBot.sendMessage(
-      'No Anthropic API key configured. Open Flux Settings and set your API key.',
+      'No Anthropic API key configured. Open Island Settings and set your API key.',
       chatId,
       threadId,
     );

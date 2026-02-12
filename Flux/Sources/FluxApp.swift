@@ -8,7 +8,11 @@ struct FluxApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView()
+            EmptyView()
+        }
+        .commands {
+            // Settings now live entirely inside IslandView.
+            CommandGroup(replacing: .appSettings) { }
         }
     }
 }
@@ -613,10 +617,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
-            return "Slack bot token not set. Open Flux Settings and set Slack Bot Token + Slack Channel ID."
+            return "Slack bot token not set. Open Island Settings and set Slack Bot + Slack Channel ID."
         }
         guard !channel.isEmpty else {
-            return "Slack channel ID not set. Open Flux Settings and set Slack Channel ID."
+            return "Slack channel ID not set. Open Island Settings and set Slack Channel ID."
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Slack message text is empty."
@@ -663,10 +667,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
-            return "Discord bot token not set. Open Flux Settings and set Discord Bot Token + Discord Channel ID."
+            return "Discord bot token not set. Open Island Settings and set Discord Bot + Discord Channel ID."
         }
         guard !channelId.isEmpty else {
-            return "Discord channel ID not set. Open Flux Settings and set Discord Channel ID."
+            return "Discord channel ID not set. Open Island Settings and set Discord Channel ID."
         }
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Discord message content is empty."
@@ -710,10 +714,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
-            return "Telegram bot token not set. Open Flux Settings and set Telegram Bot Token + Telegram Chat ID."
+            return "Telegram bot token not set. Open Island Settings and set Telegram Bot + Telegram Chat ID."
         }
         guard !chatId.isEmpty else {
-            return "Telegram chat ID not set. Open Flux Settings and set Telegram Chat ID."
+            return "Telegram chat ID not set. Open Island Settings and set Telegram Chat ID."
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Telegram message text is empty."

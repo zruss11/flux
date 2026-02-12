@@ -1,9 +1,9 @@
 import Foundation
 
-/// Model and persistence for per-app custom AI instructions.
+/// Model and persistence for per-app dictation enhancement instructions.
 ///
-/// Allows users to define different AI behavior based on which app is in the foreground.
-/// For example: "In Slack, be casual and use emoji" or "In Xcode, be technical and precise."
+/// Allows users to define different dictation rewrite behavior based on which app is in the foreground.
+/// For example: "In Slack, keep it casual" or "In Xcode, make it technical and precise."
 ///
 /// Instructions are stored as a JSON array in UserDefaults under `appInstructions`.
 @MainActor
