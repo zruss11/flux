@@ -430,7 +430,7 @@ struct IslandView: View {
                 }
             }
             .frame(width: closedRightSlotWidth, height: closedHeight)
-            .padding(.trailing, 5)
+            .offset(x: -10)
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)
