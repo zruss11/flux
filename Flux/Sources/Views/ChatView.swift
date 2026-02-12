@@ -312,7 +312,7 @@ struct ChatView: View {
         var outboundText = transformSelectedSkillTokensForOutbound(text)
 
         if worktreeEnabled && conversationStore.activeWorktreeBranch == nil {
-            let worktreePrefix = "Before writing code, create a git worktree for this task. Choose a short, descriptive branch name based on my request, then run `git worktree add ../worktree-<branch-name> -b <branch-name>` and cd into the new worktree before doing any work. After creating the worktree, call the `mcp__flux__set_worktree` tool with the branch name so it appears in the UI.\n\n"
+            let worktreePrefix = "Before writing code, create a git worktree for this task outside this repository tree. Choose a short, descriptive branch name based on my request, then run `mkdir -p ~/Applications/FluxWorktrees && git worktree add ~/Applications/FluxWorktrees/<branch-name> -b <branch-name>` and cd into the new worktree before doing any work. After creating the worktree, call the `mcp__flux__set_worktree` tool with the branch name so it appears in the UI.\n\n"
             outboundText = worktreePrefix + outboundText
         }
 

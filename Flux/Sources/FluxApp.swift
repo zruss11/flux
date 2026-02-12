@@ -359,7 +359,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case "set_worktree":
             let branchName = input["branchName"] as? String ?? ""
             conversationStore.activeWorktreeBranch = branchName
-            return "{\"ok\":true,\"branchName\":\"\(branchName)\"}"
+            return encodeJSON(SetWorktreeResponse(ok: true, branchName: branchName))
 
         case "send_slack_message":
             let text = input["text"] as? String ?? ""
@@ -517,6 +517,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private struct AutomationErrorResponse: Codable {
         let ok: Bool
         let error: String
+    }
+
+    private struct SetWorktreeResponse: Codable {
+        let ok: Bool
+        let branchName: String
     }
 
     private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {
