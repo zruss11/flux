@@ -45,7 +45,15 @@ interface SetTelegramConfigMessage {
   defaultChatId: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage;
+interface ActiveAppUpdateMessage {
+  type: 'active_app_update';
+  appName: string;
+  bundleId: string;
+  pid: number;
+  appInstruction?: string;
+}
+
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -143,6 +151,18 @@ const mcpAuthTokens = new Map<string, string>();
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
 let mcpBridgeUrl = '';
+
+/** Currently active (frontmost) app, updated live by the Swift client. */
+let lastActiveApp: { appName: string; bundleId: string; pid: number; appInstruction?: string } | null = null;
+
+function sanitizeAppInstruction(instruction: string | undefined): string | undefined {
+  if (!instruction) return undefined;
+  const trimmed = instruction.trim();
+  if (trimmed.length === 0) return undefined;
+  const maxLen = 2_000;
+  const clipped = trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
+  return clipped.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+}
 
 interface ConversationSession {
   conversationId: string;
@@ -269,9 +289,22 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
         defaultChatId: message.defaultChatId ?? '',
       });
       break;
+    case 'active_app_update':
+      handleActiveAppUpdate(message);
+      break;
     default:
       log.warn('Unknown message type:', (message as Record<string, unknown>).type);
   }
+}
+
+function handleActiveAppUpdate(message: ActiveAppUpdateMessage): void {
+  lastActiveApp = {
+    appName: message.appName ?? 'Unknown',
+    bundleId: message.bundleId ?? 'unknown',
+    pid: message.pid ?? 0,
+    appInstruction: sanitizeAppInstruction(message.appInstruction),
+  };
+  log.info(`Active app updated: ${lastActiveApp.appName} (${lastActiveApp.bundleId})`);
 }
 
 function handleMcpAuth(message: McpAuthMessage): void {
@@ -294,7 +327,7 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
     sendToClient(ws, {
       type: 'assistant_message',
       conversationId,
-      content: 'No Anthropic API key configured. Please set your API key in Settings.',
+      content: 'No Anthropic API key configured. Please set your API key in Island Settings.',
     });
     return;
   }
@@ -585,7 +618,7 @@ function flushPendingToolCompletions(session: ConversationSession): void {
 }
 
 function buildFluxSystemPrompt(): string {
-  return `You are Flux, a macOS AI desktop copilot. Your role is to help users accomplish tasks on their Mac by reading their screen when necessary and taking actions on their behalf.
+  let prompt = `You are Flux, a macOS AI desktop copilot. Your role is to help users accomplish tasks on their Mac by reading their screen when necessary and taking actions on their behalf.
 
 You have access to the following tools:
 
@@ -617,6 +650,19 @@ Important guidelines:
 - Ask clarifying questions when the user's request is ambiguous or lacks necessary details
 - When you use memory skills to remember information about the user, apply them silently without announcing that you're doing so
 - For straightforward requests that don't require screen information, proceed directly with the appropriate action`;
+
+  // Inject live app context so the agent knows what the user is working in.
+  // NOTE: This prompt is built once at session start. If the user switches apps
+  // mid-conversation, the context won't update until the next query session.
+  if (lastActiveApp) {
+    prompt += `\n\nThe user is currently using: ${lastActiveApp.appName} (${lastActiveApp.bundleId}).`;
+    prompt += '\nTailor your responses to the context of this application when relevant.';
+    if (lastActiveApp.appInstruction) {
+      prompt += `\n\nApp-specific instructions:\n${lastActiveApp.appInstruction}`;
+    }
+  }
+
+  return prompt;
 }
 
 function getSession(conversationId: string): ConversationSession {
@@ -937,7 +983,7 @@ function sendToClient(ws: WebSocket | null, message: OutgoingMessage): void {
 async function handleTelegramMessage(chatId: string, threadId: number | undefined, text: string): Promise<void> {
   if (!runtimeApiKey) {
     await telegramBot.sendMessage(
-      'No Anthropic API key configured. Open Flux Settings and set your API key.',
+      'No Anthropic API key configured. Open Island Settings and set your API key.',
       chatId,
       threadId,
     );

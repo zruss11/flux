@@ -15,7 +15,7 @@ Flux is a macOS-native AI desktop copilot. It sees your screen, hears your voice
 - Liquid Glass (`.glassEffect`) for overlay materials
 - ScreenCaptureKit for screenshots
 - AXUIElement (Accessibility API) for reading window contents
-- `parakeet-mlx` for local voice transcription
+- Apple Speech APIs (`SpeechAnalyzer` + `SpeechTranscriber`) for on-device voice transcription
 - Tool builder GUI + settings
 
 ### Node.js Sidecar (agent process)
@@ -96,7 +96,7 @@ Flux/
 │   ├── Services/
 │   │   ├── ScreenCapture.swift     # ScreenCaptureKit wrapper
 │   │   ├── AccessibilityReader.swift # AXUIElement tree extraction
-│   │   ├── VoiceInput.swift        # Parakeet MLX integration
+│   │   ├── VoiceInput.swift        # Apple on-device speech transcription
 │   │   ├── AgentBridge.swift       # WebSocket bridge to Node sidecar
 │   │   └── ToolRunner.swift        # Execute shortcuts/scripts/applescript
 │   └── Resources/
@@ -120,7 +120,8 @@ Flux/
 ## Permissions Required
 - **Accessibility** — for AXUIElement (reading window contents)
 - **Screen Recording** — for ScreenCaptureKit (screenshots)
-- **Microphone** — for voice input (Parakeet)
+- **Microphone** — for voice input
+- **Speech Recognition** — for on-device transcription
 
 ## Build Order
 1. Xcode project skeleton + SwiftUI app shell
@@ -130,7 +131,7 @@ Flux/
 5. Node.js sidecar with Claude Agent SDK + custom tools
 6. WebSocket bridge between Swift app and sidecar
 7. Chat UI in island overlay
-8. Parakeet voice input (record → transcribe → send)
+8. Apple on-device voice input (record → transcribe → send)
 9. Tool builder GUI (create/edit/delete custom tools)
 10. Tool execution engine (shortcuts, scripts, applescript)
 11. Channel setup GUI (Discord/Slack/WhatsApp)

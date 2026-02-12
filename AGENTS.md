@@ -10,7 +10,7 @@ Flux — a macOS-native AI desktop copilot with a Dynamic Island-style notch ove
 - **AXUIElement** for reading window contents (primary context)
 - **ScreenCaptureKit** for screenshots (supplementary context)
 - **Claude Agent SDK** via Node.js sidecar (Sonnet model)
-- **Parakeet MLX** for local voice transcription
+- **Apple Speech APIs** (`SpeechAnalyzer` + `SpeechTranscriber`) for on-device voice transcription
 - Local persistence via UserDefaults + JSON files
 
 ## Build & Run
@@ -44,7 +44,7 @@ cd Flux && xcodebuild -scheme Flux -configuration Debug -destination "platform=m
 5. Node.js sidecar (Agent SDK + custom tools)
 6. WebSocket bridge (Swift ↔ Node)
 7. Chat UI in island overlay
-8. Voice input (Parakeet MLX)
+8. Voice input (Apple Speech on-device transcription)
 9. Tool builder GUI
 10. Tool execution engine (shortcuts/scripts/applescript)
 11. Channel setup GUI (Discord/Slack/WhatsApp)

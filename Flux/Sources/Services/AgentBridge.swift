@@ -36,6 +36,14 @@ final class AgentBridge: @unchecked Sendable {
     private var lastSentTelegramBotToken: String?
     private var lastSentTelegramChatId: String?
     private var telegramConfigObserver: NSObjectProtocol?
+    private var lastActiveAppUpdate: ActiveAppUpdatePayload?
+
+    private struct ActiveAppUpdatePayload: Sendable {
+        let appName: String
+        let bundleId: String
+        let pid: Int32
+        let appInstruction: String?
+    }
 
     init(port: Int = 7847) {
         self.port = port
@@ -78,6 +86,14 @@ final class AgentBridge: @unchecked Sendable {
         // Send MCP auth config proactively; doesn't depend on receiving a message first.
         sendMcpAuthIfNeeded()
         sendTelegramConfigFromStores()
+        if let activeApp = lastActiveAppUpdate {
+            sendActiveAppUpdate(
+                appName: activeApp.appName,
+                bundleId: activeApp.bundleId,
+                pid: activeApp.pid,
+                appInstruction: activeApp.appInstruction
+            )
+        }
 
         receiveMessage()
     }
@@ -136,6 +152,26 @@ final class AgentBridge: @unchecked Sendable {
             "type": "set_api_key",
             "apiKey": key
         ]
+        send(message)
+    }
+
+    /// Notify the sidecar of a frontmost-app change so it can adapt the system prompt.
+    func sendActiveAppUpdate(appName: String, bundleId: String, pid: Int32, appInstruction: String? = nil) {
+        lastActiveAppUpdate = ActiveAppUpdatePayload(
+            appName: appName,
+            bundleId: bundleId,
+            pid: pid,
+            appInstruction: appInstruction
+        )
+        var message: [String: Any] = [
+            "type": "active_app_update",
+            "appName": appName,
+            "bundleId": bundleId,
+            "pid": pid
+        ]
+        if let instruction = appInstruction, !instruction.isEmpty {
+            message["appInstruction"] = instruction
+        }
         send(message)
     }
 

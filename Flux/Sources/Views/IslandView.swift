@@ -63,6 +63,7 @@ struct IslandView: View {
     }
 
     private let closedDictationWidthBoost: CGFloat = 80
+    private let closedDictationAppIconWidth: CGFloat = 36
 
     private var isDictatingClosed: Bool {
         !isExpanded && DictationManager.shared.isDictating
@@ -70,6 +71,29 @@ struct IslandView: View {
 
     private var closedDictationSlotWidth: CGFloat {
         isDictatingClosed ? closedDictationWidthBoost : 0
+    }
+
+    private var closedDictationAppIconSlotWidth: CGFloat {
+        isDictatingClosed ? closedDictationAppIconWidth : 0
+    }
+
+    /// The icon of the app that was active when dictation started.
+    private var dictationAppIcon: NSImage? {
+        let bundleId: String? = AppMonitor.shared.currentApp?.bundleId
+            ?? AppMonitor.shared.recentApps.first?.bundleId
+        guard let bundleId else { return nil }
+
+        // Try InstalledAppProvider first (cached, higher quality)
+        if let discovered = InstalledAppProvider.shared.app(forBundleId: bundleId) {
+            return discovered.icon
+        }
+
+        // Fallback: get icon from the running application directly
+        if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) {
+            return runningApp.icon
+        }
+
+        return nil
     }
 
     private var hasPendingToolCalls: Bool {
@@ -108,6 +132,7 @@ struct IslandView: View {
         notchSize.width
             + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
             + (isDictatingClosed ? closedDictationWidthBoost : 0)
+            + closedDictationAppIconSlotWidth
     }
     private var closedHeight: CGFloat { notchSize.height }
     private var expandedWidth: CGFloat { 480 }
@@ -199,7 +224,9 @@ struct IslandView: View {
                 .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
                 .padding(.top, hasNotch ? 0 : windowManager.topOffset)
 
-            // Clipboard notification that drops below the island
+            let notificationBaseOffset = currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset)
+
+            // Clipboard notification that drops below the island.
             if windowManager.showingClipboardNotification {
                 ClipboardNotificationView()
                     .transition(
@@ -208,11 +235,24 @@ struct IslandView: View {
                             removal: .opacity
                         )
                     )
-                    .offset(y: currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset))
+                    .offset(y: notificationBaseOffset)
+            }
+
+            // Dictation failure notification shown below clipboard notification.
+            if windowManager.showingDictationNotification {
+                DictationNotificationView(message: windowManager.dictationNotificationMessage)
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity
+                        )
+                    )
+                    .offset(y: notificationBaseOffset + (windowManager.showingClipboardNotification ? 44 : 0))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingClipboardNotification)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingDictationNotification)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 clearClosedIndicatorsWorkItem?.cancel()
@@ -369,6 +409,19 @@ struct IslandView: View {
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
+
+            // App icon slot — shows the focused app's icon during dictation
+            ZStack {
+                if isDictatingClosed, let icon = dictationAppIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                }
+            }
+            .frame(width: closedDictationAppIconSlotWidth, height: closedHeight)
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)
@@ -661,6 +714,34 @@ private struct ClipboardNotificationView: View {
     }
 }
 
+private struct DictationNotificationView: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.bubble.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.red.opacity(0.9))
+
+            Text(message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            Capsule()
+                .fill(.black)
+        )
+        .overlay(
+            Capsule()
+                .stroke(.red.opacity(0.35), lineWidth: 0.8)
+        )
+        .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
+    }
+}
+
 private struct ClosedSparklesIndicator: View {
     let isActive: Bool
 
@@ -780,6 +861,7 @@ struct IslandSettingsView: View {
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
+    @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
     @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
 
@@ -795,9 +877,18 @@ struct IslandSettingsView: View {
     @State private var telegramPairingError: String?
     @State private var automationService = AutomationService.shared
     @State private var automationsExpanded = false
+    @State private var dictionaryStore = CustomDictionaryStore.shared
+    @State private var dictionaryExpanded = false
+    @State private var dictionaryEditorMode: DictionaryEditorMode?
+    @State private var pendingDeleteDictionaryEntry: DictionaryEntry?
+    @State private var dictEditorWord = ""
+    @State private var dictEditorAliases = ""
+    @State private var dictEditorDescription = ""
     @State private var automationEditorMode: InlineAutomationEditorMode?
     @State private var pendingDeleteAutomation: Automation?
     @State private var automationActionError: String?
+    @State private var showAppInstructionsEditor = false
+    @State private var appInstructionsCount = 0
 
     // Automation editor fields
     @State private var editorName = ""
@@ -825,6 +916,11 @@ struct IslandSettingsView: View {
     private enum InlineAutomationEditorMode: Equatable {
         case create
         case edit(String) // automation ID
+    }
+
+    private enum DictionaryEditorMode: Equatable {
+        case create
+        case edit(UUID)
     }
 
     private enum ScheduleFrequencyOption: String, CaseIterable, Identifiable {
@@ -923,6 +1019,19 @@ struct IslandSettingsView: View {
                 )
 
                 settingsRow(
+                    icon: "speaker.wave.2",
+                    label: "Dictation sounds",
+                    trailing: {
+                        AnyView(
+                            Toggle("", isOn: $dictationSoundsEnabled)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.mini)
+                        )
+                    }
+                )
+
+                settingsRow(
                     icon: "waveform.badge.magnifyingglass",
                     label: "Enhancement mode",
                     trailing: {
@@ -959,6 +1068,53 @@ struct IslandSettingsView: View {
                         )
                     }
                 )
+
+                settingsRow(
+                    icon: "app.badge",
+                    label: "Per-App Instructions",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 6) {
+                                Text(appInstructionsCount == 0 ? "None" : "\(appInstructionsCount) set")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(appInstructionsCount == 0 ? .white.opacity(0.5) : .green.opacity(0.85))
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.35))
+                            }
+                        )
+                    }
+                )
+                .onTapGesture {
+                    showAppInstructionsEditor = true
+                }
+
+                // Custom Dictionary (expandable)
+                settingsRow(
+                    icon: "character.book.closed",
+                    label: "Custom Dictionary",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 6) {
+                                Text("\(dictionaryStore.entries.count) words")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.5))
+                                Image(systemName: dictionaryExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                        )
+                    }
+                )
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        dictionaryExpanded.toggle()
+                    }
+                }
+
+                if dictionaryExpanded {
+                    dictionaryInlineSection
+                }
 
                 divider
 
@@ -1377,6 +1533,10 @@ struct IslandSettingsView: View {
         }
         .onAppear {
             loadSecretsIfNeeded()
+            reloadAppInstructionsCount()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appInstructionsDidChange)) { _ in
+            reloadAppInstructionsCount()
         }
         .onChange(of: editingField) { old, _ in
             switch old {
@@ -1403,6 +1563,10 @@ struct IslandSettingsView: View {
                 loadTelegramPairing()
                 try? await Task.sleep(for: .seconds(1))
             }
+        }
+        .sheet(isPresented: $showAppInstructionsEditor) {
+            AppInstructionsView()
+                .frame(width: 600, height: 680)
         }
     }
 
@@ -1475,6 +1639,216 @@ struct IslandSettingsView: View {
         } message: {
             Text(pendingDeleteAutomation?.name ?? "")
         }
+    }
+
+    // MARK: - Custom Dictionary Inline Section
+
+    private var dictionaryInlineSection: some View {
+        VStack(spacing: 2) {
+            ForEach(dictionaryStore.entries) { entry in
+                dictionaryInlineCard(entry)
+            }
+
+            if dictionaryEditorMode != nil {
+                dictionaryInlineEditor
+            }
+
+            if dictionaryEditorMode == nil {
+                HStack(spacing: 0) {
+                    Button {
+                        startCreatingDictionaryEntry()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 12))
+                            Text("Add Word")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(.white.opacity(0.6))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(dictionaryStore.entries.count >= dictionaryStore.maxEntries)
+
+                    Spacer()
+
+                    Text("\(dictionaryStore.entries.count) / \(dictionaryStore.maxEntries)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .padding(.trailing, 12)
+                }
+            }
+        }
+        .confirmationDialog(
+            "Delete dictionary entry?",
+            isPresented: Binding(
+                get: { pendingDeleteDictionaryEntry != nil },
+                set: { if !$0 { pendingDeleteDictionaryEntry = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let pending = pendingDeleteDictionaryEntry else { return }
+                dictionaryStore.remove(id: pending.id)
+                pendingDeleteDictionaryEntry = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteDictionaryEntry = nil
+            }
+        } message: {
+            Text(pendingDeleteDictionaryEntry?.text ?? "")
+        }
+    }
+
+    private func dictionaryInlineCard(_ entry: DictionaryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(entry.text)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+
+                Spacer()
+
+                Button {
+                    startEditingDictionaryEntry(entry)
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    pendingDeleteDictionaryEntry = entry
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if !entry.aliases.isEmpty {
+                Text(entry.aliases.joined(separator: ", "))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+            }
+
+            if !entry.description.isEmpty {
+                Text(entry.description)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.04))
+        )
+        .padding(.horizontal, 8)
+    }
+
+    private var dictionaryInlineEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(dictionaryEditorMode == .create ? "Add Word" : "Edit Word")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+
+            TextField("Word or phrase (e.g. Kubernetes)", text: $dictEditorWord)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+
+            TextField("Spoken forms, comma-separated (e.g. kuber nettys, cube er netties)", text: $dictEditorAliases)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+
+            TextField("Description (optional)", text: $dictEditorDescription)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+
+            HStack(spacing: 8) {
+                Button("Save") {
+                    saveDictionaryEntry()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.blue)
+                .disabled(dictEditorWord.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                Button("Cancel") {
+                    dictionaryEditorMode = nil
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.5))
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.06))
+        )
+        .padding(.horizontal, 8)
+    }
+
+    private func startCreatingDictionaryEntry() {
+        dictEditorWord = ""
+        dictEditorAliases = ""
+        dictEditorDescription = ""
+        dictionaryEditorMode = .create
+    }
+
+    private func startEditingDictionaryEntry(_ entry: DictionaryEntry) {
+        dictEditorWord = entry.text
+        dictEditorAliases = entry.aliases.joined(separator: ", ")
+        dictEditorDescription = entry.description
+        dictionaryEditorMode = .edit(entry.id)
+    }
+
+    private func saveDictionaryEntry() {
+        let word = dictEditorWord.trimmingCharacters(in: .whitespaces)
+        guard !word.isEmpty else { return }
+
+        let aliases = dictEditorAliases
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let description = String(dictEditorDescription.prefix(30))
+
+        switch dictionaryEditorMode {
+        case .create:
+            let entry = DictionaryEntry(
+                text: word,
+                aliases: aliases,
+                description: description
+            )
+            dictionaryStore.add(entry)
+        case .edit(let id):
+            if var existing = dictionaryStore.entries.first(where: { $0.id == id }) {
+                existing.text = word
+                existing.aliases = aliases
+                existing.description = description
+                dictionaryStore.update(existing)
+            }
+        case nil:
+            break
+        }
+
+        dictionaryEditorMode = nil
     }
 
     private func automationInlineCard(_ automation: Automation) -> some View {
@@ -2067,6 +2441,10 @@ struct IslandSettingsView: View {
         }
         telegramPairingCode = ""
         loadTelegramPairing()
+    }
+
+    private func reloadAppInstructionsCount() {
+        appInstructionsCount = AppInstructions.shared.instructions.count
     }
 
     private func editableRow<Field: View>(
