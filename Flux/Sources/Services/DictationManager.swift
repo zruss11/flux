@@ -137,6 +137,10 @@ final class DictationManager {
 
     private func beginDictation() {
         guard !isDictating else { return }
+        guard activeAttemptId == nil else {
+            Log.voice.debug("Ignoring dictation start while previous attempt is still active")
+            return
+        }
 
         let attemptId = UUID()
         activeAttemptId = attemptId
@@ -186,6 +190,10 @@ final class DictationManager {
             )
 
             guard self.isAttemptActive(attemptId) else {
+                if started || input.isRecording {
+                    Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] startup completed after attempt ended; stopping stale recorder")
+                    input.stopRecording()
+                }
                 return
             }
 
