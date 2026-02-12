@@ -37,6 +37,8 @@ struct ChatView: View {
 
     private let maxAttachmentBytes = 10 * 1024 * 1024
 
+    private let shareScreenFileName = "__flux_screenshot.jpg"
+
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImageAttachments.isEmpty
     }
@@ -249,13 +251,13 @@ struct ChatView: View {
 
                 Button {
                     Task {
-                        let hasScreenshot = pendingImageAttachments.contains { $0.fileName.hasPrefix("Screenshot") }
+                        let hasScreenshot = pendingImageAttachments.contains { $0.fileName == shareScreenFileName }
                         if hasScreenshot {
-                            pendingImageAttachments.removeAll { $0.fileName.hasPrefix("Screenshot") }
+                            pendingImageAttachments.removeAll { $0.fileName == shareScreenFileName }
                         } else {
                             if let base64 = await screenCapture.captureMainDisplay() {
                                 let attachment = MessageImageAttachment(
-                                    fileName: "Screenshot.jpg",
+                                    fileName: shareScreenFileName,
                                     mediaType: "image/jpeg",
                                     base64Data: base64
                                 )
@@ -264,7 +266,7 @@ struct ChatView: View {
                         }
                     }
                 } label: {
-                    let isActive = pendingImageAttachments.contains { $0.fileName.hasPrefix("Screenshot") }
+                    let isActive = pendingImageAttachments.contains { $0.fileName == shareScreenFileName }
                     HStack(spacing: 4) {
                         Image(systemName: "display")
                             .font(.system(size: 10, weight: .medium))

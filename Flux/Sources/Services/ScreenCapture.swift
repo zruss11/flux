@@ -22,7 +22,7 @@ final class ScreenCapture {
         do {
             guard CGPreflightScreenCaptureAccess() else { return nil }
             if let last = lastCaptureAt, Date().timeIntervalSince(last) < minSecondsBetweenCaptures {
-                return "Capture throttled (too frequent)"
+                return nil
             }
             lastCaptureAt = Date()
 
@@ -51,7 +51,7 @@ final class ScreenCapture {
         do {
             guard CGPreflightScreenCaptureAccess() else { return nil }
             if let last = lastCaptureAt, Date().timeIntervalSince(last) < minSecondsBetweenCaptures {
-                return "Capture throttled (too frequent)"
+                return nil
             }
             lastCaptureAt = Date()
 
