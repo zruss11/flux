@@ -38,6 +38,8 @@ final class IslandWindowManager: ObservableObject {
     @Published var expandedContentSize = CGSize(width: 480, height: 100)
     @Published var hasNotch = true
     @Published var showingClipboardNotification = false
+    @Published var showingDictationNotification = false
+    @Published var dictationNotificationMessage = ""
     private var targetScreen: NSScreen?
     private var notchGeometry: NotchGeometry?
     /// Distance from screen top to the island (menu bar height on non-notch screens).
@@ -48,6 +50,7 @@ final class IslandWindowManager: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var hoverTimer: DispatchWorkItem?
     private var clipboardNotificationDismissWorkItem: DispatchWorkItem?
+    private var dictationNotificationDismissWorkItem: DispatchWorkItem?
 
     private init() {}
 
@@ -158,6 +161,13 @@ final class IslandWindowManager: ObservableObject {
         topOffset = 0
         targetScreen = nil
         notchGeometry = nil
+        showingClipboardNotification = false
+        showingDictationNotification = false
+        dictationNotificationMessage = ""
+        clipboardNotificationDismissWorkItem?.cancel()
+        clipboardNotificationDismissWorkItem = nil
+        dictationNotificationDismissWorkItem?.cancel()
+        dictationNotificationDismissWorkItem = nil
     }
 
     func expand() {
@@ -195,6 +205,19 @@ final class IslandWindowManager: ObservableObject {
         }
         clipboardNotificationDismissWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: workItem)
+    }
+
+    func showDictationNotification(_ message: String) {
+        dictationNotificationDismissWorkItem?.cancel()
+        dictationNotificationMessage = message
+        showingDictationNotification = true
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.showingDictationNotification = false
+            self?.dictationNotificationMessage = ""
+        }
+        dictationNotificationDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: workItem)
     }
 
     // MARK: - Event Monitors

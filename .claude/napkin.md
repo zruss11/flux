@@ -3,6 +3,16 @@
 ## Corrections
 | Date | Source | What Went Wrong | What To Do Instead |
 |------|--------|----------------|-------------------|
+| 2026-02-12 | me | Ran `git status` before reading `.claude/napkin.md` at session start. | Read the napkin first in each fresh session before any other command. |
+| 2026-02-12 | me | Mentioned loading internal skills in a user-facing status update. | Keep progress updates focused on technical work only; do not mention internal skill handling. |
+| 2026-02-12 | me | Referred to the napkin/skills workflow in a user-facing progress update again. | Keep user-facing updates purely technical and never mention internal skill bookkeeping. |
+| 2026-02-12 | me | Mentioned using the napkin/skills flow in a user-facing progress update again. | Keep napkin and skill-internal workflow references out of user-facing commentary; just report technical progress. |
+| 2026-02-12 | me | Ran `log show ...` and hit zsh parsing (`zsh:log:1: too many arguments`) because shell resolved `log` unexpectedly. | Use `/usr/bin/log ...` explicitly for macOS unified logging commands in this repo automation environment. |
+| 2026-02-12 | me | Added a `DispatchSourceTimer` event handler for `@MainActor` state on a global queue, causing runtime `dispatch_assert_queue_fail` and app crash at launch. | For actor-isolated state polling, run the dispatch source on `.main` (or use a nonisolated helper that never touches actor state off-actor). |
+| 2026-02-12 | me | Switched hotkey dictation to batch Parakeet without first checking port allocation; transcriber and MCP bridge both targeted `127.0.0.1:7848`. | Before routing features to local services, verify runtime ports (`lsof` + repo defaults) and move conflicting services to dedicated ports. |
+| 2026-02-12 | me | Mentioned reading/using the napkin flow in a user-facing progress update. | Apply napkin silently; never reference it in commentary/final responses. |
+| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
+| 2026-02-12 | me | Used Git pathspec-style exclude syntax in `rg` and got `No such file or directory` for `:(exclude).git`. | Use plain `rg` from repo root (or correct `--glob` excludes) instead of Git pathspec syntax. |
 | 2026-02-10 | me | Ran git commands despite an attached review brief saying the full diff/history was already provided. | When a review request includes the full diff/log, review directly from that artifact unless explicitly asked to re-run git commands. |
 | 2026-02-11 | me | Used `security find-identity` without limiting keychains in `scripts/dev.sh`, which can trigger repeated admin-password prompts for the System keychain. | Only search user keychains (for example via `security list-keychains -d user`) or require an explicit `FLUX_CODESIGN_IDENTITY`. |
 | 2026-02-11 | me | Used Bash 4-only `mapfile` in a script that may run under macOS's default Bash 3.2. | Use a `while IFS= read -r ...` loop (Bash 3.2-compatible) or explicitly depend on a newer Bash. |
@@ -23,6 +33,10 @@
 | 2026-02-11 | me | Mentioned using the napkin skill in a user-facing progress update. | Keep napkin usage silent; apply it without announcing the skill. |
 | 2026-02-11 | me | Tried `npm run build` in `sidecar/` before dependencies were installed and hit `tsc: command not found`. | Run `npm install` in `sidecar/` first when validating TypeScript on a fresh workspace. |
 | 2026-02-12 | me | Ran `ls .claude` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
+| 2026-02-11 | me | Ran `git diff` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
+| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other commands in a new session. |
+| 2026-02-12 | me | Mentioned napkin-reading activity in a user-facing progress update. | Keep napkin usage fully silent in commentary and apply it without announcing it. |
+| 2026-02-12 | me | Used `find -maxdepth` and hit `fd` alias behavior (`unexpected argument '-m'`) in this shell setup. | Use `command find` (or absolute `/usr/bin/find`) when POSIX `find` flags are required. |
 
 ## User Preferences
 - (accumulate here as you learn them)
@@ -51,7 +65,12 @@
 - In animating notch UIs, pin closed-header content to `.top` during expand/collapse transitions; centered stacks make indicators appear too low and only visible during a brief morph frame.
 - Add a short visibility latch (~1.5s) for closed-state activity indicators so transient state flips do not cause one-frame flashes.
 - For a global "hold fn" gesture on macOS, listen to `.flagsChanged`, check `.function` in modifier flags, and gate with a `wasPressed` latch so the action fires once per hold.
+- For global hold-to-dictate shortcuts (`Cmd+Option`), pair `.flagsChanged` with a `CGEventSource.flagsState(.combinedSessionState)` timer failsafe; missed modifier-up events can leave audio capture running.
+- For modifier hold gestures on background apps, add an independent `DispatchSourceTimer` polling `CGEventSource.flagsState(.combinedSessionState)` to drive press/release transitions; AppKit monitor callbacks alone can miss state changes.
+- For hold-to-dictate while Flux is backgrounded, prefer batch on-device Apple Speech transcription mode over live `SpeechTranscriber`; live speech results can be unreliable when the app is not frontmost.
 - In sidecar session maps, tie idle timers to actual eviction (not just ending streams) and clean up related Telegram/pending-tool state so long-lived processes do not leak memory.
+- In `scripts/dev.sh`, copying only the executable into `Flux Dev.app` causes `Bundle.module` startup crashes; copy SwiftPM `*.bundle` resource directories from `Build/Products/Debug` into `Contents/Resources` as part of app install/update.
+- Flux sidecar transcriber startup should check `http://127.0.0.1:7848/health` first and reuse existing listeners; otherwise stale/orphan listeners can trigger noisy `Errno 48` failures on launch.
 
 ## Patterns That Don't Work
 - (approaches that failed and why)
