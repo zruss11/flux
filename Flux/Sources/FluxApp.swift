@@ -34,7 +34,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
     private var functionKeyMonitor: EventMonitor?
-    private var appInstructionsObserver: NSObjectProtocol?
     private var isFunctionKeyPressed = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -116,22 +115,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appMonitor.start()
 
         // If per-app instructions change while Flux is active, immediately resend the current app context.
-        appInstructionsObserver = NotificationCenter.default.addObserver(
-            forName: .appInstructionsDidChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            let activeApp = AppMonitor.shared.currentApp ?? AppMonitor.shared.recentApps.first
-            guard let activeApp else { return }
-            let instruction = AppInstructions.shared.instruction(forBundleId: activeApp.bundleId)
-            self.agentBridge.sendActiveAppUpdate(
-                appName: activeApp.appName,
-                bundleId: activeApp.bundleId,
-                pid: activeApp.pid,
-                appInstruction: instruction?.instruction
-            )
-        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppInstructionsDidChange(_:)),
+            name: .appInstructionsDidChange,
+            object: nil
+        )
 
         IslandWindowManager.shared.showIsland(
             conversationStore: conversationStore,
@@ -143,6 +132,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SessionContextManager.shared.start()
         clipboardMonitor.start()
         watcherService.startAll()
+        CIStatusMonitor.shared.start()
 
         // Auto-start tour on first launch after permissions are granted
         if !UserDefaults.standard.bool(forKey: "hasCompletedTour") {
@@ -157,15 +147,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Log.app.info("Flux terminating")
         functionKeyMonitor?.stop()
         functionKeyMonitor = nil
-        if let appInstructionsObserver {
-            NotificationCenter.default.removeObserver(appInstructionsObserver)
-        }
-        appInstructionsObserver = nil
+        NotificationCenter.default.removeObserver(
+            self,
+            name: .appInstructionsDidChange,
+            object: nil
+        )
         dictationManager.stop()
         AppMonitor.shared.stop()
         SessionContextManager.shared.stop()
         clipboardMonitor.stop()
         watcherService.onChatAlert = nil
+        CIStatusMonitor.shared.stop()
     }
 
     private func setupStatusItem() {
@@ -245,6 +237,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc
     private func handleAutomationOpenThreadNotification(_ notification: Notification) {
         handleAutomationOpenThread(notification)
+    }
+
+    @objc
+    private func handleAppInstructionsDidChange(_ notification: Notification) {
+        let activeApp = AppMonitor.shared.currentApp ?? AppMonitor.shared.recentApps.first
+        guard let activeApp else { return }
+        let instruction = AppInstructions.shared.instruction(forBundleId: activeApp.bundleId)
+        agentBridge.sendActiveAppUpdate(
+            appName: activeApp.appName,
+            bundleId: activeApp.bundleId,
+            pid: activeApp.pid,
+            appInstruction: instruction?.instruction
+        )
     }
 
     private func handleAutomationOpenThread(_ notification: Notification) {
@@ -678,6 +683,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let joined = repos.joined(separator: ",")
             UserDefaults.standard.set(joined, forKey: key)
             WatcherService.shared.updateGitHubRepos(joined)
+            CIStatusMonitor.shared.forceRefresh()
             return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Added '\(repo)'."))
 
         case "remove":
@@ -691,6 +697,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let joined = repos.joined(separator: ",")
             UserDefaults.standard.set(joined, forKey: key)
             WatcherService.shared.updateGitHubRepos(joined)
+            CIStatusMonitor.shared.forceRefresh()
             return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Removed '\(repo)'."))
 
         default: // "list"
