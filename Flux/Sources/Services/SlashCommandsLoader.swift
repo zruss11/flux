@@ -70,7 +70,8 @@ enum SlashCommandsLoader {
 
             let fileStem = (last as NSString).deletingPathExtension
             guard !fileStem.isEmpty else { continue }
-            let normalizedComponents = relativeComponents.dropLast().map(String.init) + [fileStem]
+            var normalizedComponents = Array(relativeComponents)
+            normalizedComponents[normalizedComponents.count - 1] = fileStem
             let name = normalizedComponents.joined(separator: "/")
             guard !name.isEmpty else { continue }
 
