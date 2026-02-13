@@ -917,9 +917,6 @@ struct IslandSettingsView: View {
     var agentBridge: AgentBridge
 
     @AppStorage("anthropicApiKey") private var apiKey = ""
-    @AppStorage("discordChannelId") private var discordChannelId = ""
-    @AppStorage("slackChannelId") private var slackChannelId = ""
-    @AppStorage("telegramChatId") private var telegramChatId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("githubWatchedRepos") private var githubWatchedRepos = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
@@ -929,16 +926,9 @@ struct IslandSettingsView: View {
     @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
     @AppStorage("ciTickerDuration") private var ciTickerDuration: Double = 6.0
 
-    @State private var discordBotToken = ""
-    @State private var slackBotToken = ""
-    @State private var telegramBotToken = ""
-    @State private var secretsLoaded = false
     @State private var editingField: EditingField?
     @FocusState private var fieldFocused: Bool
     @State private var permissionRefreshToken: Int = 0
-    @State private var telegramPairingCode = ""
-    @State private var telegramPending: [TelegramPairingRequest] = []
-    @State private var telegramPairingError: String?
     @State private var automationService = AutomationService.shared
     @State private var automationsExpanded = false
     @State private var dictionaryStore = CustomDictionaryStore.shared
@@ -976,13 +966,6 @@ struct IslandSettingsView: View {
     private enum EditingField: Hashable {
         case apiKey
         case linearToken
-        case discordBotToken
-        case discordChannelId
-        case slackBotToken
-        case slackChannelId
-        case telegramBotToken
-        case telegramChatId
-        case telegramPairingCode
     }
 
     private enum InlineAutomationEditorMode: Equatable {
@@ -1273,273 +1256,7 @@ struct IslandSettingsView: View {
 
                 divider
 
-                // Discord Bot
-                if editingField == .discordBotToken {
-                    editableRow(icon: "bubble.left.fill", label: "Discord Bot Token") {
-                        SecureField("Bot token", text: $discordBotToken)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                persistDiscordBotToken()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        persistDiscordBotToken()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "bubble.left.fill", label: "Discord Bot", trailing: {
-                        AnyView(
-                            HStack(spacing: 8) {
-                                statusDot(isSet: !discordBotToken.isEmpty && !discordChannelId.isEmpty)
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.35))
-                                    .help(discordBotHelp)
-                            }
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .discordBotToken
-                    }
-                }
-
-                if editingField == .discordChannelId {
-                    editableRow(icon: "bubble.left.fill", label: "Discord Channel ID") {
-                        TextField("Channel ID (e.g. 123456789012345678)", text: $discordChannelId)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "bubble.left.fill", label: "Discord Channel ID", trailing: {
-                        AnyView(statusDot(isSet: !discordChannelId.isEmpty))
-                    })
-                    .onTapGesture {
-                        editingField = .discordChannelId
-                    }
-                }
-
-                // Slack Bot
-                if editingField == .slackBotToken {
-                    editableRow(icon: "number", label: "Slack Bot Token") {
-                        SecureField("xoxb-...", text: $slackBotToken)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                persistSlackBotToken()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        persistSlackBotToken()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "number", label: "Slack Bot", trailing: {
-                        AnyView(
-                            HStack(spacing: 8) {
-                                statusDot(isSet: !slackBotToken.isEmpty && !slackChannelId.isEmpty)
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.35))
-                                    .help(slackBotHelp)
-                            }
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .slackBotToken
-                    }
-                }
-
-                if editingField == .slackChannelId {
-                    editableRow(icon: "number", label: "Slack Channel ID") {
-                        TextField("Channel ID (e.g. C123...)", text: $slackChannelId)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "number", label: "Slack Channel ID", trailing: {
-                        AnyView(statusDot(isSet: !slackChannelId.isEmpty))
-                    })
-                    .onTapGesture {
-                        editingField = .slackChannelId
-                    }
-                }
-
-                // Telegram Bot
-                if editingField == .telegramBotToken {
-                    editableRow(icon: "paperplane.fill", label: "Telegram Bot Token") {
-                        SecureField("Bot token", text: $telegramBotToken)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                persistTelegramBotToken()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        persistTelegramBotToken()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "paperplane.fill", label: "Telegram Bot", trailing: {
-                        AnyView(
-                            HStack(spacing: 8) {
-                                statusDot(isSet: !telegramBotToken.isEmpty && !telegramChatId.isEmpty)
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.35))
-                                    .help(telegramBotHelp)
-                            }
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .telegramBotToken
-                    }
-                }
-
-                if editingField == .telegramChatId {
-                    editableRow(icon: "paperplane.fill", label: "Telegram Chat ID") {
-                        TextField("Chat ID (e.g. 123456789)", text: $telegramChatId)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                notifyTelegramConfigChanged()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        notifyTelegramConfigChanged()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "paperplane.fill", label: "Telegram Chat ID", trailing: {
-                        AnyView(statusDot(isSet: !telegramChatId.isEmpty))
-                    })
-                    .onTapGesture {
-                        editingField = .telegramChatId
-                    }
-                }
-
-                if editingField == .telegramPairingCode {
-                    editableRow(icon: "paperplane.fill", label: "Telegram Pairing Code") {
-                        TextField("PAIRCODE", text: $telegramPairingCode)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                approveTelegramPairing()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        approveTelegramPairing()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "paperplane.fill", label: "Telegram Pairing", trailing: {
-                        AnyView(
-                            Text(telegramPending.isEmpty ? "None" : "\(telegramPending.count) pending")
-                                .font(.system(size: 12))
-                                .foregroundStyle(telegramPending.isEmpty ? .white.opacity(0.5) : .orange.opacity(0.9))
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .telegramPairingCode
-                    }
-                }
-
-                if !telegramPending.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(telegramPending) { request in
-                            HStack(spacing: 8) {
-                                Text(request.username.map { "@\($0)" } ?? "Chat \(request.chatId)")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.white.opacity(0.8))
-                                Spacer()
-                                Button {
-                                    TelegramPairingStore.removePending(chatId: request.chatId)
-                                    loadTelegramPairing()
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.white.opacity(0.5))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
-                }
-
-                if let telegramPairingError {
-                    Text(telegramPairingError)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red.opacity(0.8))
-                        .padding(.horizontal, 12)
-                }
-
-                divider
-
+                
                 // GitHub Watched Repos
                 settingsRow(
                     icon: "chevron.left.forwardslash.chevron.right",
@@ -1666,7 +1383,6 @@ struct IslandSettingsView: View {
             .padding(.vertical, 8)
         }
         .onAppear {
-            loadSecretsIfNeeded()
             reloadAppInstructionsCount()
         }
         .onReceive(NotificationCenter.default.publisher(for: .appInstructionsDidChange)) { _ in
@@ -1676,16 +1392,6 @@ struct IslandSettingsView: View {
             switch old {
             case .apiKey:
                 agentBridge.sendApiKey(apiKey)
-            case .discordBotToken:
-                persistDiscordBotToken()
-            case .slackBotToken:
-                persistSlackBotToken()
-            case .telegramBotToken:
-                persistTelegramBotToken()
-            case .telegramChatId:
-                notifyTelegramConfigChanged()
-            case .telegramPairingCode:
-                approveTelegramPairing()
             default:
                 break
             }
@@ -1694,7 +1400,6 @@ struct IslandSettingsView: View {
             // Poll while Settings is visible so status updates after the user toggles permissions in System Settings.
             while !Task.isCancelled {
                 permissionRefreshToken &+= 1
-                loadTelegramPairing()
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -2899,96 +2604,9 @@ struct IslandSettingsView: View {
         }
     }
 
-    private var discordBotHelp: String {
-        [
-            "Discord bot setup:",
-            "1) Create a bot at Discord Developer Portal (Applications -> Bot).",
-            "2) Copy the bot token and paste it into \"Discord Bot\".",
-            "3) Invite the bot to your server with \"Send Messages\" permission.",
-            "4) Enable Developer Mode in Discord, then right click a channel -> Copy Channel ID.",
-        ].joined(separator: "\n")
-    }
-
-    private var slackBotHelp: String {
-        [
-            "Slack bot setup:",
-            "1) Create a Slack app (From scratch) with a Bot user.",
-            "2) Under OAuth & Permissions, add scopes: chat:write (+ chat:write.public for public channels without inviting the bot).",
-            "3) Install the app to your workspace and copy the Bot User OAuth Token (xoxb-...).",
-            "4) Copy the channel ID (starts with C or G). Invite the bot for private channels.",
-        ].joined(separator: "\n")
-    }
-
-    private var telegramBotHelp: String {
-        [
-            "Telegram bot setup:",
-            "1) Create a bot with @BotFather and copy the token.",
-            "2) Paste the token into \"Telegram Bot\".",
-            "3) DM the bot to receive a pairing code.",
-            "4) Paste the pairing code into \"Telegram Pairing Code\" to approve.",
-            "5) For groups, mention @YourBotName to trigger responses.",
-        ].joined(separator: "\n")
-    }
-
-    private func loadSecretsIfNeeded() {
-        guard !secretsLoaded else { return }
-        secretsLoaded = true
-
-        discordBotToken = KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? ""
-        slackBotToken = KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? ""
-        telegramBotToken = KeychainService.getString(forKey: SecretKeys.telegramBotToken) ?? ""
-    }
-
-    private func persistDiscordBotToken() {
-        do {
-            try KeychainService.setString(discordBotToken, forKey: SecretKeys.discordBotToken)
-        } catch {
-            // Best effort; ignore.
-        }
-    }
-
-    private func persistSlackBotToken() {
-        do {
-            try KeychainService.setString(slackBotToken, forKey: SecretKeys.slackBotToken)
-        } catch {
-            // Best effort; ignore.
-        }
-    }
-
-    private func persistTelegramBotToken() {
-        do {
-            try KeychainService.setString(telegramBotToken, forKey: SecretKeys.telegramBotToken)
-        } catch {
-            // Best effort; ignore.
-        }
-        notifyTelegramConfigChanged()
-    }
-
-    private func notifyTelegramConfigChanged() {
-        NotificationCenter.default.post(name: .telegramConfigDidChange, object: nil)
-    }
-
-    private func loadTelegramPairing() {
-        telegramPending = TelegramPairingStore.loadPending()
-    }
-
-    private func approveTelegramPairing() {
-        telegramPairingError = nil
-        let code = telegramPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let _ = TelegramPairingStore.approve(code: code) else {
-            if !code.isEmpty {
-                telegramPairingError = "Pairing code not found or expired."
-            }
-            return
-        }
-        telegramPairingCode = ""
-        loadTelegramPairing()
-    }
-
     private func reloadAppInstructionsCount() {
         appInstructionsCount = AppInstructions.shared.instructions.count
     }
-
     private func editableRow<Field: View>(
         icon: String,
         label: String,

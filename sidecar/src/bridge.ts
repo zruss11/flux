@@ -138,8 +138,45 @@ const log = createLogger('bridge');
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const AGENT_IDLE_TIMEOUT_MS = 120_000;
+function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function parseSettingSources(value: string | undefined): Array<'user' | 'project' | 'local'> {
+  const raw = value?.trim();
+  if (!raw) return ['project'];
+  const valid = new Set(['user', 'project', 'local']);
+  const parsed = raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item): item is 'user' | 'project' | 'local' => valid.has(item));
+  return parsed.length > 0 ? parsed : ['project'];
+}
+
+const AGENT_MODEL = process.env.FLUX_AGENT_MODEL || 'claude-sonnet-4-20250514';
+const AGENT_SETTING_SOURCES = parseSettingSources(process.env.FLUX_AGENT_SETTING_SOURCES);
+const AGENT_IDLE_TIMEOUT_MS = parsePositiveIntEnv(process.env.FLUX_AGENT_IDLE_TIMEOUT_MS, 900_000);
+const AGENT_WARMUP_ENABLED = process.env.FLUX_AGENT_WARMUP_ENABLED !== '0';
+const AGENT_WARMUP_MAX_ATTEMPTS = parsePositiveIntEnv(process.env.FLUX_AGENT_WARMUP_MAX_ATTEMPTS, 2);
 const TOOL_TIMEOUT_MS = 60_000;
+const ALLOWED_TOOLS = [
+  'WebSearch',
+  'WebFetch',
+  'ToolSearch',
+  'TodoWrite',
+  'Task',
+  'TaskOutput',
+  'TaskStop',
+  'TeamCreate',
+  'TeamDelete',
+  'SendMessage',
+  'Skill',
+  'NotebookEdit',
+  'mcp__flux__*',
+];
 
 process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
 
@@ -151,6 +188,9 @@ const mcpAuthTokens = new Map<string, string>();
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
 let mcpBridgeUrl = '';
+let agentWarmupPromise: Promise<void> | null = null;
+let agentWarmupAttempts = 0;
+let agentWarmupComplete = false;
 
 /** Currently active (frontmost) app, updated live by the Swift client. */
 let lastActiveApp: { appName: string; bundleId: string; pid: number; appInstruction?: string } | null = null;
@@ -235,6 +275,8 @@ export function startBridge(port: number): void {
   startMcpBridge(port + 1);
 
   log.info(`WebSocket server listening on port ${port}`);
+  log.info(`Agent config: model=${AGENT_MODEL}, settingSources=${AGENT_SETTING_SOURCES.join(',')}, idleMs=${AGENT_IDLE_TIMEOUT_MS}`);
+  maybeStartAgentWarmup('bridge_start');
 
   wss.on('connection', (ws) => {
     log.info('Swift app connected');
@@ -277,6 +319,7 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
       runtimeApiKey = message.apiKey;
       if (runtimeApiKey) {
         process.env.ANTHROPIC_API_KEY = runtimeApiKey;
+        maybeStartAgentWarmup('api_key_updated');
       }
       log.info('API key updated from Swift app');
       break;
@@ -332,6 +375,7 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
     return;
   }
 
+  maybeStartAgentWarmup('first_chat');
   enqueueUserMessage(conversationId, content, images);
 }
 
@@ -427,44 +471,15 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
   sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: true });
 
   const runId = crypto.randomUUID();
-  const mcpServerConfig = resolveMcpServerConfig(session.conversationId, runId);
 
   try {
     for await (const message of query({
       prompt: session.stream,
-      options: {
-        cwd: process.cwd(),
+      options: buildQueryOptions(session.conversationId, runId, {
         resume: session.sessionId,
         resumeSessionAt: session.lastAssistantUuid,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
-        settingSources: ['project', 'user'],
-        allowedTools: [
-          'WebSearch',
-          'WebFetch',
-          'ToolSearch',
-          'TodoWrite',
-          'Task',
-          'TaskOutput',
-          'TaskStop',
-          'TeamCreate',
-          'TeamDelete',
-          'SendMessage',
-          'Skill',
-          'NotebookEdit',
-          'mcp__flux__*',
-        ],
-        mcpServers: {
-          flux: mcpServerConfig,
-        },
-        model: 'claude-sonnet-4-20250514',
-        systemPrompt: {
-          type: 'preset',
-          preset: 'claude_code',
-          append: buildFluxSystemPrompt(),
-        },
-      },
+      }),
     })) {
       handleAgentMessage(session, message as any);
     }
@@ -483,6 +498,74 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
 
     touchIdle(session);
   }
+}
+
+function buildQueryOptions(
+  conversationId: string,
+  runId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    cwd: process.cwd(),
+    permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
+    includePartialMessages: true,
+    settingSources: AGENT_SETTING_SOURCES,
+    allowedTools: ALLOWED_TOOLS,
+    mcpServers: {
+      flux: resolveMcpServerConfig(conversationId, runId),
+    },
+    model: AGENT_MODEL,
+    systemPrompt: {
+      type: 'preset',
+      preset: 'claude_code',
+      append: buildFluxSystemPrompt(),
+    },
+    ...overrides,
+  };
+}
+
+function maybeStartAgentWarmup(trigger: string): void {
+  if (!AGENT_WARMUP_ENABLED) return;
+  if (!runtimeApiKey) return;
+  if (agentWarmupComplete) return;
+  if (agentWarmupPromise) return;
+  if (agentWarmupAttempts >= AGENT_WARMUP_MAX_ATTEMPTS) return;
+
+  agentWarmupAttempts += 1;
+  agentWarmupPromise = runAgentWarmup(trigger)
+    .then(() => {
+      agentWarmupComplete = true;
+    })
+    .catch((error) => {
+      log.warn(`Agent warmup failed (${trigger}):`, error instanceof Error ? error.message : error);
+    })
+    .finally(() => {
+      agentWarmupPromise = null;
+    });
+}
+
+async function runAgentWarmup(trigger: string): Promise<void> {
+  const startedAt = Date.now();
+  const warmupConversationId = `warmup-${crypto.randomUUID()}`;
+  const runId = crypto.randomUUID();
+
+  log.info(`Starting agent warmup (trigger=${trigger})`);
+
+  for await (const message of query({
+    prompt: 'Warmup run. Reply with exactly: ok',
+    options: buildQueryOptions(warmupConversationId, runId, {
+      includePartialMessages: false,
+      persistSession: false,
+      maxTurns: 1,
+      thinking: { type: 'disabled' },
+      effort: 'low',
+    }),
+  })) {
+    if (message.type === 'result') break;
+  }
+
+  log.info(`Agent warmup completed in ${Date.now() - startedAt}ms`);
 }
 
 function handleAgentMessage(session: ConversationSession, message: any): void {

@@ -17,8 +17,10 @@
 | 2026-02-12 | me | Added a `DispatchSourceTimer` event handler for `@MainActor` state on a global queue, causing runtime `dispatch_assert_queue_fail` and app crash at launch. | For actor-isolated state polling, run the dispatch source on `.main` (or use a nonisolated helper that never touches actor state off-actor). |
 | 2026-02-12 | me | Switched hotkey dictation to batch Parakeet without first checking port allocation; transcriber and MCP bridge both targeted `127.0.0.1:7848`. | Before routing features to local services, verify runtime ports (`lsof` + repo defaults) and move conflicting services to dedicated ports. |
 | 2026-02-12 | me | Mentioned reading/using the napkin flow in a user-facing progress update. | Apply napkin silently; never reference it in commentary/final responses. |
-| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
 | 2026-02-12 | me | Used Git pathspec-style exclude syntax in `rg` and got `No such file or directory` for `:(exclude).git`. | Use plain `rg` from repo root (or correct `--glob` excludes) instead of Git pathspec syntax. |
+| 2026-02-12 | me | Mentioned using the napkin skill in a user-facing progress update. | Apply napkin silently and avoid mentioning the skill in commentary/final responses. |
+| 2026-02-12 | me | Mentioned napkin-related workflow in a progress update again while gathering context. | Keep progress updates focused on task actions; never reference napkin/skill mechanics user-facing. |
+| 2026-02-12 | me | Tried `npm test -- --runInBand` for Vitest in `sidecar/`, but this Vitest version does not support that flag. | Use the project default `npm test` invocation unless the repo-specific Vitest CLI flags are confirmed. |
 | 2026-02-10 | me | Ran git commands despite an attached review brief saying the full diff/history was already provided. | When a review request includes the full diff/log, review directly from that artifact unless explicitly asked to re-run git commands. |
 | 2026-02-11 | me | Used `security find-identity` without limiting keychains in `scripts/dev.sh`, which can trigger repeated admin-password prompts for the System keychain. | Only search user keychains (for example via `security list-keychains -d user`) or require an explicit `FLUX_CODESIGN_IDENTITY`. |
 | 2026-02-11 | me | Used Bash 4-only `mapfile` in a script that may run under macOS's default Bash 3.2. | Use a `while IFS= read -r ...` loop (Bash 3.2-compatible) or explicitly depend on a newer Bash. |
@@ -57,6 +59,7 @@
 
 ## Patterns That Work
 - For new agent tools, add the tool definition in `sidecar/src/tools/index.ts` and implement the matching `toolName` case in `Flux/Sources/FluxApp.swift`'s `handleToolRequest` switch.
+- For cross-repo architecture comparisons, spawn parallel explorer agents and synthesize their file-level findings before proposing a migration plan.
 - For GitHub macOS release automation, `apple-actions/import-codesign-certs@v3` + `xcrun notarytool submit --wait` + `xcrun stapler` is a straightforward path for signed/notarized DMG releases.
 - For lightweight macOS tooltips in SwiftUI settings, attach `.help("...")` to an `Image(systemName: "info.circle")` in the row trailing UI.
 - Store third-party bot tokens in macOS Keychain (not `UserDefaults`), and migrate/remove any legacy `UserDefaults` values at app launch.
