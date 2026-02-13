@@ -139,7 +139,9 @@ struct ChatView: View {
                                     inputText = DictionaryCorrector.apply(transcript, using: CustomDictionaryStore.shared.entries)
                                     sendMessage()
                                 }
-                                if !started && SFSpeechRecognizer.authorizationStatus() != .authorized {
+                                if !started,
+                                   STTProvider.selected == .appleOnDevice,
+                                   SFSpeechRecognizer.authorizationStatus() != .authorized {
                                     showSpeechPermissionAlert = true
                                 }
                             }
