@@ -29,6 +29,11 @@ struct HasPendingAttachmentsKey: PreferenceKey {
 }
 
 struct ChatView: View {
+    private struct ForkContext {
+        let sourceConversationId: UUID
+        let sourceTitle: String
+    }
+
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
@@ -51,6 +56,7 @@ struct ChatView: View {
     @State private var imageImportErrorMessage: String?
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
     @State private var forkBannerVisible = false
+    @State private var pendingForkContexts: [UUID: ForkContext] = [:]
 
     private let maxAttachmentBytes = 10 * 1024 * 1024
 
@@ -531,6 +537,15 @@ struct ChatView: View {
                 isInputFocused = true
             }
             GitBranchMonitor.shared.monitor(workspacePath: conversationStore.workspacePath)
+            agentBridge.onForkConversationResult = { [weak self] conversationId, success, _ in
+                guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+                Task { @MainActor in
+                    self.handleForkConversationResult(conversationId: uuid, success: success)
+                }
+            }
+        }
+        .onDisappear {
+            agentBridge.onForkConversationResult = nil
         }
         .onChange(of: conversationStore.workspacePath) { _, newPath in
             GitBranchMonitor.shared.monitor(workspacePath: newPath)
@@ -686,20 +701,34 @@ struct ChatView: View {
         guard let sourceId = conversationStore.activeConversationId else { return }
         let sourceTitle = conversationStore.summaries.first(where: { $0.id == sourceId })?.title ?? "Chat"
         guard let newId = conversationStore.forkConversation(id: sourceId) else { return }
-
-        // Add a system message marking the fork point.
-        conversationStore.addMessage(
-            to: newId,
-            role: .system,
-            content: "⑂ Forked from \"\(sourceTitle)\""
+        pendingForkContexts[newId] = ForkContext(
+            sourceConversationId: sourceId,
+            sourceTitle: sourceTitle
         )
 
         agentBridge.sendForkConversation(
             sourceConversationId: sourceId.uuidString,
             newConversationId: newId.uuidString
         )
+    }
 
-        // Show the success banner with animation.
+    private func handleForkConversationResult(conversationId: UUID, success: Bool) {
+        guard let context = pendingForkContexts.removeValue(forKey: conversationId) else { return }
+
+        guard success else {
+            conversationStore.deleteConversation(id: conversationId)
+            if conversationStore.activeConversationId == conversationId {
+                conversationStore.openConversation(id: context.sourceConversationId)
+            }
+            return
+        }
+
+        conversationStore.addMessage(
+            to: conversationId,
+            role: .system,
+            content: "⑂ Forked from \"\(context.sourceTitle)\""
+        )
+
         withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
             forkBannerVisible = true
         }

@@ -59,6 +59,13 @@ interface ForkConversationMessage {
   newConversationId: string;
 }
 
+interface ForkConversationResultMessage {
+  type: 'fork_conversation_result';
+  conversationId: string;
+  success: boolean;
+  reason?: string;
+}
+
 type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | ForkConversationMessage;
 
 interface AssistantMessage {
@@ -116,7 +123,8 @@ type OutgoingMessage =
   | ToolUseCompleteMessage
   | StreamChunkMessage
   | RunStatusMessage
-  | SessionInfoMessage;
+  | SessionInfoMessage
+  | ForkConversationResultMessage;
 
 interface SDKUserMessage {
   type: 'user';
@@ -383,10 +391,17 @@ function handleForkConversation(message: ForkConversationMessage): void {
 
   if (!sourceSession?.sessionId) {
     log.warn(`Cannot fork: no SDK session found for conversation ${sourceConversationId}`);
+    const reason = 'Unable to fork: the source conversation has no active session.';
     sendToClient(activeClient, {
       type: 'assistant_message',
       conversationId: newConversationId,
-      content: 'Unable to fork: the source conversation has no active session.',
+      content: reason,
+    });
+    sendToClient(activeClient, {
+      type: 'fork_conversation_result',
+      conversationId: newConversationId,
+      success: false,
+      reason,
     });
     return;
   }
@@ -407,6 +422,11 @@ function handleForkConversation(message: ForkConversationMessage): void {
 
   sessions.set(newConversationId, forkedSession);
   touchIdle(forkedSession);
+  sendToClient(activeClient, {
+    type: 'fork_conversation_result',
+    conversationId: newConversationId,
+    success: true,
+  });
 }
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {

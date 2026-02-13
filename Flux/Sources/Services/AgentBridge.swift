@@ -19,6 +19,7 @@ final class AgentBridge: @unchecked Sendable {
     var onToolUseComplete: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, resultPreview
     var onRunStatus: ((String, Bool) -> Void)?  // conversationId, isWorking
     var onSessionInfo: ((String, String) -> Void)?  // conversationId, sessionId
+    var onForkConversationResult: ((String, Bool, String?) -> Void)?  // conversationId, success, reason
     private var activeRunConversationIds: Set<String> = []
     private var activeToolUseIds: Set<String> = []
     private var activeStreamConversationIds: Set<String> = []
@@ -331,6 +332,13 @@ final class AgentBridge: @unchecked Sendable {
             if let sessionId = json["sessionId"] as? String {
                 Task { @MainActor in
                     self.onSessionInfo?(conversationId, sessionId)
+                }
+            }
+        case "fork_conversation_result":
+            if let success = json["success"] as? Bool {
+                let reason = json["reason"] as? String
+                Task { @MainActor in
+                    self.onForkConversationResult?(conversationId, success, reason)
                 }
             }
 
