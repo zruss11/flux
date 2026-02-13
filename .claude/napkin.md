@@ -92,5 +92,5 @@
 ## Domain Notes
 - (project/domain context that matters)
 - `read_ax_tree` is frontmost-window-only, so it can miss user-visible context outside Flux itself.
-| 2026-02-13 | me | Mentioned internal napkin workflow in user-facing progress update while starting clarifying-question work. | Keep commentary technical-only; never mention internal napkin/skill handling. |
-| 2026-02-13 | me | Read SKILL.md and napkin in a parallel tool call, so napkin was not strictly first/standalone. | In fresh sessions, read `.claude/napkin.md` in a dedicated first command before any other file/tool access. |
+- 2026-02-13: Mentioned internal napkin workflow in user-facing progress update while starting clarifying-question work. Keep commentary technical-only; never mention internal napkin/skill handling.
+- 2026-02-13: Read `SKILL.md` and napkin in a parallel tool call, so napkin was not strictly first/standalone. In fresh sessions, read `.claude/napkin.md` in a dedicated first command before any other file/tool access.

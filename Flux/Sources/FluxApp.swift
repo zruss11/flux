@@ -399,12 +399,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 for raw in rawQuestions {
                     guard let questionText = raw["question"] as? String else { continue }
                     let rawOptions = raw["options"] as? [[String: Any]] ?? []
-                    let options = rawOptions.compactMap { opt -> PendingAskUserQuestion.Question.Option? in
+                    var options = rawOptions.compactMap { opt -> PendingAskUserQuestion.Question.Option? in
                         guard let label = opt["label"] as? String else { return nil }
                         return PendingAskUserQuestion.Question.Option(
                             label: label,
                             description: opt["description"] as? String
                         )
+                    }
+                    let hasOther = options.contains { option in
+                        option.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                            .lowercased()
+                            .hasPrefix("other")
+                    }
+                    if !hasOther {
+                        options.append(PendingAskUserQuestion.Question.Option(label: "Other", description: nil))
                     }
                     let multiSelect = raw["multiSelect"] as? Bool ?? false
                     questions.append(PendingAskUserQuestion.Question(
@@ -413,6 +421,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         multiSelect: multiSelect
                     ))
                 }
+                guard !questions.isEmpty else { return }
                 let pending = PendingAskUserQuestion(id: requestId, questions: questions)
                 self.conversationStore.addAskUserQuestion(to: uuid, question: pending)
             }

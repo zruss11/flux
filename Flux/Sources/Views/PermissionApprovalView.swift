@@ -155,7 +155,58 @@ struct PermissionApprovalCard: View {
 struct AskUserQuestionCard: View {
     let question: PendingAskUserQuestion
     let onSubmit: ([String: String]) -> Void
-    @State private var selectedAnswers: [String: String] = [:]
+    @State private var singleSelectAnswers: [String: String] = [:]
+    @State private var multiSelectAnswers: [String: Set<String>] = [:]
+    @State private var otherInputs: [String: String] = [:]
+
+    private var normalizedAnswers: [String: String] {
+        var combined: [String: String] = [:]
+        for q in question.questions {
+            if q.multiSelect {
+                let selections = multiSelectAnswers[q.question, default: []]
+                guard !selections.isEmpty else { continue }
+                let mapped = selections.sorted().compactMap { label -> String? in
+                    if isOtherOption(label) {
+                        let other = trimmedOtherInput(for: q.question)
+                        return other.isEmpty ? nil : other
+                    }
+                    return label
+                }
+                if !mapped.isEmpty {
+                    combined[q.question] = mapped.joined(separator: ", ")
+                }
+            } else if let selection = singleSelectAnswers[q.question] {
+                if isOtherOption(selection) {
+                    let other = trimmedOtherInput(for: q.question)
+                    if !other.isEmpty {
+                        combined[q.question] = other
+                    }
+                } else {
+                    combined[q.question] = selection
+                }
+            }
+        }
+        return combined
+    }
+
+    private var canSubmit: Bool {
+        if singleSelectAnswers.isEmpty && multiSelectAnswers.isEmpty {
+            return false
+        }
+        for q in question.questions {
+            if q.multiSelect {
+                let selections = multiSelectAnswers[q.question, default: []]
+                if selections.contains(where: isOtherOption) && trimmedOtherInput(for: q.question).isEmpty {
+                    return false
+                }
+            } else if let selection = singleSelectAnswers[q.question], isOtherOption(selection) {
+                if trimmedOtherInput(for: q.question).isEmpty {
+                    return false
+                }
+            }
+        }
+        return true
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -188,7 +239,7 @@ struct AskUserQuestionCard: View {
                 }
 
                 Button {
-                    onSubmit(selectedAnswers)
+                    onSubmit(normalizedAnswers)
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.right")
@@ -201,11 +252,11 @@ struct AskUserQuestionCard: View {
                     .padding(.vertical, 6)
                     .background(
                         Capsule()
-                            .fill(selectedAnswers.isEmpty ? Color.blue.opacity(0.15) : Color.blue.opacity(0.35))
+                            .fill(canSubmit ? Color.blue.opacity(0.35) : Color.blue.opacity(0.15))
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(selectedAnswers.isEmpty)
+                .disabled(!canSubmit)
             } else {
                 // Show submitted answers
                 ForEach(Array(question.answers.sorted(by: { $0.key < $1.key })), id: \.key) { key, value in
@@ -240,26 +291,34 @@ struct AskUserQuestionCard: View {
             ForEach(q.options) { option in
                 Button {
                     if q.multiSelect {
-                        let currentValue = selectedAnswers[q.question] ?? ""
-                        let labels = currentValue.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                        if labels.contains(option.label) {
-                            let filtered = labels.filter { $0 != option.label }
-                            selectedAnswers[q.question] = filtered.joined(separator: ", ")
-                            if filtered.isEmpty { selectedAnswers.removeValue(forKey: q.question) }
+                        var selections = multiSelectAnswers[q.question, default: []]
+                        if selections.contains(option.label) {
+                            selections.remove(option.label)
+                            if isOtherOption(option.label) {
+                                otherInputs[q.question] = nil
+                            }
                         } else {
-                            let updated = labels + [option.label]
-                            selectedAnswers[q.question] = updated.joined(separator: ", ")
+                            selections.insert(option.label)
                         }
+                        if selections.isEmpty {
+                            multiSelectAnswers.removeValue(forKey: q.question)
+                        } else {
+                            multiSelectAnswers[q.question] = selections
+                        }
+                        singleSelectAnswers.removeValue(forKey: q.question)
                     } else {
-                        selectedAnswers[q.question] = option.label
+                        singleSelectAnswers[q.question] = option.label
+                        multiSelectAnswers.removeValue(forKey: q.question)
+                        if !isOtherOption(option.label) {
+                            otherInputs[q.question] = nil
+                        }
                     }
                 } label: {
                     let isSelected: Bool = {
-                        guard let current = selectedAnswers[q.question] else { return false }
                         if q.multiSelect {
-                            return current.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.contains(option.label)
+                            return multiSelectAnswers[q.question, default: []].contains(option.label)
                         }
-                        return current == option.label
+                        return singleSelectAnswers[q.question] == option.label
                     }()
 
                     HStack(spacing: 8) {
@@ -288,7 +347,38 @@ struct AskUserQuestionCard: View {
                     )
                 }
                 .buttonStyle(.plain)
+
+                if isOtherOption(option.label) && isOptionSelected(question: q.question, label: option.label, multiSelect: q.multiSelect) {
+                    TextField("Type your answer", text: Binding(
+                        get: { otherInputs[q.question] ?? "" },
+                        set: { otherInputs[q.question] = $0 }
+                    ))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white.opacity(0.06))
+                    )
+                }
             }
         }
+    }
+
+    private func trimmedOtherInput(for question: String) -> String {
+        otherInputs[question, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func isOptionSelected(question: String, label: String, multiSelect: Bool) -> Bool {
+        if multiSelect {
+            return multiSelectAnswers[question, default: []].contains(label)
+        }
+        return singleSelectAnswers[question] == label
+    }
+
+    private func isOtherOption(_ label: String) -> Bool {
+        let normalized = label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.hasPrefix("other")
     }
 }

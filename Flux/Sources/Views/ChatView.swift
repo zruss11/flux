@@ -85,15 +85,17 @@ struct ChatView: View {
                                         ToolCallGroupView(calls: calls)
                                     case .permissionRequest(let req):
                                         PermissionApprovalCard(request: req) {
+                                            guard let convId = conversationStore.activeConversationId else { return }
                                             conversationStore.resolvePermissionRequest(
-                                                in: conversationStore.activeConversationId!,
+                                                in: convId,
                                                 requestId: req.id,
                                                 approved: true
                                             )
                                             agentBridge.sendPermissionResponse(requestId: req.id, behavior: "allow")
                                         } onDeny: {
+                                            guard let convId = conversationStore.activeConversationId else { return }
                                             conversationStore.resolvePermissionRequest(
-                                                in: conversationStore.activeConversationId!,
+                                                in: convId,
                                                 requestId: req.id,
                                                 approved: false
                                             )
@@ -101,8 +103,9 @@ struct ChatView: View {
                                         }
                                     case .askUserQuestion(let q):
                                         AskUserQuestionCard(question: q) { answers in
+                                            guard let convId = conversationStore.activeConversationId else { return }
                                             conversationStore.resolveAskUserQuestion(
-                                                in: conversationStore.activeConversationId!,
+                                                in: convId,
                                                 requestId: q.id,
                                                 answers: answers
                                             )

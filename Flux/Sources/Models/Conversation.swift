@@ -40,15 +40,71 @@ struct PendingAskUserQuestion: Identifiable, Codable {
     var status: PermissionStatus = .pending
 
     struct Question: Codable, Identifiable {
-        var id: String { question }
+        let id: UUID
         let question: String
         let options: [Option]
         let multiSelect: Bool
 
+        init(id: UUID = UUID(), question: String, options: [Option], multiSelect: Bool) {
+            self.id = id
+            self.question = question
+            self.options = options
+            self.multiSelect = multiSelect
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case question
+            case options
+            case multiSelect
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+            question = try container.decode(String.self, forKey: .question)
+            options = try container.decode([Option].self, forKey: .options)
+            multiSelect = try container.decode(Bool.self, forKey: .multiSelect)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(question, forKey: .question)
+            try container.encode(options, forKey: .options)
+            try container.encode(multiSelect, forKey: .multiSelect)
+        }
+
         struct Option: Codable, Identifiable {
-            var id: String { label }
+            let id: UUID
             let label: String
             let description: String?
+
+            init(id: UUID = UUID(), label: String, description: String?) {
+                self.id = id
+                self.label = label
+                self.description = description
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case id
+                case label
+                case description
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+                label = try container.decode(String.self, forKey: .label)
+                description = try container.decodeIfPresent(String.self, forKey: .description)
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(id, forKey: .id)
+                try container.encode(label, forKey: .label)
+                try container.encodeIfPresent(description, forKey: .description)
+            }
         }
     }
 
