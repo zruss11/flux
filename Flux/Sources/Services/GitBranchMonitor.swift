@@ -21,6 +21,7 @@ final class GitBranchMonitor {
     private var timer: Timer?
     private var monitoredPath: String?
     private let pollInterval: TimeInterval = 5
+    private var refreshGeneration: UInt64 = 0
 
     private init() {}
 
@@ -49,6 +50,7 @@ final class GitBranchMonitor {
     func stop() {
         timer?.invalidate()
         timer = nil
+        invalidateRefreshes()
     }
 
     /// Force an immediate refresh of the current branch.
@@ -83,6 +85,7 @@ final class GitBranchMonitor {
 
         let result = await runGit(["checkout", branch], in: path)
         if result != nil {
+            invalidateRefreshes()
             currentBranch = branch
             return true
         }
@@ -98,8 +101,19 @@ final class GitBranchMonitor {
             currentBranch = nil
             return
         }
+        let generation = nextRefreshGeneration()
         let result = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], in: path)
+        guard generation == refreshGeneration, path == monitoredPath else { return }
         currentBranch = result?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func nextRefreshGeneration() -> UInt64 {
+        refreshGeneration &+= 1
+        return refreshGeneration
+    }
+
+    private func invalidateRefreshes() {
+        refreshGeneration &+= 1
     }
 
     // MARK: - Git CLI Runner
@@ -130,12 +144,14 @@ final class GitBranchMonitor {
             }
 
             DispatchQueue.global(qos: .utility).async {
+                // Drain stdout before waiting for exit to avoid a potential pipe
+                // backpressure deadlock on larger git outputs.
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
                 guard process.terminationStatus == 0 else {
                     continuation.resume(returning: nil)
                     return
                 }
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 continuation.resume(returning: output)

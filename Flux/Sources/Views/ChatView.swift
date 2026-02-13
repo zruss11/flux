@@ -44,6 +44,7 @@ struct ChatView: View {
     @State private var worktreeEnabled = false
     @State private var showBranchPicker = false
     @State private var availableBranches: [String] = []
+    @State private var branchCheckoutErrorMessage: String?
     @State private var imageImportErrorMessage: String?
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
 
@@ -254,7 +255,7 @@ struct ChatView: View {
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: "arrow.triangle.branch")
+                            Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.7))
                             Text(branch)
@@ -282,7 +283,10 @@ struct ChatView: View {
                         ) { selected in
                             showBranchPicker = false
                             Task {
-                                await GitBranchMonitor.shared.checkout(selected)
+                                let didCheckout = await GitBranchMonitor.shared.checkout(selected)
+                                if !didCheckout {
+                                    branchCheckoutErrorMessage = "Couldn't switch to \"\(selected)\". Resolve git conflicts or uncommitted changes, then try again."
+                                }
                             }
                         }
                     }
@@ -474,6 +478,18 @@ struct ChatView: View {
             }
         } message: {
             Text(imageImportErrorMessage ?? "Unable to add image.")
+        }
+        .alert("Branch Switch Failed", isPresented: Binding(
+            get: { branchCheckoutErrorMessage != nil },
+            set: { shown in
+                if !shown { branchCheckoutErrorMessage = nil }
+            }
+        )) {
+            Button("OK", role: .cancel) {
+                branchCheckoutErrorMessage = nil
+            }
+        } message: {
+            Text(branchCheckoutErrorMessage ?? "Unable to switch branches.")
         }
     }
 
