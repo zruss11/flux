@@ -20,6 +20,14 @@ struct SkillsVisibleKey: PreferenceKey {
     }
 }
 
+// Preference key to tell IslandView whether there are pending image attachments
+struct HasPendingAttachmentsKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: Bool = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
 struct ChatView: View {
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
@@ -319,6 +327,7 @@ struct ChatView: View {
             }
         )
         .preference(key: SkillsVisibleKey.self, value: showSkills)
+        .preference(key: HasPendingAttachmentsKey.self, value: !pendingImageAttachments.isEmpty)
         .onChange(of: inputText) { oldValue, newValue in
             // Detect a freshly typed `$` to open skills (or re-activate search if already open)
             if newValue.count - oldValue.count == 1,
