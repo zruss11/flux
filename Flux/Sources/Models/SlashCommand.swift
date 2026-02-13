@@ -49,5 +49,26 @@ struct SlashCommand: Identifiable, Hashable {
             filePath: nil,
             source: .builtIn
         ),
+        SlashCommand(
+            id: "builtin:compact",
+            name: "compact",
+            description: "Summarize conversation to reduce token usage",
+            filePath: nil,
+            source: .builtIn
+        ),
+        SlashCommand(
+            id: "builtin:help",
+            name: "help",
+            description: "Show available commands and usage tips",
+            filePath: nil,
+            source: .builtIn
+        ),
+        SlashCommand(
+            id: "builtin:cost",
+            name: "cost",
+            description: "Show token usage and estimated cost for this session",
+            filePath: nil,
+            source: .builtIn
+        ),
     ]
 }

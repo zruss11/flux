@@ -570,16 +570,25 @@ struct ChatView: View {
 
         // Slash commands
         let lowered = text.lowercased()
-        if pendingImageAttachments.isEmpty && (lowered == "/new" || lowered == "/clear") {
-            inputText = ""
-            selectedSkillDirNames.removeAll()
-            pendingImageAttachments.removeAll()
-            if showSkills {
-                showSkills = false
-                dollarTriggerActive = false
+        if pendingImageAttachments.isEmpty && lowered.hasPrefix("/") {
+            let cmdName = String(lowered.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Local-only commands
+            if cmdName == "new" || cmdName == "clear" {
+                inputText = ""
+                selectedSkillDirNames.removeAll()
+                pendingImageAttachments.removeAll()
+                if showSkills {
+                    showSkills = false
+                    dollarTriggerActive = false
+                }
+                if showSlashCommands {
+                    showSlashCommands = false
+                    slashTriggerActive = false
+                }
+                conversationStore.startNewConversation()
+                return
             }
-            conversationStore.startNewConversation()
-            return
         }
 
         if showSkills {
@@ -587,6 +596,12 @@ struct ChatView: View {
                 showSkills = false
             }
             dollarTriggerActive = false
+        }
+        if showSlashCommands {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                showSlashCommands = false
+            }
+            slashTriggerActive = false
         }
 
         var outboundText = transformSelectedSkillTokensForOutbound(text)
