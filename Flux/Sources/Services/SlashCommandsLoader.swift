@@ -62,7 +62,16 @@ enum SlashCommandsLoader {
         for case let fileURL as URL in enumerator {
             guard fileURL.pathExtension.lowercased() == "md" else { continue }
 
-            let name = fileURL.deletingPathExtension().lastPathComponent
+            let nameComponents = fileURL.standardizedFileURL.pathComponents
+            let rootComponents = directory.standardizedFileURL.pathComponents
+            guard nameComponents.count > rootComponents.count else { continue }
+            let relativeComponents = nameComponents.dropFirst(rootComponents.count)
+            guard let last = relativeComponents.last else { continue }
+
+            let fileStem = (last as NSString).deletingPathExtension
+            guard !fileStem.isEmpty else { continue }
+            let normalizedComponents = relativeComponents.dropLast().map(String.init) + [fileStem]
+            let name = normalizedComponents.joined(separator: "/")
             guard !name.isEmpty else { continue }
 
             // Parse YAML frontmatter for description
