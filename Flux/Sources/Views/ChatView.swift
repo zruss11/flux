@@ -42,6 +42,9 @@ struct ChatView: View {
     @State private var showMicPermissionAlert = false
     @State private var showSpeechPermissionAlert = false
     @State private var worktreeEnabled = false
+    @State private var showBranchPicker = false
+    @State private var availableBranches: [String] = []
+    @State private var branchCheckoutErrorMessage: String?
     @State private var imageImportErrorMessage: String?
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
 
@@ -242,6 +245,53 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
 
+                // Git branch pill
+                if let branch = GitBranchMonitor.shared.currentBranch {
+                    Button {
+                        Task {
+                            await GitBranchMonitor.shared.fetchBranches()
+                            availableBranches = GitBranchMonitor.shared.branches
+                            showBranchPicker.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.7))
+                            Text(branch)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.7))
+                                .lineLimit(1)
+                        }
+                        .fixedSize()
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.10))
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showBranchPicker, arrowEdge: .bottom) {
+                        GitBranchPickerPopover(
+                            branches: availableBranches,
+                            currentBranch: branch
+                        ) { selected in
+                            showBranchPicker = false
+                            Task {
+                                let didCheckout = await GitBranchMonitor.shared.checkout(selected)
+                                if !didCheckout {
+                                    branchCheckoutErrorMessage = "Couldn't switch to \"\(selected)\". Resolve git conflicts or uncommitted changes, then try again."
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Button {
                     if conversationStore.activeWorktreeBranch != nil {
                         conversationStore.activeWorktreeBranch = nil
@@ -364,6 +414,10 @@ struct ChatView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isInputFocused = true
             }
+            GitBranchMonitor.shared.monitor(workspacePath: conversationStore.workspacePath)
+        }
+        .onChange(of: conversationStore.workspacePath) { _, newPath in
+            GitBranchMonitor.shared.monitor(workspacePath: newPath)
         }
         .onChange(of: voiceInput.transcript) { _, newValue in
             // While recording, show partial (live) transcription as the user speaks.
@@ -424,6 +478,18 @@ struct ChatView: View {
             }
         } message: {
             Text(imageImportErrorMessage ?? "Unable to add image.")
+        }
+        .alert("Branch Switch Failed", isPresented: Binding(
+            get: { branchCheckoutErrorMessage != nil },
+            set: { shown in
+                if !shown { branchCheckoutErrorMessage = nil }
+            }
+        )) {
+            Button("OK", role: .cancel) {
+                branchCheckoutErrorMessage = nil
+            }
+        } message: {
+            Text(branchCheckoutErrorMessage ?? "Unable to switch branches.")
         }
     }
 
