@@ -430,6 +430,7 @@ struct IslandView: View {
                 }
             }
             .frame(width: closedRightSlotWidth, height: closedHeight)
+            .offset(x: 6)
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)
