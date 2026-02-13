@@ -185,10 +185,10 @@ struct ChatView: View {
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(Color.white.opacity(0.10))
                     .overlay(
                         RoundedRectangle(cornerRadius: 20)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
                     )
             )
             .padding(.horizontal, 10)
@@ -225,10 +225,10 @@ struct ChatView: View {
                     .padding(.vertical, 6)
                     .background(
                         Capsule()
-                            .fill(Color.white.opacity(0.06))
+                            .fill(Color.white.opacity(0.10))
                             .overlay(
                                 Capsule()
-                                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
                             )
                     )
                 }
@@ -589,7 +589,7 @@ struct MessageBubble: View {
             .padding(.vertical, 8)
             .background {
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(message.role == .user ? Color.blue.opacity(0.5) : Color.white.opacity(0.08))
+                    .fill(message.role == .user ? Color.blue.opacity(0.45) : Color.white.opacity(0.12))
             }
 
             if message.role == .assistant { Spacer(minLength: 60) }
