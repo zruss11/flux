@@ -29,7 +29,7 @@ final class CIStatusMonitor {
 
     private(set) var aggregateStatus: CIAggregateStatus = .idle
 
-    /// Per-repo latest conclusion for more granular display in the future.
+    /// Per-repo aggregate conclusion for the latest commit's workflow runs.
     private(set) var repoStatuses: [String: CIAggregateStatus] = [:]
 
     private var timer: Timer?
@@ -91,7 +91,7 @@ final class CIStatusMonitor {
             repoStatuses = [:]
             previousRepoStatuses = [:]
             latestRunInfo = [:]
-            updatePollingCadence(for: .idle)
+            updatePollingCadence()
             return
         }
 
@@ -118,7 +118,7 @@ final class CIStatusMonitor {
         latestRunInfo = runInfos
         repoStatuses = statuses
         aggregateStatus = aggregate(statuses)
-        updatePollingCadence(for: aggregateStatus)
+        updatePollingCadence()
 
         // Only fire transitions when we had a valid previous state (not the first poll).
         if !oldStatuses.isEmpty {
@@ -133,12 +133,10 @@ final class CIStatusMonitor {
 
     /// Returns true for transitions worth notifying about.
     private func shouldFireTicker(from old: CIAggregateStatus, to newSt: CIAggregateStatus) -> Bool {
-        switch (old, newSt) {
-        case (.running, .passing), (.running, .failing), (.failing, .passing):
-            return true
-        default:
-            return false
-        }
+        if newSt == .failing && old != .failing { return true } // any red
+        if old == .running && newSt == .passing { return true } // all green
+        if old == .failing && newSt == .passing { return true } // recovery
+        return false
     }
 
     // MARK: - Per-Repo Check
@@ -148,8 +146,8 @@ final class CIStatusMonitor {
             let result = try await runGH([
                 "run", "list",
                 "--repo", repo,
-                "--limit", "1",
-                "--json", "conclusion,status,name,headBranch,event",
+                "--limit", "30",
+                "--json", "conclusion,status,name,headBranch,event,headSha",
             ])
 
             Log.app.info("CIStatusMonitor: \(repo) exitCode=\(result.exitCode) output=\(result.output)")
@@ -163,40 +161,84 @@ final class CIStatusMonitor {
                 return (.unknown, nil)
             }
 
-            // No workflow runs at all — repo has no CI, treat as neutral/passing
+            // No workflow runs at all — repo has no CI, treat as neutral/passing.
             guard let latest = runs.first else {
                 return (.passing, nil)
             }
 
-            let status = latest["status"] as? String ?? ""
-            let conclusion = latest["conclusion"] as? String ?? ""
-            let workflowName = latest["name"] as? String ?? "CI"
-            let headBranch = latest["headBranch"] as? String ?? ""
-            let event = latest["event"] as? String ?? ""
+            // Aggregate over all runs for the latest commit so "all green" only
+            // fires when every workflow has finished successfully.
+            let scopedRuns = runsForLatestCommit(allRuns: runs, latestRun: latest)
+            let aggregateStatus = aggregateRuns(scopedRuns)
 
+            let infoSource = scopedRuns.first ?? latest
+            let status = (infoSource["status"] as? String ?? "").lowercased()
+            let conclusion = (infoSource["conclusion"] as? String ?? "").lowercased()
             let info = CIRunInfo(
-                workflowName: workflowName,
-                headBranch: headBranch,
+                workflowName: infoSource["name"] as? String ?? "CI",
+                headBranch: infoSource["headBranch"] as? String ?? "",
                 conclusion: conclusion.isEmpty ? status : conclusion,
-                event: event
+                event: infoSource["event"] as? String ?? ""
             )
 
-            if status == "in_progress" || status == "queued" || status == "waiting" || status == "requested" || status == "pending" {
-                return (.running, info)
-            }
-
-            switch conclusion {
-            case "success":
-                return (.passing, info)
-            case "failure", "timed_out", "cancelled", "action_required":
-                return (.failing, info)
-            default:
-                return (.unknown, info)
-            }
+            return (aggregateStatus, info)
         } catch {
             Log.app.error("CIStatusMonitor: failed to check \(repo) — \(error.localizedDescription)")
             return (.unknown, nil)
         }
+    }
+
+    private func runsForLatestCommit(allRuns: [[String: Any]], latestRun: [String: Any]) -> [[String: Any]] {
+        let latestSha = (latestRun["headSha"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !latestSha.isEmpty {
+            let sameSha = allRuns.filter { run in
+                (run["headSha"] as? String ?? "") == latestSha
+            }
+            if !sameSha.isEmpty { return sameSha }
+        }
+
+        // Fallback when `headSha` is unavailable.
+        let latestBranch = latestRun["headBranch"] as? String ?? ""
+        let latestEvent = latestRun["event"] as? String ?? ""
+        return allRuns.filter { run in
+            let branch = run["headBranch"] as? String ?? ""
+            let event = run["event"] as? String ?? ""
+            return branch == latestBranch && event == latestEvent
+        }
+    }
+
+    private func aggregateRuns(_ runs: [[String: Any]]) -> CIAggregateStatus {
+        guard !runs.isEmpty else { return .unknown }
+
+        var statuses: [CIAggregateStatus] = []
+        statuses.reserveCapacity(runs.count)
+        for run in runs {
+            statuses.append(statusForRun(run))
+        }
+
+        if statuses.contains(.failing) { return .failing } // any red
+        if statuses.contains(.running) { return .running } // still in progress
+        if statuses.contains(.unknown) { return .unknown }
+        return .passing
+    }
+
+    private func statusForRun(_ run: [String: Any]) -> CIAggregateStatus {
+        let status = (run["status"] as? String ?? "").lowercased()
+        let conclusion = (run["conclusion"] as? String ?? "").lowercased()
+
+        if ["in_progress", "queued", "waiting", "requested", "pending"].contains(status) {
+            return .running
+        }
+
+        if ["failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"].contains(conclusion) {
+            return .failing
+        }
+
+        if ["success", "neutral", "skipped"].contains(conclusion) {
+            return .passing
+        }
+
+        return .unknown
     }
 
     // MARK: - Ticker Message Generation
@@ -216,9 +258,9 @@ final class CIStatusMonitor {
             let userPrompt: String
             switch newStatus {
             case .passing:
-                userPrompt = "The workflow '\(workflowPart)' on repo '\(shortRepo)' branch '\(branchPart)' just went all green (passed). Celebrate briefly."
+                userPrompt = "Repo '\(shortRepo)' branch '\(branchPart)' just went all green (all checks passed). Celebrate briefly."
             case .failing:
-                userPrompt = "The workflow '\(workflowPart)' on repo '\(shortRepo)' branch '\(branchPart)' just failed. Report it tersely."
+                userPrompt = "Repo '\(shortRepo)' branch '\(branchPart)' has at least one failed check. Report it tersely."
             default:
                 userPrompt = "The workflow '\(workflowPart)' on repo '\(shortRepo)' branch '\(branchPart)' changed status to \(newStatus). Report it tersely."
             }
@@ -243,9 +285,9 @@ final class CIStatusMonitor {
         let branchLabel = branch.isEmpty ? "" : " (\(branch))"
         switch status {
         case .passing:
-            return "✅ \(repo)\(branchLabel) — \(workflow) passed"
+            return "✅ \(repo)\(branchLabel) — all checks passed"
         case .failing:
-            return "❌ \(repo)\(branchLabel) — \(workflow) failed"
+            return "❌ \(repo)\(branchLabel) — check failed"
         default:
             return "🔄 \(repo)\(branchLabel) — \(workflow) status changed"
         }
@@ -253,20 +295,21 @@ final class CIStatusMonitor {
 
     // MARK: - Aggregation
 
-    /// Priority: running > failing > unknown > passing.
+    /// Priority: failing > running > unknown > passing.
     private func aggregate(_ statuses: [String: CIAggregateStatus]) -> CIAggregateStatus {
         guard !statuses.isEmpty else { return .idle }
 
         let values = Array(statuses.values)
 
-        if values.contains(.running) { return .running }
         if values.contains(.failing) { return .failing }
+        if values.contains(.running) { return .running }
         if values.contains(.unknown) { return .unknown }
         return .passing
     }
 
-    private func updatePollingCadence(for aggregateStatus: CIAggregateStatus) {
-        let desired = aggregateStatus == .running ? activePollInterval : steadyPollInterval
+    private func updatePollingCadence() {
+        let hasRunningRepo = repoStatuses.values.contains(.running)
+        let desired = hasRunningRepo ? activePollInterval : steadyPollInterval
         guard currentPollInterval != desired else { return }
         scheduleTimer(interval: desired)
     }

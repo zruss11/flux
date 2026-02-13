@@ -3,6 +3,7 @@
 ## Corrections
 | Date | Source | What Went Wrong | What To Do Instead |
 |------|--------|----------------|-------------------|
+| 2026-02-13 | me | In a fresh session, I ran `pwd && ls -la` in parallel with reading `.claude/napkin.md`, so napkin was not strictly first. | In fresh sessions, read `.claude/napkin.md` in a standalone first command before any other tool call. |
 | 2026-02-13 | me | Opened the attached screenshot before reading `.claude/napkin.md` at session start. | In fresh sessions, read the napkin before running any tool calls (including attachment inspection). |
 | 2026-02-13 | me | Mentioned internal skill usage in a user-facing progress update again. | Keep commentary purely about technical investigation/fixes; never mention internal skill handling. |
 | 2026-02-13 | me | Mentioned internal napkin workflow in a user-facing progress update. | Keep progress updates technical-only; never mention internal skill workflow details. |
