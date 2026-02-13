@@ -195,7 +195,28 @@ struct IslandView: View {
                 )
                 .padding(.horizontal, isExpanded ? topRadius : bottomRadius)
                 .padding([.horizontal, .bottom], isExpanded ? 12 : 0)
-                .background(.black)
+                .background {
+                    if isExpanded {
+                        ZStack {
+                            // Glass blur layer — ultra-thin material for transparency
+                            RoundedRectangle(cornerRadius: bottomRadius, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                            // Radial gradient overlay — denser center for readability, transparent edges
+                            RadialGradient(
+                                colors: [
+                                    .black.opacity(0.82),
+                                    .black.opacity(0.60),
+                                    .black.opacity(0.35)
+                                ],
+                                center: .center,
+                                startRadius: 20,
+                                endRadius: 300
+                            )
+                        }
+                    } else {
+                        Color.black
+                    }
+                }
                 .clipShape(
                     hasNotch
                         ? AnyShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
@@ -480,7 +501,7 @@ struct IslandView: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white.opacity(0.7))
                         .frame(width: 24, height: 24)
-                        .background(Circle().fill(.white.opacity(0.1)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
@@ -506,7 +527,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
 
@@ -520,7 +541,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
@@ -536,7 +557,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut("n", modifiers: .command)
@@ -551,7 +572,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
 
@@ -565,7 +586,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
@@ -582,7 +603,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
@@ -594,7 +615,7 @@ struct IslandView: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.white.opacity(0.6))
                     .frame(width: 24, height: 24)
-                    .background(Circle().fill(.white.opacity(0.08)))
+                    .background(Circle().fill(.white.opacity(0.12)))
             }
             .buttonStyle(.plain)
         }
@@ -605,7 +626,7 @@ struct IslandView: View {
     private var expandedBody: some View {
         VStack(spacing: 0) {
             Divider()
-                .overlay(Color.white.opacity(0.1))
+                .overlay(Color.white.opacity(0.15))
 
             Group {
                 switch contentType {
@@ -2486,7 +2507,7 @@ struct IslandSettingsView: View {
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.white.opacity(0.7))
                         .frame(width: 24, height: 24)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
@@ -2771,7 +2792,7 @@ struct IslandSettingsView: View {
 
     private var divider: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.08))
+            .fill(Color.white.opacity(0.12))
             .frame(height: 1)
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
@@ -2947,7 +2968,7 @@ struct IslandSettingsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.10)))
     }
 
     private func settingsRow(
@@ -2971,6 +2992,6 @@ struct IslandSettingsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.0001)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.05)))
     }
 }
