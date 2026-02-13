@@ -103,9 +103,14 @@ struct ChatView: View {
                                         AskUserQuestionCard(question: q) { answers in
                                             conversationStore.resolveAskUserQuestion(
                                                 in: conversationStore.activeConversationId!,
-                                                requestId: q.id
+                                                requestId: q.id,
+                                                answers: answers
                                             )
-                                            agentBridge.sendPermissionResponse(requestId: q.id, behavior: "allow")
+                                            agentBridge.sendPermissionResponse(
+                                                requestId: q.id,
+                                                behavior: "allow",
+                                                answers: answers
+                                            )
                                         }
                                     }
                                 }

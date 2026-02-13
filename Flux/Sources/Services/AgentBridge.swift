@@ -148,7 +148,12 @@ final class AgentBridge: @unchecked Sendable {
         send(message)
     }
 
-    func sendPermissionResponse(requestId: String, behavior: String, message: String? = nil) {
+    func sendPermissionResponse(
+        requestId: String,
+        behavior: String,
+        message: String? = nil,
+        answers: [String: String]? = nil
+    ) {
         var msg: [String: Any] = [
             "type": "permission_response",
             "requestId": requestId,
@@ -156,6 +161,9 @@ final class AgentBridge: @unchecked Sendable {
         ]
         if let message {
             msg["message"] = message
+        }
+        if let answers, !answers.isEmpty {
+            msg["answers"] = answers
         }
         send(msg)
     }

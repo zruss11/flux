@@ -327,12 +327,13 @@ final class ConversationStore {
         scrollRevision &+= 1
     }
 
-    func resolveAskUserQuestion(in conversationId: UUID, requestId: String) {
+    func resolveAskUserQuestion(in conversationId: UUID, requestId: String, answers: [String: String]) {
         guard let convIndex = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
 
         for msgIndex in conversations[convIndex].messages.indices.reversed() {
             if let reqIndex = conversations[convIndex].messages[msgIndex].askUserQuestions.firstIndex(where: { $0.id == requestId }) {
                 conversations[convIndex].messages[msgIndex].askUserQuestions[reqIndex].status = .answered
+                conversations[convIndex].messages[msgIndex].askUserQuestions[reqIndex].answers = answers
                 saveConversation(conversations[convIndex])
                 return
             }

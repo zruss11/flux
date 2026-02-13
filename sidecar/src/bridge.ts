@@ -58,6 +58,7 @@ interface PermissionResponseMessage {
   requestId: string;
   behavior: 'allow' | 'deny';
   message?: string;
+  answers?: Record<string, string>;
 }
 
 type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | PermissionResponseMessage;
@@ -216,6 +217,8 @@ const mcpAuthTokens = new Map<string, string>();
 const pendingPermissions = new Map<string, {
   resolve: (result: { behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }) => void;
   conversationId: string;
+  toolName: string;
+  input: Record<string, unknown>;
   timeout: NodeJS.Timeout;
 }>();
 
@@ -236,6 +239,57 @@ function sanitizeAppInstruction(instruction: string | undefined): string | undef
   const maxLen = 2_000;
   const clipped = trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
   return clipped.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+}
+
+const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
+  /\brm\b/i,
+  /\brm\s+-rf\b/i,
+  /\brm\s+-fr\b/i,
+  /\bsudo\s+rm\b/i,
+  /\bgit\s+reset\s+--hard\b/i,
+  /\bgit\s+clean\s+-f(?:d|x|dx|fd|fdx)?\b/i,
+  /\bgit\s+checkout\s+--\b/i,
+  /\bgit\s+branch\s+-D\b/i,
+  /\bgit\s+push\s+--force(?!-with-lease)\b/i,
+  /\bgit\s+rebase\s+--abort\b/i,
+  /\bgit\s+rebase\s+--skip\b/i,
+  /\bgit\s+stash\s+(?:drop|clear)\b/i,
+];
+
+function collectCommandLikeInputValues(input: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  const keys = ['command', 'cmd', 'script', 'shell', 'bash', 'args'];
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      values.push(value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      const combined = value.filter((item): item is string => typeof item === 'string').join(' ');
+      if (combined.trim().length > 0) values.push(combined);
+    }
+  }
+  return values;
+}
+
+function requiresApproval(toolName: string, input: Record<string, unknown>): boolean {
+  const lowerToolName = toolName.toLowerCase();
+  const isCommandExecutionTool =
+    lowerToolName.includes('shell') ||
+    lowerToolName.includes('bash') ||
+    lowerToolName.includes('terminal') ||
+    lowerToolName.includes('applescript') ||
+    lowerToolName.includes('command');
+
+  const commandCandidates = collectCommandLikeInputValues(input);
+  if (!isCommandExecutionTool && commandCandidates.length === 0) {
+    return false;
+  }
+
+  return commandCandidates.some((command) =>
+    DANGEROUS_COMMAND_PATTERNS.some((pattern) => pattern.test(command)),
+  );
 }
 
 interface ConversationSession {
@@ -518,6 +572,10 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<{ behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }> => {
+    if (toolName !== 'AskUserQuestion' && !requiresApproval(toolName, input)) {
+      return Promise.resolve({ behavior: 'allow', updatedInput: input });
+    }
+
     const requestId = crypto.randomUUID();
 
     if (toolName === 'AskUserQuestion') {
@@ -548,7 +606,7 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
         resolve({ behavior: 'deny', message: 'Permission request timed out' });
       }, 120_000);
 
-      pendingPermissions.set(requestId, { resolve, conversationId, timeout });
+      pendingPermissions.set(requestId, { resolve, conversationId, toolName, input, timeout });
     });
   };
 
@@ -1137,7 +1195,16 @@ function handlePermissionResponse(message: PermissionResponseMessage): void {
   pendingPermissions.delete(message.requestId);
 
   if (message.behavior === 'allow') {
-    pending.resolve({ behavior: 'allow', updatedInput: {} });
+    if (pending.toolName === 'AskUserQuestion') {
+      const answers = message.answers ?? {};
+      const updatedInput: Record<string, unknown> = {
+        ...pending.input,
+        answers,
+      };
+      pending.resolve({ behavior: 'allow', updatedInput });
+      return;
+    }
+    pending.resolve({ behavior: 'allow', updatedInput: pending.input });
   } else {
     pending.resolve({ behavior: 'deny', message: message.message || 'User denied this action' });
   }
