@@ -26,6 +26,11 @@ class PassThroughHostingView<Content: View>: NSHostingView<Content> {
 
 @MainActor
 final class IslandWindowManager: ObservableObject {
+    private struct QueuedTickerNotification {
+        let message: String
+        let duration: Double
+    }
+
     static let shared = IslandWindowManager()
 
     /// When true, the island will not collapse on app deactivation (e.g. during mic recording).
@@ -40,6 +45,10 @@ final class IslandWindowManager: ObservableObject {
     @Published var showingClipboardNotification = false
     @Published var showingDictationNotification = false
     @Published var dictationNotificationMessage = ""
+    @Published var showingTickerNotification = false
+    @Published var tickerNotificationMessage = ""
+    @Published var tickerDisplayDuration: Double = 6.0
+    @Published private(set) var tickerDismissDeadline: Date?
     private var targetScreen: NSScreen?
     private var notchGeometry: NotchGeometry?
     /// Distance from screen top to the island (menu bar height on non-notch screens).
@@ -51,6 +60,8 @@ final class IslandWindowManager: ObservableObject {
     private var hoverTimer: DispatchWorkItem?
     private var clipboardNotificationDismissWorkItem: DispatchWorkItem?
     private var dictationNotificationDismissWorkItem: DispatchWorkItem?
+    private var tickerNotificationDismissWorkItem: DispatchWorkItem?
+    private var tickerNotificationQueue: [QueuedTickerNotification] = []
 
     private init() {}
 
@@ -164,10 +175,16 @@ final class IslandWindowManager: ObservableObject {
         showingClipboardNotification = false
         showingDictationNotification = false
         dictationNotificationMessage = ""
+        showingTickerNotification = false
+        tickerNotificationMessage = ""
+        tickerDismissDeadline = nil
         clipboardNotificationDismissWorkItem?.cancel()
         clipboardNotificationDismissWorkItem = nil
         dictationNotificationDismissWorkItem?.cancel()
         dictationNotificationDismissWorkItem = nil
+        tickerNotificationDismissWorkItem?.cancel()
+        tickerNotificationDismissWorkItem = nil
+        tickerNotificationQueue.removeAll()
     }
 
     func expand() {
@@ -218,6 +235,54 @@ final class IslandWindowManager: ObservableObject {
         }
         dictationNotificationDismissWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: workItem)
+    }
+
+    func showTickerNotification(_ message: String) {
+        let configuredDuration = UserDefaults.standard.double(forKey: "ciTickerDuration")
+        let baseDuration = configuredDuration > 0 ? configuredDuration : 6.0
+        let resolvedDuration = max(baseDuration, minimumTickerDuration(for: message))
+        tickerNotificationQueue.append(QueuedTickerNotification(message: message, duration: resolvedDuration))
+        drainTickerNotificationsIfNeeded()
+    }
+
+    private func minimumTickerDuration(for message: String) -> Double {
+        // Keep the ticker visible long enough to finish the full scroll.
+        let estimatedCharacterWidth: CGFloat = 7.2 // 12pt monospaced text
+        let estimatedTextWidth = CGFloat(message.count) * estimatedCharacterWidth
+        let estimatedBarWidth = max(260, notchSize.width)
+        let estimatedScrollDistance = estimatedBarWidth + estimatedTextWidth
+        let scrollDuration = max(3.5, Double(estimatedScrollDistance) / 55.0)
+
+        // Ticker animation timing in TickerBarView:
+        // +0.4s delay before scroll starts and retract begins 0.5s before dismissal.
+        return scrollDuration + 0.9
+    }
+
+    private func drainTickerNotificationsIfNeeded() {
+        guard tickerNotificationDismissWorkItem == nil else { return }
+        guard !tickerNotificationQueue.isEmpty else { return }
+
+        let notification = tickerNotificationQueue.removeFirst()
+        tickerNotificationMessage = notification.message
+        tickerDisplayDuration = notification.duration
+        tickerDismissDeadline = Date().addingTimeInterval(notification.duration)
+        showingTickerNotification = true
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.showingTickerNotification = false
+            self.tickerNotificationMessage = ""
+            self.tickerDismissDeadline = nil
+            self.tickerNotificationDismissWorkItem = nil
+            self.drainTickerNotificationsIfNeeded()
+        }
+        tickerNotificationDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + notification.duration, execute: workItem)
+    }
+
+    var tickerRemainingDuration: TimeInterval {
+        guard let tickerDismissDeadline else { return 0 }
+        return max(0, tickerDismissDeadline.timeIntervalSinceNow)
     }
 
     // MARK: - Event Monitors

@@ -18,6 +18,10 @@ enum CIAggregateStatus: Equatable, Sendable {
 /// Lightweight monitor that polls `gh run list` to maintain a live aggregate
 /// CI status for the notch indicator. Uses adaptive polling independent of the
 /// 5-minute `WatcherEngine` alert cycle.
+///
+/// When a repo transitions status (e.g. running → passing) the monitor uses
+/// Apple Foundation Models to craft a one-line ticker message, then pushes it
+/// to `IslandWindowManager` for display below the island.
 @MainActor
 @Observable
 final class CIStatusMonitor {
@@ -25,7 +29,7 @@ final class CIStatusMonitor {
 
     private(set) var aggregateStatus: CIAggregateStatus = .idle
 
-    /// Per-repo latest conclusion for more granular display in the future.
+    /// Per-repo aggregate conclusion for the latest commit's workflow runs.
     private(set) var repoStatuses: [String: CIAggregateStatus] = [:]
 
     private var timer: Timer?
@@ -34,7 +38,32 @@ final class CIStatusMonitor {
     private let steadyPollInterval: TimeInterval = 30
     private let activePollInterval: TimeInterval = 10
 
+    /// Previous repo statuses used to detect transitions.
+    private var previousRepoStatuses: [String: CIAggregateStatus] = [:]
+
+    /// Per-repo latest run metadata for generating rich ticker messages.
+    private var latestRunInfo: [String: CIRunInfo] = [:]
+    private var pendingTickerTransitions: [CITransition] = []
+    private var isProcessingTickerTransitions = false
+
     private init() {}
+
+    // MARK: - Run Info
+
+    /// Lightweight metadata about the latest workflow run for ticker messages.
+    struct CIRunInfo: Sendable {
+        let workflowName: String
+        let headBranch: String
+        let conclusion: String
+        let event: String      // "pull_request", "push", etc.
+    }
+
+    struct CITransition: Sendable {
+        let repo: String
+        let oldStatus: CIAggregateStatus
+        let newStatus: CIAggregateStatus
+        let info: CIRunInfo?
+    }
 
     // MARK: - Lifecycle
 
@@ -69,94 +98,323 @@ final class CIStatusMonitor {
         guard !repos.isEmpty else {
             aggregateStatus = .idle
             repoStatuses = [:]
-            updatePollingCadence(for: .idle)
+            previousRepoStatuses = [:]
+            latestRunInfo = [:]
+            updatePollingCadence()
             return
         }
 
         var statuses: [String: CIAggregateStatus] = [:]
+        var runInfos: [String: CIRunInfo] = [:]
 
-        await withTaskGroup(of: (String, CIAggregateStatus).self) { group in
+        await withTaskGroup(of: (String, CIAggregateStatus, CIRunInfo?).self) { group in
             for repo in repos {
                 group.addTask { [self] in
-                    let status = await self.checkRepo(repo)
-                    return (repo, status)
+                    let (status, info) = await self.checkRepo(repo)
+                    return (repo, status, info)
                 }
             }
 
-            for await (repo, status) in group {
+            for await (repo, status, info) in group {
                 statuses[repo] = status
+                if let info { runInfos[repo] = info }
             }
         }
 
+        // Detect transitions and fire ticker notifications.
+        let oldStatuses = previousRepoStatuses
+        previousRepoStatuses = statuses
+        latestRunInfo = runInfos
         repoStatuses = statuses
         aggregateStatus = aggregate(statuses)
-        updatePollingCadence(for: aggregateStatus)
+        updatePollingCadence()
+
+        // Only fire transitions when we had a valid previous state (not the first poll).
+        if !oldStatuses.isEmpty {
+            var transitions: [CITransition] = []
+            for (repo, newStatus) in statuses {
+                let oldStatus = oldStatuses[repo] ?? .unknown
+                if oldStatus != newStatus, shouldFireTicker(from: oldStatus, to: newStatus) {
+                    transitions.append(
+                        CITransition(
+                            repo: repo,
+                            oldStatus: oldStatus,
+                            newStatus: newStatus,
+                            info: runInfos[repo]
+                        )
+                    )
+                }
+            }
+            enqueueTickerTransitions(transitions)
+        }
+    }
+
+    /// Returns true for transitions worth notifying about.
+    private func shouldFireTicker(from old: CIAggregateStatus, to newSt: CIAggregateStatus) -> Bool {
+        if newSt == .failing && old != .failing { return true } // any red
+        if old == .running && newSt == .passing { return true } // all green
+        if old == .failing && newSt == .passing { return true } // recovery
+        return false
     }
 
     // MARK: - Per-Repo Check
 
-    private func checkRepo(_ repo: String) async -> CIAggregateStatus {
+    private func checkRepo(_ repo: String) async -> (CIAggregateStatus, CIRunInfo?) {
         do {
             let result = try await runGH([
                 "run", "list",
                 "--repo", repo,
-                "--limit", "1",
-                "--json", "conclusion,status",
+                "--limit", "30",
+                "--json", "conclusion,status,name,headBranch,event,headSha",
             ])
 
             Log.app.info("CIStatusMonitor: \(repo) exitCode=\(result.exitCode) output=\(result.output)")
 
             guard result.exitCode == 0 else {
-                return .unknown
+                return (.unknown, nil)
             }
 
             guard let data = result.output.data(using: .utf8),
                   let runs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                return .unknown
+                return (.unknown, nil)
             }
 
-            // No workflow runs at all — repo has no CI, treat as neutral/passing
+            // No workflow runs at all — repo has no CI, treat as neutral/passing.
             guard let latest = runs.first else {
-                return .passing
+                return (.passing, nil)
             }
 
-            let status = latest["status"] as? String ?? ""
-            let conclusion = latest["conclusion"] as? String ?? ""
+            // Aggregate over all runs for the latest commit so "all green" only
+            // fires when every workflow has finished successfully.
+            let scopedRuns = runsForLatestCommit(allRuns: runs, latestRun: latest)
+            let aggregateStatus = aggregateRuns(scopedRuns)
 
-            if status == "in_progress" || status == "queued" || status == "waiting" || status == "requested" || status == "pending" {
-                return .running
-            }
+            let infoSource = scopedRuns.first ?? latest
+            let status = (infoSource["status"] as? String ?? "").lowercased()
+            let conclusion = (infoSource["conclusion"] as? String ?? "").lowercased()
+            let info = CIRunInfo(
+                workflowName: infoSource["name"] as? String ?? "CI",
+                headBranch: infoSource["headBranch"] as? String ?? "",
+                conclusion: conclusion.isEmpty ? status : conclusion,
+                event: infoSource["event"] as? String ?? ""
+            )
 
-            switch conclusion {
-            case "success":
-                return .passing
-            case "failure", "timed_out", "cancelled", "action_required":
-                return .failing
-            default:
-                return .unknown
-            }
+            return (aggregateStatus, info)
         } catch {
             Log.app.error("CIStatusMonitor: failed to check \(repo) — \(error.localizedDescription)")
-            return .unknown
+            return (.unknown, nil)
+        }
+    }
+
+    private func runsForLatestCommit(allRuns: [[String: Any]], latestRun: [String: Any]) -> [[String: Any]] {
+        let latestSha = (latestRun["headSha"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !latestSha.isEmpty {
+            let sameSha = allRuns.filter { run in
+                (run["headSha"] as? String ?? "") == latestSha
+            }
+            if !sameSha.isEmpty { return sameSha }
+        }
+
+        // Fallback when `headSha` is unavailable.
+        let latestBranch = latestRun["headBranch"] as? String ?? ""
+        let latestEvent = latestRun["event"] as? String ?? ""
+        return allRuns.filter { run in
+            let branch = run["headBranch"] as? String ?? ""
+            let event = run["event"] as? String ?? ""
+            return branch == latestBranch && event == latestEvent
+        }
+    }
+
+    private func aggregateRuns(_ runs: [[String: Any]]) -> CIAggregateStatus {
+        guard !runs.isEmpty else { return .unknown }
+
+        var statuses: [CIAggregateStatus] = []
+        statuses.reserveCapacity(runs.count)
+        for run in runs {
+            statuses.append(statusForRun(run))
+        }
+
+        if statuses.contains(.failing) { return .failing } // any red
+        if statuses.contains(.running) { return .running } // still in progress
+        if statuses.contains(.unknown) { return .unknown }
+        return .passing
+    }
+
+    private func statusForRun(_ run: [String: Any]) -> CIAggregateStatus {
+        let status = (run["status"] as? String ?? "").lowercased()
+        let conclusion = (run["conclusion"] as? String ?? "").lowercased()
+
+        if ["in_progress", "queued", "waiting", "requested", "pending"].contains(status) {
+            return .running
+        }
+
+        if ["failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"].contains(conclusion) {
+            return .failing
+        }
+
+        if ["success", "neutral", "skipped"].contains(conclusion) {
+            return .passing
+        }
+
+        return .unknown
+    }
+
+    // MARK: - Ticker Message Generation
+
+    private func enqueueTickerTransitions(_ transitions: [CITransition]) {
+        guard !transitions.isEmpty else { return }
+        pendingTickerTransitions.append(contentsOf: transitions)
+        guard !isProcessingTickerTransitions else { return }
+
+        isProcessingTickerTransitions = true
+        Task { @MainActor in
+            await processTickerTransitions()
+        }
+    }
+
+    private func processTickerTransitions() async {
+        while !pendingTickerTransitions.isEmpty {
+            let transition = pendingTickerTransitions.removeFirst()
+            let message = await buildTickerMessage(
+                repo: transition.repo,
+                from: transition.oldStatus,
+                to: transition.newStatus,
+                info: transition.info
+            )
+
+            Log.app.info("CIStatusMonitor: ticker → \(message)")
+            IslandWindowManager.shared.showTickerNotification(message)
+
+            let duration = UserDefaults.standard.double(forKey: "ciTickerDuration")
+            let resolvedDuration = duration > 0 ? duration : 6.0
+            let waitNanos = UInt64((resolvedDuration + 0.15) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: waitNanos)
+        }
+
+        isProcessingTickerTransitions = false
+    }
+
+    private func buildTickerMessage(repo: String, from _: CIAggregateStatus, to newStatus: CIAggregateStatus, info: CIRunInfo?) async -> String {
+        let rawRepo = repo.components(separatedBy: "/").last ?? repo
+        let rawBranch = info?.headBranch ?? ""
+        let rawWorkflow = info?.workflowName ?? "CI"
+
+        let repoPart = sanitizePromptField(rawRepo, placeholder: "<repo>")
+        let branchPart = sanitizePromptField(rawBranch, placeholder: "<branch>")
+        let workflowPart = sanitizePromptField(rawWorkflow, placeholder: "<workflow>")
+        let hasSuspiciousInput = repoPart.wasSuspicious || branchPart.wasSuspicious || workflowPart.wasSuspicious
+        let shortRepo = repoPart.value
+
+        // Try Foundation Models first for a polished one-liner.
+        let message: String
+        if FoundationModelsClient.shared.isAvailable && !hasSuspiciousInput {
+            let systemPrompt = """
+            You write ultra-short, punchy one-liner status updates for a developer dashboard ticker.
+            Keep it under 60 characters. Use one emoji. No hashtags. No quotes.
+            """
+            let userPrompt: String
+            switch newStatus {
+            case .passing:
+                userPrompt = "Repo '\(repoPart.value)' branch '\(branchPart.value)' just went all green (all checks passed). Celebrate briefly."
+            case .failing:
+                userPrompt = "Repo '\(repoPart.value)' branch '\(branchPart.value)' has at least one failed check. Report it tersely."
+            default:
+                userPrompt = "The workflow '\(workflowPart.value)' on repo '\(repoPart.value)' branch '\(branchPart.value)' changed status to \(newStatus). Report it tersely."
+            }
+
+            do {
+                let generated = try await FoundationModelsClient.shared.completeText(system: systemPrompt, user: userPrompt)
+                let cleaned = generated.trimmingCharacters(in: .whitespacesAndNewlines)
+                message = cleaned.isEmpty ? fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart.value, branch: branchPart.value) : cleaned
+            } catch {
+                Log.app.info("CIStatusMonitor: Foundation Models unavailable, using fallback — \(error.localizedDescription)")
+                message = fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart.value, branch: branchPart.value)
+            }
+        } else {
+            message = fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart.value, branch: branchPart.value)
+        }
+        return message
+    }
+
+    private struct SanitizedPromptField {
+        let value: String
+        let wasSuspicious: Bool
+    }
+
+    private func sanitizePromptField(_ raw: String, placeholder: String) -> SanitizedPromptField {
+        let cappedRaw = String(raw.prefix(120))
+        let lowerRaw = cappedRaw.lowercased()
+        let suspiciousMarkers = [
+            "ignore previous",
+            "ignore above",
+            "system prompt",
+            "assistant:",
+            "user:",
+            "```",
+            "<script",
+            "</script>",
+            "drop table",
+        ]
+        let containsSuspiciousMarker = suspiciousMarkers.contains { lowerRaw.contains($0) }
+        let containsControlCharacters = cappedRaw.unicodeScalars.contains(where: { scalar in
+            (scalar.value < 32 || scalar.value == 127) && scalar.value != 32
+        })
+        let isSuspicious = containsSuspiciousMarker || containsControlCharacters
+
+        if isSuspicious {
+            return SanitizedPromptField(value: placeholder, wasSuspicious: true)
+        }
+
+        let allowedScalars = cappedRaw.unicodeScalars.filter { scalar in
+            scalar.isASCII && (
+                scalar.properties.isAlphabetic ||
+                scalar.properties.numericType != nil ||
+                scalar.value == 32 ||
+                scalar.value == 45 ||
+                scalar.value == 95 ||
+                scalar.value == 46 ||
+                scalar.value == 47 ||
+                scalar.value == 58
+            )
+        }
+
+        let normalized = String(String.UnicodeScalarView(allowedScalars))
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return SanitizedPromptField(value: normalized.isEmpty ? placeholder : normalized, wasSuspicious: false)
+    }
+
+    private func fallbackMessage(repo: String, to status: CIAggregateStatus, workflow: String, branch: String) -> String {
+        let branchLabel = branch.isEmpty ? "" : " (\(branch))"
+        switch status {
+        case .passing:
+            return "✅ \(repo)\(branchLabel) — all checks passed"
+        case .failing:
+            return "❌ \(repo)\(branchLabel) — check failed"
+        default:
+            return "🔄 \(repo)\(branchLabel) — \(workflow) status changed"
         }
     }
 
     // MARK: - Aggregation
 
-    /// Priority: running > failing > unknown > passing.
+    /// Priority: failing > running > unknown > passing.
     private func aggregate(_ statuses: [String: CIAggregateStatus]) -> CIAggregateStatus {
         guard !statuses.isEmpty else { return .idle }
 
         let values = Array(statuses.values)
 
-        if values.contains(.running) { return .running }
         if values.contains(.failing) { return .failing }
+        if values.contains(.running) { return .running }
         if values.contains(.unknown) { return .unknown }
         return .passing
     }
 
-    private func updatePollingCadence(for aggregateStatus: CIAggregateStatus) {
-        let desired = aggregateStatus == .running ? activePollInterval : steadyPollInterval
+    private func updatePollingCadence() {
+        let hasRunningRepo = repoStatuses.values.contains(.running)
+        let desired = hasRunningRepo ? activePollInterval : steadyPollInterval
         guard currentPollInterval != desired else { return }
         scheduleTimer(interval: desired)
     }

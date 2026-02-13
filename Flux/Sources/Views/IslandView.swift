@@ -57,6 +57,7 @@ struct IslandView: View {
 
     private let closedActiveWidthBoost: CGFloat = 72
     private let closedIndicatorLatchDuration: TimeInterval = 1.6
+    private let tickerMinimumRemainingDuration: TimeInterval = 0.6
 
     private var closedIndicatorSlotWidth: CGFloat {
         showClosedActivityIndicators ? (closedActiveWidthBoost / 2) : 0
@@ -73,9 +74,9 @@ struct IslandView: View {
         isDictatingClosed ? closedDictationWidthBoost : 0
     }
 
-    /// Show the right slot when CI repos are configured OR dictation is active.
+    /// Show the right slot when dictation is active.
     private var showRightSlot: Bool {
-        isDictatingClosed || CIStatusMonitor.shared.aggregateStatus != .idle
+        isDictatingClosed
     }
 
     private var closedRightSlotWidth: CGFloat {
@@ -147,6 +148,11 @@ struct IslandView: View {
     private var isExpanded: Bool { windowManager.isExpanded }
     private var isHovering: Bool { windowManager.isHovering }
     private var hasNotch: Bool { windowManager.hasNotch }
+    private var shouldShowTickerWhenClosed: Bool {
+        windowManager.showingTickerNotification
+            && !isExpanded
+            && windowManager.tickerRemainingDuration > tickerMinimumRemainingDuration
+    }
 
     private var messageCount: Int {
         conversationStore.activeConversation?.messages.count ?? 0
@@ -275,10 +281,25 @@ struct IslandView: View {
                     )
                     .offset(y: notificationBaseOffset + (windowManager.showingClipboardNotification ? 44 : 0))
             }
+
+            // CI ticker bar — extends organically from the island's bottom edge.
+            if shouldShowTickerWhenClosed {
+                TickerBarView(
+                    message: windowManager.tickerNotificationMessage,
+                    barWidth: currentWidth + hoverWidthBoost,
+                    cornerRadius: bottomRadius,
+                    displayDuration: windowManager.tickerDisplayDuration
+                )
+                .id(windowManager.tickerNotificationMessage) // fresh animation per message
+                .transition(.opacity)
+                .offset(y: currentHeight + hoverHeightBoost - 2 + (hasNotch ? 0 : windowManager.topOffset))
+                .allowsHitTesting(false)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingClipboardNotification)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingDictationNotification)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingTickerNotification)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 clearClosedIndicatorsWorkItem?.cancel()
@@ -436,7 +457,7 @@ struct IslandView: View {
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
 
-            // Right slot — CI status dot or app icon during dictation
+            // Right slot — app icon during dictation
             ZStack {
                 if isDictatingClosed, let icon = dictationAppIcon {
                     Image(nsImage: icon)
@@ -444,9 +465,6 @@ struct IslandView: View {
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 20, height: 20)
                         .clipShape(RoundedRectangle(cornerRadius: 5))
-                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
-                } else if CIStatusMonitor.shared.aggregateStatus != .idle {
-                    CIStatusDot(status: CIStatusMonitor.shared.aggregateStatus)
                         .transition(.opacity.combined(with: .scale(scale: 0.6)))
                 }
             }
@@ -459,7 +477,6 @@ struct IslandView: View {
         .animation(.easeInOut(duration: 0.2), value: isHovering)
         .animation(.easeInOut(duration: 0.2), value: showActivity)
         .animation(.easeInOut(duration: 0.25), value: isDictatingClosed)
-        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: CIStatusMonitor.shared.aggregateStatus)
     }
 
     // MARK: - Opened Header
@@ -897,6 +914,7 @@ struct IslandSettingsView: View {
     @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
     @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
+    @AppStorage("ciTickerDuration") private var ciTickerDuration: Double = 6.0
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
@@ -1536,6 +1554,27 @@ struct IslandSettingsView: View {
                 if githubReposExpanded {
                     githubReposInlineSection
                 }
+
+                // CI Ticker Duration
+                HStack(spacing: 8) {
+                    Image(systemName: "textformat.abc")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 20)
+                    Text("Ticker")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.9))
+                    Spacer()
+                    Text("\(Int(ciTickerDuration))s")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(width: 28, alignment: .trailing)
+                    Slider(value: $ciTickerDuration, in: 3...12, step: 1)
+                        .frame(width: 80)
+                        .tint(.white.opacity(0.6))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
 
                 divider
 

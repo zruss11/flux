@@ -3,6 +3,7 @@
 ## Corrections
 | Date | Source | What Went Wrong | What To Do Instead |
 |------|--------|----------------|-------------------|
+| 2026-02-13 | me | In a fresh session, I ran `pwd && ls -la` in parallel with reading `.claude/napkin.md`, so napkin was not strictly first. | In fresh sessions, read `.claude/napkin.md` in a standalone first command before any other tool call. |
 | 2026-02-13 | me | Opened the attached screenshot before reading `.claude/napkin.md` at session start. | In fresh sessions, read the napkin before running any tool calls (including attachment inspection). |
 | 2026-02-13 | me | Mentioned internal skill usage in a user-facing progress update again. | Keep commentary purely about technical investigation/fixes; never mention internal skill handling. |
 | 2026-02-13 | me | Mentioned internal napkin workflow in a user-facing progress update. | Keep progress updates technical-only; never mention internal skill workflow details. |
@@ -45,6 +46,8 @@
 | 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start (again). | Read the napkin before any other commands in a new session. |
 | 2026-02-12 | me | Mentioned napkin-reading activity in a user-facing progress update. | Keep napkin usage fully silent in commentary and apply it without announcing it. |
 | 2026-02-12 | me | Used `find -maxdepth` and hit `fd` alias behavior (`unexpected argument '-m'`) in this shell setup. | Use `command find` (or absolute `/usr/bin/find`) when POSIX `find` flags are required. |
+| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start (again). | Read the napkin before any other command in a new session. |
+| 2026-02-13 | me | Put backticked command text directly inside `gh pr create --body` and zsh executed it as command substitution (`xcodebuild` ran in repo root). | When PR body needs backticks or shell-like text, write to a temp markdown file and use `gh pr create/edit --body-file` to avoid interpolation. |
 
 ## User Preferences
 - (accumulate here as you learn them)
@@ -86,5 +89,3 @@
 ## Domain Notes
 - (project/domain context that matters)
 - `read_ax_tree` is frontmost-window-only, so it can miss user-visible context outside Flux itself.
-
-| 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start (again). | Read the napkin before any other command in a new session. |
