@@ -38,6 +38,9 @@ struct ChatView: View {
     @State private var dollarTriggerActive = false
     @State private var selectedSkillDirNames: Set<String> = []
     @State private var skillSearchQuery = ""
+    @State private var showSlashCommands = false
+    @State private var slashTriggerActive = false
+    @State private var slashSearchQuery = ""
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
     @State private var showSpeechPermissionAlert = false
@@ -149,7 +152,7 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
 
-                    TextField("Message Flux...  $ for skills", text: $inputText)
+                    TextField("Message Flux…  $ skills  / commands", text: $inputText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
                         .foregroundStyle(.white)
@@ -158,6 +161,12 @@ struct ChatView: View {
                             sendMessage()
                         }
                         .onKeyPress(.escape) {
+                            if showSlashCommands {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                    showSlashCommands = false
+                                }
+                                return .handled
+                            }
                             if showSkills {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
                                     showSkills = false
@@ -203,6 +212,24 @@ struct ChatView: View {
                     )
             )
             .padding(.horizontal, 10)
+
+            // Slash commands list appears below the input
+            if showSlashCommands {
+                SlashCommandsView(
+                    isPresented: $showSlashCommands,
+                    searchQuery: $slashSearchQuery,
+                    workspacePath: conversationStore.workspacePath
+                ) { cmd in
+                    insertSlashCommand(cmd)
+                    isInputFocused = true
+                }
+                .transition(
+                    .asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .top)),
+                        removal: .opacity
+                    )
+                )
+            }
 
             // Skills list appears below the input, expanding the window downward
             if showSkills {
@@ -376,14 +403,48 @@ struct ChatView: View {
                     .preference(key: ChatContentHeightKey.self, value: geo.size.height)
             }
         )
-        .preference(key: SkillsVisibleKey.self, value: showSkills)
+        .preference(key: SkillsVisibleKey.self, value: showSkills || showSlashCommands)
         .preference(key: HasPendingAttachmentsKey.self, value: !pendingImageAttachments.isEmpty)
         .onChange(of: inputText) { oldValue, newValue in
+            // --- Slash command trigger: `/` at the start of input ---
+            if newValue.hasPrefix("/") && !oldValue.hasPrefix("/") {
+                slashTriggerActive = true
+                if !showSlashCommands {
+                    // Dismiss skills if open
+                    if showSkills {
+                        showSkills = false
+                        dollarTriggerActive = false
+                    }
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+                        showSlashCommands = true
+                    }
+                }
+                slashSearchQuery = ""
+            }
+
+            // Update slash search query
+            if showSlashCommands, slashTriggerActive, newValue.hasPrefix("/") {
+                slashSearchQuery = String(newValue.dropFirst()).trimmingCharacters(in: .whitespaces)
+            }
+
+            // Dismiss slash commands if `/` prefix was removed
+            if showSlashCommands, slashTriggerActive, !newValue.hasPrefix("/") {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    showSlashCommands = false
+                }
+            }
+
+            // --- Dollar skill trigger ---
             // Detect a freshly typed `$` to open skills (or re-activate search if already open)
             if newValue.count - oldValue.count == 1,
                newValue.filter({ $0 == "$" }).count > oldValue.filter({ $0 == "$" }).count {
                 dollarTriggerActive = true
                 if !showSkills {
+                    // Dismiss slash commands if open
+                    if showSlashCommands {
+                        showSlashCommands = false
+                        slashTriggerActive = false
+                    }
                     withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
                         showSkills = true
                     }
@@ -410,6 +471,12 @@ struct ChatView: View {
                 skillSearchQuery = ""
             }
         }
+        .onChange(of: showSlashCommands) { _, presented in
+            if !presented {
+                slashTriggerActive = false
+                slashSearchQuery = ""
+            }
+        }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isInputFocused = true
@@ -433,6 +500,10 @@ struct ChatView: View {
             if showSkills {
                 showSkills = false
                 dollarTriggerActive = false
+            }
+            if showSlashCommands {
+                showSlashCommands = false
+                slashTriggerActive = false
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .islandImageFilesSelected)) { notification in
@@ -499,16 +570,25 @@ struct ChatView: View {
 
         // Slash commands
         let lowered = text.lowercased()
-        if pendingImageAttachments.isEmpty && (lowered == "/new" || lowered == "/clear") {
-            inputText = ""
-            selectedSkillDirNames.removeAll()
-            pendingImageAttachments.removeAll()
-            if showSkills {
-                showSkills = false
-                dollarTriggerActive = false
+        if pendingImageAttachments.isEmpty && lowered.hasPrefix("/") {
+            let cmdName = String(lowered.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Local-only commands
+            if cmdName == "new" || cmdName == "clear" {
+                inputText = ""
+                selectedSkillDirNames.removeAll()
+                pendingImageAttachments.removeAll()
+                if showSkills {
+                    showSkills = false
+                    dollarTriggerActive = false
+                }
+                if showSlashCommands {
+                    showSlashCommands = false
+                    slashTriggerActive = false
+                }
+                conversationStore.startNewConversation()
+                return
             }
-            conversationStore.startNewConversation()
-            return
         }
 
         if showSkills {
@@ -516,6 +596,12 @@ struct ChatView: View {
                 showSkills = false
             }
             dollarTriggerActive = false
+        }
+        if showSlashCommands {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                showSlashCommands = false
+            }
+            slashTriggerActive = false
         }
 
         var outboundText = transformSelectedSkillTokensForOutbound(text)
@@ -574,6 +660,15 @@ struct ChatView: View {
         dollarTriggerActive = false
         skillSearchQuery = ""
         // Intentionally keep `showSkills` open so users can click multiple skills.
+    }
+
+    private func insertSlashCommand(_ cmd: SlashCommand) {
+        inputText = "/\(cmd.name) "
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+            showSlashCommands = false
+        }
+        slashTriggerActive = false
+        slashSearchQuery = ""
     }
 
     private func transformSelectedSkillTokensForOutbound(_ text: String) -> String {
