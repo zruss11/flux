@@ -53,7 +53,13 @@ interface ActiveAppUpdateMessage {
   appInstruction?: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage;
+interface ForkConversationMessage {
+  type: 'fork_conversation';
+  sourceConversationId: string;
+  newConversationId: string;
+}
+
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | ForkConversationMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -97,13 +103,20 @@ interface RunStatusMessage {
   isWorking: boolean;
 }
 
+interface SessionInfoMessage {
+  type: 'session_info';
+  conversationId: string;
+  sessionId: string;
+}
+
 type OutgoingMessage =
   | AssistantMessage
   | ToolRequestMessage
   | ToolUseStartMessage
   | ToolUseCompleteMessage
   | StreamChunkMessage
-  | RunStatusMessage;
+  | RunStatusMessage
+  | SessionInfoMessage;
 
 interface SDKUserMessage {
   type: 'user';
@@ -216,6 +229,8 @@ interface ConversationSession {
   toolUseByIndex: Map<number, { id: string; name: string; inputChunks: string[] }>;
   /** Non-MCP tool calls started but not yet completed (toolUseId → toolName) */
   pendingToolCompletions: Map<string, string>;
+  /** When true, the next `query()` call will pass `forkSession: true` to create a new session branch. */
+  forkOnNextRun?: boolean;
 }
 
 class MessageStream {
@@ -335,6 +350,9 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
     case 'active_app_update':
       handleActiveAppUpdate(message);
       break;
+    case 'fork_conversation':
+      handleForkConversation(message as ForkConversationMessage);
+      break;
     default:
       log.warn('Unknown message type:', (message as Record<string, unknown>).type);
   }
@@ -357,6 +375,38 @@ function handleMcpAuth(message: McpAuthMessage): void {
   } else {
     mcpAuthTokens.set(message.serverId, token);
   }
+}
+
+function handleForkConversation(message: ForkConversationMessage): void {
+  const { sourceConversationId, newConversationId } = message;
+  const sourceSession = sessions.get(sourceConversationId);
+
+  if (!sourceSession?.sessionId) {
+    log.warn(`Cannot fork: no SDK session found for conversation ${sourceConversationId}`);
+    sendToClient(activeClient, {
+      type: 'assistant_message',
+      conversationId: newConversationId,
+      content: 'Unable to fork: the source conversation has no active session.',
+    });
+    return;
+  }
+
+  log.info(`Forking session ${sourceSession.sessionId} from ${sourceConversationId} → ${newConversationId}`);
+
+  const forkedSession: ConversationSession = {
+    conversationId: newConversationId,
+    stream: null,
+    sessionId: sourceSession.sessionId,
+    lastAssistantUuid: sourceSession.lastAssistantUuid,
+    isRunning: false,
+    pendingMessages: [],
+    toolUseByIndex: new Map(),
+    pendingToolCompletions: new Map(),
+    forkOnNextRun: true,
+  };
+
+  sessions.set(newConversationId, forkedSession);
+  touchIdle(forkedSession);
 }
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
@@ -471,6 +521,8 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
   sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: true });
 
   const runId = crypto.randomUUID();
+  const shouldFork = session.forkOnNextRun === true;
+  session.forkOnNextRun = false;
 
   try {
     for await (const message of query({
@@ -479,6 +531,7 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
         resume: session.sessionId,
         resumeSessionAt: session.lastAssistantUuid,
         includePartialMessages: true,
+        ...(shouldFork ? { forkSession: true } : {}),
       }),
     })) {
       handleAgentMessage(session, message as any);
@@ -578,6 +631,13 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
   if (message.type === 'system' && message.subtype === 'init') {
     session.sessionId = message.session_id;
+    if (message.session_id) {
+      sendToClient(activeClient, {
+        type: 'session_info',
+        conversationId: session.conversationId,
+        sessionId: message.session_id,
+      });
+    }
   }
 
   if (message.type === 'system' && message.subtype === 'task_notification') {

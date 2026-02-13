@@ -50,6 +50,7 @@ struct ChatView: View {
     @State private var branchCheckoutErrorMessage: String?
     @State private var imageImportErrorMessage: String?
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
+    @State private var forkBannerVisible = false
 
     private let maxAttachmentBytes = 10 * 1024 * 1024
 
@@ -84,9 +85,17 @@ struct ChatView: View {
                                 Group {
                                     switch segment {
                                     case .userMessage(let message):
-                                        MessageBubble(message: message)
+                                        if message.role == .system {
+                                            ForkIndicatorView(content: message.content)
+                                        } else {
+                                            MessageBubble(message: message)
+                                        }
                                     case .assistantText(let message):
-                                        MessageBubble(message: message)
+                                        if message.role == .system {
+                                            ForkIndicatorView(content: message.content)
+                                        } else {
+                                            MessageBubble(message: message)
+                                        }
                                     case .toolCallGroup(_, let calls):
                                         ToolCallGroupView(calls: calls)
                                     }
@@ -97,6 +106,16 @@ struct ChatView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                }
+                .overlay(alignment: .top) {
+                    if forkBannerVisible {
+                        ForkSuccessBanner()
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .opacity
+                            ))
+                            .padding(.top, 8)
+                    }
                 }
                 .onChange(of: conversationStore.scrollRevision) { _, _ in
                     guard conversationStore.lastScrollConversationId == conversationStore.activeConversationId,
@@ -350,6 +369,36 @@ struct ChatView: View {
                     )
                 }
                 .buttonStyle(.plain)
+
+                // Fork conversation pill
+                if conversationStore.activeConversationId != nil,
+                   !(conversationStore.activeConversation?.messages.isEmpty ?? true) {
+                    Button {
+                        forkCurrentConversation()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.6))
+                            Text("Fork")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(1)
+                        }
+                        .fixedSize()
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.06))
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 SkillsPillButton(isPresented: $showSkills)
 
@@ -633,6 +682,35 @@ struct ChatView: View {
         pendingImageAttachments.removeAll()
     }
 
+    private func forkCurrentConversation() {
+        guard let sourceId = conversationStore.activeConversationId else { return }
+        let sourceTitle = conversationStore.summaries.first(where: { $0.id == sourceId })?.title ?? "Chat"
+        guard let newId = conversationStore.forkConversation(id: sourceId) else { return }
+
+        // Add a system message marking the fork point.
+        conversationStore.addMessage(
+            to: newId,
+            role: .system,
+            content: "⑂ Forked from \"\(sourceTitle)\""
+        )
+
+        agentBridge.sendForkConversation(
+            sourceConversationId: sourceId.uuidString,
+            newConversationId: newId.uuidString
+        )
+
+        // Show the success banner with animation.
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+            forkBannerVisible = true
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation(.easeOut(duration: 0.3)) {
+                forkBannerVisible = false
+            }
+        }
+    }
+
     private func insertSkillToken(_ directoryName: String) {
         let token = "$\(directoryName) "
 
@@ -833,5 +911,61 @@ private extension MessageImageAttachment {
 
     var chatPayload: ChatImagePayload {
         ChatImagePayload(fileName: fileName, mediaType: mediaType, data: base64Data)
+    }
+}
+
+// MARK: - Fork UI Components
+
+/// Animated toast banner that slides in from the top when a conversation is forked.
+private struct ForkSuccessBanner: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.green)
+            Text("Conversation forked successfully")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.12))
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.green.opacity(0.3), lineWidth: 1)
+                )
+        )
+        .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+    }
+}
+
+/// Inline indicator shown in the conversation history at the fork point.
+private struct ForkIndicatorView: View {
+    let content: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 1)
+
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                Text(content)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+            }
+            .fixedSize()
+
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 6)
     }
 }
