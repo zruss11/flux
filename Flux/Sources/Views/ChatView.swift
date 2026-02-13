@@ -83,6 +83,30 @@ struct ChatView: View {
                                         MessageBubble(message: message)
                                     case .toolCallGroup(_, let calls):
                                         ToolCallGroupView(calls: calls)
+                                    case .permissionRequest(let req):
+                                        PermissionApprovalCard(request: req) {
+                                            conversationStore.resolvePermissionRequest(
+                                                in: conversationStore.activeConversationId!,
+                                                requestId: req.id,
+                                                approved: true
+                                            )
+                                            agentBridge.sendPermissionResponse(requestId: req.id, behavior: "allow")
+                                        } onDeny: {
+                                            conversationStore.resolvePermissionRequest(
+                                                in: conversationStore.activeConversationId!,
+                                                requestId: req.id,
+                                                approved: false
+                                            )
+                                            agentBridge.sendPermissionResponse(requestId: req.id, behavior: "deny", message: "User denied this action")
+                                        }
+                                    case .askUserQuestion(let q):
+                                        AskUserQuestionCard(question: q) { answers in
+                                            conversationStore.resolveAskUserQuestion(
+                                                in: conversationStore.activeConversationId!,
+                                                requestId: q.id
+                                            )
+                                            agentBridge.sendPermissionResponse(requestId: q.id, behavior: "allow")
+                                        }
                                     }
                                 }
                                 .id(segment.id)

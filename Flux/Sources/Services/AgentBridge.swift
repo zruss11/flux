@@ -18,6 +18,8 @@ final class AgentBridge: @unchecked Sendable {
     var onToolUseStart: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, inputSummary
     var onToolUseComplete: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, resultPreview
     var onRunStatus: ((String, Bool) -> Void)?  // conversationId, isWorking
+    var onPermissionRequest: ((String, String, String, [String: String]) -> Void)?  // conversationId, requestId, toolName, input
+    var onAskUserQuestion: ((String, String, [[String: Any]]) -> Void)?  // conversationId, requestId, questions
     private var activeRunConversationIds: Set<String> = []
     private var activeToolUseIds: Set<String> = []
     private var activeStreamConversationIds: Set<String> = []
@@ -144,6 +146,18 @@ final class AgentBridge: @unchecked Sendable {
             "toolResult": result
         ]
         send(message)
+    }
+
+    func sendPermissionResponse(requestId: String, behavior: String, message: String? = nil) {
+        var msg: [String: Any] = [
+            "type": "permission_response",
+            "requestId": requestId,
+            "behavior": behavior
+        ]
+        if let message {
+            msg["message"] = message
+        }
+        send(msg)
     }
 
     func sendApiKey(_ key: String) {
@@ -315,6 +329,32 @@ final class AgentBridge: @unchecked Sendable {
                     self.onRunStatus?(conversationId, isWorking)
                 }
                 setRunStatus(for: conversationId, isWorking: isWorking)
+            }
+
+        case "permission_request":
+            if let requestId = json["requestId"] as? String,
+               let toolName = json["toolName"] as? String {
+                let rawInput = json["input"] as? [String: Any] ?? [:]
+                // Flatten input to string values for display
+                var displayInput: [String: String] = [:]
+                for (key, value) in rawInput {
+                    if let s = value as? String {
+                        displayInput[key] = s
+                    } else {
+                        displayInput[key] = "\(value)"
+                    }
+                }
+                Task { @MainActor in
+                    self.onPermissionRequest?(conversationId, requestId, toolName, displayInput)
+                }
+            }
+
+        case "ask_user_question":
+            if let requestId = json["requestId"] as? String,
+               let questions = json["questions"] as? [[String: Any]] {
+                Task { @MainActor in
+                    self.onAskUserQuestion?(conversationId, requestId, questions)
+                }
             }
 
         default:
