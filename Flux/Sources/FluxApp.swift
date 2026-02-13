@@ -383,6 +383,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.conversationStore.setConversationRunning(uuid, isRunning: isWorking)
             }
         }
+
+        agentBridge.onSessionInfo = { conversationId, sessionId in
+            guard let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                Log.bridge.debug("Sidecar session initialized for conversation \(uuid, privacy: .public): sessionId=\(sessionId, privacy: .public)")
+            }
+        }
     }
 
     private func setupWatcherCallbacks() {

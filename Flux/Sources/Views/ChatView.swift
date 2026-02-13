@@ -56,6 +56,7 @@ struct ChatView: View {
     @State private var imageImportErrorMessage: String?
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
     @State private var forkBannerVisible = false
+    @State private var forkBannerDismissTask: Task<Void, Never>?
     @State private var pendingForkContexts: [UUID: ForkContext] = [:]
 
     private let maxAttachmentBytes = 10 * 1024 * 1024
@@ -91,11 +92,7 @@ struct ChatView: View {
                                 Group {
                                     switch segment {
                                     case .userMessage(let message):
-                                        if message.role == .system {
-                                            ForkIndicatorView(content: message.content)
-                                        } else {
-                                            MessageBubble(message: message)
-                                        }
+                                        MessageBubble(message: message)
                                     case .assistantText(let message):
                                         if message.role == .system {
                                             ForkIndicatorView(content: message.content)
@@ -383,7 +380,7 @@ struct ChatView: View {
                         forkCurrentConversation()
                     } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: "arrow.triangle.branch")
+                            Image(systemName: "rectangle.on.rectangle")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.6))
                             Text("Fork")
@@ -537,15 +534,16 @@ struct ChatView: View {
                 isInputFocused = true
             }
             GitBranchMonitor.shared.monitor(workspacePath: conversationStore.workspacePath)
-            agentBridge.onForkConversationResult = { [weak self] conversationId, success, _ in
-                guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            agentBridge.onForkConversationResult = { conversationId, success, _ in
+                guard let uuid = UUID(uuidString: conversationId) else { return }
                 Task { @MainActor in
-                    self.handleForkConversationResult(conversationId: uuid, success: success)
+                    handleForkConversationResult(conversationId: uuid, success: success)
                 }
             }
         }
         .onDisappear {
             agentBridge.onForkConversationResult = nil
+            forkBannerDismissTask?.cancel()
         }
         .onChange(of: conversationStore.workspacePath) { _, newPath in
             GitBranchMonitor.shared.monitor(workspacePath: newPath)
@@ -699,6 +697,8 @@ struct ChatView: View {
 
     private func forkCurrentConversation() {
         guard let sourceId = conversationStore.activeConversationId else { return }
+        forkBannerDismissTask?.cancel()
+        forkBannerVisible = false
         let sourceTitle = conversationStore.summaries.first(where: { $0.id == sourceId })?.title ?? "Chat"
         guard let newId = conversationStore.forkConversation(id: sourceId) else { return }
         pendingForkContexts[newId] = ForkContext(
@@ -716,6 +716,8 @@ struct ChatView: View {
         guard let context = pendingForkContexts.removeValue(forKey: conversationId) else { return }
 
         guard success else {
+            forkBannerDismissTask?.cancel()
+            forkBannerVisible = false
             conversationStore.deleteConversation(id: conversationId)
             if conversationStore.activeConversationId == conversationId {
                 conversationStore.openConversation(id: context.sourceConversationId)
@@ -726,14 +728,16 @@ struct ChatView: View {
         conversationStore.addMessage(
             to: conversationId,
             role: .system,
-            content: "⑂ Forked from \"\(context.sourceTitle)\""
+            content: "Forked from \"\(context.sourceTitle)\""
         )
 
+        forkBannerDismissTask?.cancel()
         withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
             forkBannerVisible = true
         }
-        Task {
+        forkBannerDismissTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.3)) {
                 forkBannerVisible = false
             }
