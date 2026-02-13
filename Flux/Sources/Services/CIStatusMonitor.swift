@@ -16,8 +16,8 @@ enum CIAggregateStatus: Equatable, Sendable {
 }
 
 /// Lightweight monitor that polls `gh run list` to maintain a live aggregate
-/// CI status for the notch indicator. Runs on a 60-second cadence, independent
-/// of the 5-minute `WatcherEngine` alert cycle.
+/// CI status for the notch indicator. Uses adaptive polling independent of the
+/// 5-minute `WatcherEngine` alert cycle.
 @MainActor
 @Observable
 final class CIStatusMonitor {
@@ -29,7 +29,10 @@ final class CIStatusMonitor {
     private(set) var repoStatuses: [String: CIAggregateStatus] = [:]
 
     private var timer: Timer?
-    private let pollInterval: TimeInterval = 60
+    private var isRefreshing = false
+    private var currentPollInterval: TimeInterval?
+    private let steadyPollInterval: TimeInterval = 30
+    private let activePollInterval: TimeInterval = 10
 
     private init() {}
 
@@ -40,19 +43,14 @@ final class CIStatusMonitor {
         stop()
         // Immediate first check.
         Task { await refresh() }
-
-        timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.refresh()
-            }
-        }
+        scheduleTimer(interval: steadyPollInterval)
     }
 
     /// Stop the polling timer.
     func stop() {
         timer?.invalidate()
         timer = nil
+        currentPollInterval = nil
     }
 
     /// Force a single refresh (e.g. after adding a new repo).
@@ -63,10 +61,15 @@ final class CIStatusMonitor {
     // MARK: - Core Refresh
 
     private func refresh() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
         let repos = watchedRepos()
         guard !repos.isEmpty else {
             aggregateStatus = .idle
             repoStatuses = [:]
+            updatePollingCadence(for: .idle)
             return
         }
 
@@ -87,6 +90,7 @@ final class CIStatusMonitor {
 
         repoStatuses = statuses
         aggregateStatus = aggregate(statuses)
+        updatePollingCadence(for: aggregateStatus)
     }
 
     // MARK: - Per-Repo Check
@@ -119,7 +123,7 @@ final class CIStatusMonitor {
             let status = latest["status"] as? String ?? ""
             let conclusion = latest["conclusion"] as? String ?? ""
 
-            if status == "in_progress" || status == "queued" || status == "waiting" {
+            if status == "in_progress" || status == "queued" || status == "waiting" || status == "requested" || status == "pending" {
                 return .running
             }
 
@@ -149,6 +153,28 @@ final class CIStatusMonitor {
         if values.contains(.failing) { return .failing }
         if values.contains(.unknown) { return .unknown }
         return .passing
+    }
+
+    private func updatePollingCadence(for aggregateStatus: CIAggregateStatus) {
+        let desired = aggregateStatus == .running ? activePollInterval : steadyPollInterval
+        guard currentPollInterval != desired else { return }
+        scheduleTimer(interval: desired)
+    }
+
+    private func scheduleTimer(interval: TimeInterval) {
+        timer?.invalidate()
+        currentPollInterval = interval
+
+        let nextTimer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.refresh()
+            }
+        }
+        timer = nextTimer
+
+        // Keep polling during UI tracking/menu run loop modes.
+        RunLoop.main.add(nextTimer, forMode: .common)
     }
 
     // MARK: - Helpers

@@ -683,6 +683,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let joined = repos.joined(separator: ",")
             UserDefaults.standard.set(joined, forKey: key)
             WatcherService.shared.updateGitHubRepos(joined)
+            CIStatusMonitor.shared.forceRefresh()
             return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Added '\(repo)'."))
 
         case "remove":
@@ -696,6 +697,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let joined = repos.joined(separator: ",")
             UserDefaults.standard.set(joined, forKey: key)
             WatcherService.shared.updateGitHubRepos(joined)
+            CIStatusMonitor.shared.forceRefresh()
             return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Removed '\(repo)'."))
 
         default: // "list"

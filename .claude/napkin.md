@@ -3,6 +3,9 @@
 ## Corrections
 | Date | Source | What Went Wrong | What To Do Instead |
 |------|--------|----------------|-------------------|
+| 2026-02-13 | me | Opened the attached screenshot before reading `.claude/napkin.md` at session start. | In fresh sessions, read the napkin before running any tool calls (including attachment inspection). |
+| 2026-02-13 | me | Mentioned internal skill usage in a user-facing progress update again. | Keep commentary purely about technical investigation/fixes; never mention internal skill handling. |
+| 2026-02-13 | me | Mentioned internal napkin workflow in a user-facing progress update. | Keep progress updates technical-only; never mention internal skill workflow details. |
 | 2026-02-12 | me | Ran `ls` before reading `.claude/napkin.md` at session start. | Read the napkin before any other command in a new session. |
 | 2026-02-12 | me | Ran `ls .claude` before reading `.claude/napkin.md` at session start (again). | Read the napkin before any other command in a new session. |
 | 2026-02-12 | me | Ran `git status` before reading `.claude/napkin.md` at session start. | Read the napkin first in each fresh session before any other command. |

@@ -2766,6 +2766,7 @@ struct IslandSettingsView: View {
 
     private func syncGithubReposToWatcher() {
         WatcherService.shared.updateGitHubRepos(githubWatchedRepos)
+        CIStatusMonitor.shared.forceRefresh()
     }
 
     private var divider: some View {
