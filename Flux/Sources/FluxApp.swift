@@ -69,7 +69,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true  // Allow dragging by background
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = .black
         window.title = "Welcome to Flux"
         window.contentView = NSHostingView(rootView: onboardingView)
         window.center()

@@ -19,18 +19,6 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Custom Title Bar
-            ZStack {
-                HStack {
-                    // Placeholder for traffic lights (they overlay automatically with fullSizeContentView, but we add spacing)
-                    Spacer()
-                }
-                Text("Flux")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.4))
-            }
-            .frame(height: 38)
-            .background(Color.black.opacity(0.01)) // Hit test for dragging if needed, but window.isMovableByWindowBackground handles it
 
             VStack(spacing: 32) {
                 VStack(spacing: 12) {
@@ -138,6 +126,7 @@ struct OnboardingView: View {
             }
             .padding(.horizontal, 40)
             .padding(.bottom, 40)
+            .padding(.top, 40)
             .frame(width: 500)
             .background {
                 ZStack {
