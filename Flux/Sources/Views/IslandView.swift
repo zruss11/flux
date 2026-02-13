@@ -919,6 +919,8 @@ struct IslandSettingsView: View {
     @AppStorage("anthropicApiKey") private var apiKey = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("githubWatchedRepos") private var githubWatchedRepos = ""
+    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.apple.rawValue
+    @AppStorage(SpeechInputSettings.deepgramApiKeyStorageKey) private var deepgramApiKey = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
     @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
@@ -966,6 +968,7 @@ struct IslandSettingsView: View {
     private enum EditingField: Hashable {
         case apiKey
         case linearToken
+        case deepgramApiKey
     }
 
     private enum InlineAutomationEditorMode: Equatable {
@@ -998,6 +1001,14 @@ struct IslandSettingsView: View {
             return development.path
         }
         return home.path
+    }
+
+    private var speechInputProvider: SpeechInputProvider {
+        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .apple
+    }
+
+    private var deepgramApiKeyConfigured: Bool {
+        !deepgramApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -1067,6 +1078,81 @@ struct IslandSettingsView: View {
                         )
                     }
                 )
+
+                divider
+
+                settingsRow(
+                    icon: "waveform",
+                    label: "Speech input",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 8) {
+                                Menu {
+                                    ForEach(SpeechInputProvider.allCases) { provider in
+                                        Button(provider.displayName) {
+                                            speechInputProviderRaw = provider.rawValue
+                                        }
+                                    }
+                                } label: {
+                                    Text(speechInputProvider.displayName)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(
+                                            speechInputProvider == .deepgram && !deepgramApiKeyConfigured
+                                                ? .orange.opacity(0.9)
+                                                : .white.opacity(0.75)
+                                        )
+                                }
+                                .menuStyle(.borderlessButton)
+
+                                if speechInputProvider == .deepgram && !deepgramApiKeyConfigured {
+                                    Image(systemName: "exclamationmark.triangle")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(.orange)
+                                        .help("Deepgram selected but API key is missing")
+                                }
+
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.35))
+                                    .help("Choose Apple on-device transcription or Deepgram live streaming.")
+                            }
+                        )
+                    }
+                )
+
+                if editingField == .deepgramApiKey {
+                    editableRow(icon: "key.fill", label: "Deepgram API Key") {
+                        SecureField("Insert Deepgram API key", text: $deepgramApiKey)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onSubmit { editingField = nil }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        editingField = nil
+                    }
+                } else {
+                    settingsRow(
+                        icon: "key.fill",
+                        label: "Deepgram API Key",
+                        trailing: {
+                            AnyView(
+                                Text(deepgramApiKey.isEmpty ? "Not set" : "••••\(deepgramApiKey.suffix(4))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(deepgramApiKey.isEmpty ? .red.opacity(0.8) : .green.opacity(0.8))
+                            )
+                        }
+                    )
+                    .onTapGesture {
+                        editingField = .deepgramApiKey
+                    }
+                }
 
                 divider
 

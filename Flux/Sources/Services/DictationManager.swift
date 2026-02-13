@@ -203,12 +203,18 @@ final class DictationManager {
                 }
             }
 
+            let provider = UserDefaults.standard.speechInputProvider
+            let mode: VoiceInputMode = provider == .deepgram ? .live : .batchOnDevice
+            var startFailureReason: String?
+
             let started = await input.startRecording(
-                mode: .batchOnDevice,
+                mode: mode,
+                provider: provider,
                 onComplete: { [weak self] transcript in
                     self?.handleTranscript(transcript, attemptId: attemptId)
                 },
                 onFailure: { [weak self] reason in
+                    startFailureReason = reason
                     self?.handleRecordingFailure(reason, attemptId: attemptId, recordHistory: true)
                 }
             )
@@ -222,11 +228,13 @@ final class DictationManager {
             }
 
             guard started else {
-                self.handleRecordingFailure(
-                    "Unable to start dictation recording.",
-                    attemptId: attemptId,
-                    recordHistory: true
-                )
+                if startFailureReason == nil {
+                    self.handleRecordingFailure(
+                        "Unable to start dictation recording.",
+                        attemptId: attemptId,
+                        recordHistory: true
+                    )
+                }
                 return
             }
 

@@ -59,11 +59,14 @@ final class VoiceInput {
     private var onFailure: ((String) -> Void)?
     private var tapInstalled = false
     private var recordingMode: VoiceInputMode = .live
+    private var currentSpeechProvider: SpeechInputProvider = .apple
 
     private let pcmAccumulator = PCMAccumulator()
 
     @ObservationIgnored
     private var liveSessionAny: Any?
+
+    private var deepgramSession: DeepgramStreamingSession?
 
     // MARK: - Target format: 16kHz mono Int16 PCM
 
@@ -122,6 +125,7 @@ final class VoiceInput {
     @discardableResult
     func startRecording(
         mode: VoiceInputMode,
+        provider: SpeechInputProvider = .apple,
         onComplete: @escaping (String) -> Void,
         onFailure: ((String) -> Void)? = nil
     ) async -> Bool {
@@ -137,26 +141,37 @@ final class VoiceInput {
             return false
         }
 
-        guard #available(macOS 26.0, *) else {
-            Log.voice.error("On-device speech transcription requires macOS 26+")
-            onFailure?("On-device transcription requires macOS 26 or newer.")
-            return false
+        if provider.requiresSpeechRecognitionPermission {
+            guard #available(macOS 26.0, *) else {
+                Log.voice.error("On-device speech transcription requires macOS 26+")
+                onFailure?("On-device transcription requires macOS 26 or newer.")
+                return false
+            }
+
+            let speechPermitted = await ensureSpeechRecognitionPermission()
+            guard speechPermitted else {
+                Log.voice.warning("Speech recognition permission not granted")
+                onFailure?("Speech recognition permission not granted.")
+                return false
+            }
         }
 
-        let speechPermitted = await ensureSpeechRecognitionPermission()
-        guard speechPermitted else {
-            Log.voice.warning("Speech recognition permission not granted")
-            onFailure?("Speech recognition permission not granted.")
-            return false
+        if provider == .deepgram {
+            let deepgramKey = UserDefaults.standard.deepgramApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !deepgramKey.isEmpty else {
+                onFailure?("Deepgram API key not set.")
+                return false
+            }
         }
 
         self.recordingMode = mode
+        self.currentSpeechProvider = provider
         self.onComplete = onComplete
         self.onFailure = onFailure
 
         switch mode {
         case .live:
-            return await beginLiveRecording()
+            return await beginLiveRecording(provider: provider)
         case .batchOnDevice:
             return beginBatchRecording()
         }
@@ -167,6 +182,12 @@ final class VoiceInput {
 
         switch recordingMode {
         case .live:
+            if currentSpeechProvider == .deepgram,
+               let session = deepgramSession {
+                stopDeepgramRecording(session: session)
+                return
+            }
+
             if #available(macOS 26.0, *),
                let session = liveSessionAny as? LiveSpeechSession {
                 stopLiveRecording(session: session)
@@ -185,8 +206,16 @@ final class VoiceInput {
 
     // MARK: - Private
 
+    private func beginLiveRecording(provider: SpeechInputProvider) async -> Bool {
+        if provider == .deepgram {
+            return await beginLiveDeepgramRecording()
+        }
+
+        return await beginAppleLiveRecording()
+    }
+
     @available(macOS 26.0, *)
-    private func beginLiveRecording() async -> Bool {
+    private func beginAppleLiveRecording() async -> Bool {
         let failureCallback = onFailure
         let engine = AVAudioEngine()
         self.audioEngine = engine
@@ -244,6 +273,98 @@ final class VoiceInput {
             }
             cleanUp()
             failureCallback?("Unable to start live transcription.")
+            return false
+        }
+    }
+
+    @discardableResult
+    private func beginLiveDeepgramRecording() async -> Bool {
+        let failureCallback = onFailure
+        let engine = AVAudioEngine()
+        self.audioEngine = engine
+
+        let inputNode = engine.inputNode
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            Log.voice.error("No audio input available")
+            cleanUp()
+            failureCallback?("No audio input device available.")
+            return false
+        }
+
+        let deepgramApiKey = UserDefaults.standard.deepgramApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !deepgramApiKey.isEmpty else {
+            failureCallback?("Deepgram API key not set.")
+            return false
+        }
+
+        let targetFormat = VoiceInput.targetFormat
+        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+            Log.voice.error("Failed to create Deepgram audio converter")
+            cleanUp()
+            failureCallback?("Unable to prepare Deepgram live audio pipeline.")
+            return false
+        }
+
+        pcmAccumulator.reset()
+
+        let session = DeepgramStreamingSession(
+            apiKey: deepgramApiKey,
+            onTranscriptUpdate: { [weak self] text in
+                Task { @MainActor in
+                    self?.transcript = text
+                }
+            },
+            onFailure: { [weak self] message in
+                Task { @MainActor in
+                    self?.onFailure?(message)
+                }
+            }
+        )
+
+        guard session.start() else {
+            failureCallback?("Failed to initialize Deepgram live connection.")
+            cleanUp()
+            return false
+        }
+
+        deepgramSession = session
+
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 4096,
+            format: inputFormat,
+            block: VoiceInput.makeDeepgramTapBlock(
+                converter: converter,
+                inputSampleRate: inputFormat.sampleRate,
+                targetFormat: targetFormat,
+                sink: { data in
+                    session.appendPCMChunk(data)
+                },
+                meter: audioLevelMeter
+            )
+        )
+        tapInstalled = true
+
+        do {
+            engine.prepare()
+            try engine.start()
+
+            IslandWindowManager.shared.suppressDeactivationCollapse = true
+            isRecording = true
+            transcript = ""
+            return true
+        } catch {
+            Log.voice.error("Deepgram live transcription start error: \(error)")
+            if tapInstalled {
+                engine.inputNode.removeTap(onBus: 0)
+                tapInstalled = false
+            }
+            deepgramSession = nil
+            session.cancel()
+            cleanUp()
+            failureCallback?("Unable to start Deepgram live transcription.")
             return false
         }
     }
@@ -341,6 +462,39 @@ final class VoiceInput {
         }
     }
 
+    private func stopDeepgramRecording(session: DeepgramStreamingSession) {
+        let engine = audioEngine
+        let hadTap = tapInstalled
+
+        isRecording = false
+        IslandWindowManager.shared.suppressDeactivationCollapse = false
+
+        let callback = onComplete
+        let failureCallback = onFailure
+        onComplete = nil
+        onFailure = nil
+        deepgramSession = nil
+        recordingMode = .live
+
+        Task { @MainActor in
+            let finalText = await session.stop()
+
+            engine?.stop()
+            if hadTap {
+                engine?.inputNode.removeTap(onBus: 0)
+            }
+            self.tapInstalled = false
+            self.audioEngine = nil
+
+            self.transcript = finalText
+            if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                failureCallback?("No speech detected.")
+            } else {
+                callback?(finalText)
+            }
+        }
+    }
+
     private func stopBatchRecording() {
         let engine = audioEngine
         let hadTap = tapInstalled
@@ -401,6 +555,42 @@ final class VoiceInput {
     /// Audio tap blocks created inside a `@MainActor` context inherit `@MainActor` isolation.
     /// On macOS 26+, CoreAudio may invoke the tap on a non-main queue and Swift will trap
     /// if the block is `@MainActor`. Build the tap block in a `nonisolated` context.
+    private nonisolated static func makeDeepgramTapBlock(
+        converter: AVAudioConverter,
+        inputSampleRate: Double,
+        targetFormat: AVAudioFormat,
+        sink: @escaping (Data) -> Void,
+        meter: AudioLevelMeter?
+    ) -> AVAudioNodeTapBlock {
+        let ratio = targetSampleRate / inputSampleRate
+
+        return { buffer, _ in
+            meter?.update(from: buffer)
+
+            let frameCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
+            guard frameCapacity > 0 else { return }
+
+            guard let convertedBuffer = AVAudioPCMBuffer(
+                pcmFormat: targetFormat,
+                frameCapacity: frameCapacity
+            ) else { return }
+
+            var error: NSError?
+            let status = converter.convert(to: convertedBuffer, error: &error) { _, outStatus in
+                outStatus.pointee = .haveData
+                return buffer
+            }
+
+            guard status != .error, error == nil else { return }
+
+            if let channelData = convertedBuffer.int16ChannelData {
+                let byteCount = Int(convertedBuffer.frameLength) * MemoryLayout<Int16>.size
+                let data = Data(bytes: channelData[0], count: byteCount)
+                sink(data)
+            }
+        }
+    }
+
     private nonisolated static func makeBatchTapBlock(
         converter: AVAudioConverter,
         inputSampleRate: Double,
@@ -544,6 +734,10 @@ final class VoiceInput {
             audioEngine?.inputNode.removeTap(onBus: 0)
             tapInstalled = false
         }
+
+        deepgramSession?.cancel()
+        deepgramSession = nil
+        currentSpeechProvider = .apple
         audioEngine?.stop()
         audioEngine = nil
         isRecording = false

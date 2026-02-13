@@ -32,6 +32,7 @@ struct ChatView: View {
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
+    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.apple.rawValue
     @State private var inputText = ""
     @State private var voiceInput = VoiceInput()
     @State private var showSkills = false
@@ -44,6 +45,7 @@ struct ChatView: View {
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
     @State private var showSpeechPermissionAlert = false
+    @State private var sttFailureMessage: String?
     @State private var worktreeEnabled = false
     @State private var showBranchPicker = false
     @State private var availableBranches: [String] = []
@@ -54,6 +56,10 @@ struct ChatView: View {
     private let maxAttachmentBytes = 10 * 1024 * 1024
 
     private let shareScreenFileName = "__flux_screenshot.jpg"
+
+    private var speechInputProvider: SpeechInputProvider {
+        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .apple
+    }
 
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImageAttachments.isEmpty
@@ -135,12 +141,24 @@ struct ChatView: View {
                                     showMicPermissionAlert = true
                                     return
                                 }
-                                let started = await voiceInput.startRecording(mode: .live) { transcript in
-                                    inputText = DictionaryCorrector.apply(transcript, using: CustomDictionaryStore.shared.entries)
-                                    sendMessage()
-                                }
-                                if !started && SFSpeechRecognizer.authorizationStatus() != .authorized {
-                                    showSpeechPermissionAlert = true
+                                let started = await voiceInput.startRecording(
+                                    mode: .live,
+                                    provider: speechInputProvider,
+                                    onComplete: { transcript in
+                                        inputText = DictionaryCorrector.apply(transcript, using: CustomDictionaryStore.shared.entries)
+                                        sendMessage()
+                                    },
+                                    onFailure: { reason in
+                                        if !reason.isEmpty {
+                                            sttFailureMessage = reason
+                                        }
+                                    }
+                                )
+                                if !started {
+                                    if speechInputProvider.requiresSpeechRecognitionPermission &&
+                                       SFSpeechRecognizer.authorizationStatus() != .authorized {
+                                        showSpeechPermissionAlert = true
+                                    }
                                 }
                             }
                         }
@@ -537,6 +555,20 @@ struct ChatView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Flux needs Speech Recognition access for on-device transcription. Please enable it in System Settings > Privacy & Security > Speech Recognition.")
+        }
+        .alert("Speech Input Error", isPresented: Binding(
+            get: { sttFailureMessage != nil },
+            set: { shown in
+                if !shown {
+                    sttFailureMessage = nil
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) {
+                sttFailureMessage = nil
+            }
+        } message: {
+            Text(sttFailureMessage ?? "Unable to start speech input.")
         }
         .alert("Image Import Failed", isPresented: Binding(
             get: { imageImportErrorMessage != nil },
