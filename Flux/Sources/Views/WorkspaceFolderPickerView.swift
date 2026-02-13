@@ -22,11 +22,14 @@ struct WorkspaceFolderPickerView: View {
     @State private var showHidden: Bool = false
     @State private var contents: [FileItem] = []
     @State private var errorMessage: String?
+    @State private var isEditingPath: Bool = false
+    @State private var pathText: String = ""
+    @FocusState private var pathFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            // Breadcrumb bar
-            breadcrumbBar
+            // Editable path bar
+            pathBar
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
 
@@ -59,66 +62,108 @@ struct WorkspaceFolderPickerView: View {
         }
     }
 
-    // MARK: - Breadcrumb Bar
+    // MARK: - Path Bar
 
-    private var pathSegments: [(name: String, url: URL)] {
-        var segments: [(name: String, url: URL)] = []
-        var url = currentDirectory.standardizedFileURL
+    private var pathBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.35))
 
-        // Build from current dir back to root
-        while url.path != "/" {
-            let name = url.lastPathComponent
-            segments.insert((name: name, url: url), at: 0)
-            url = url.deletingLastPathComponent()
-        }
-        // Add root
-        segments.insert((name: "/", url: URL(fileURLWithPath: "/")), at: 0)
-
-        // Show abbreviated: last 4 segments maximum
-        if segments.count > 4 {
-            let ellipsis: [(name: String, url: URL)] = [segments[0], (name: "...", url: segments[0].url)]
-            return ellipsis + segments.suffix(3)
-        }
-
-        return segments
-    }
-
-    private var breadcrumbBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(Array(pathSegments.enumerated()), id: \.offset) { index, segment in
-                    if index > 0 {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.3))
+            if isEditingPath {
+                TextField("Enter path…", text: $pathText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .focused($pathFieldFocused)
+                    .onSubmit {
+                        commitPathEdit()
+                    }
+                    .onExitCommand {
+                        cancelPathEdit()
                     }
 
-                    if segment.name == "..." {
-                        Text("...")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                    } else {
-                        Button {
-                            navigateTo(segment.url)
-                        } label: {
-                            Text(segment.name)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .lineLimit(1)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(.white.opacity(0.06))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
+                Button {
+                    commitPathEdit()
+                } label: {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.blue.opacity(0.8))
                 }
+                .buttonStyle(.plain)
+                .help("Go to path")
+
+                Button {
+                    cancelPathEdit()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .buttonStyle(.plain)
+                .help("Cancel")
+            } else {
+                Button {
+                    beginPathEdit()
+                } label: {
+                    Text(currentDirectory.path)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .help("Click to edit path")
             }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(.white.opacity(isEditingPath ? 0.15 : 0.06), lineWidth: 1)
+                )
+        )
+    }
+
+    private func beginPathEdit() {
+        pathText = currentDirectory.path
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isEditingPath = true
+        }
+        // Delay focus slightly so the TextField is rendered
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            pathFieldFocused = true
+        }
+    }
+
+    private func commitPathEdit() {
+        let trimmed = pathText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expanded = NSString(string: trimmed).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded)
+
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            navigateTo(url)
+        } else {
+            // If the path is not a valid directory, show a brief error
+            errorMessage = "Path not found or is not a directory:\n\(trimmed)"
+        }
+
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isEditingPath = false
+        }
+        pathFieldFocused = false
+    }
+
+    private func cancelPathEdit() {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isEditingPath = false
+        }
+        pathFieldFocused = false
     }
 
     // MARK: - Quick Access Row
