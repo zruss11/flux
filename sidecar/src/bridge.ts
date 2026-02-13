@@ -66,7 +66,15 @@ interface ForkConversationResultMessage {
   reason?: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | ForkConversationMessage;
+interface PermissionResponseMessage {
+  type: 'permission_response';
+  requestId: string;
+  behavior: 'allow' | 'deny';
+  message?: string;
+  answers?: Record<string, string>;
+}
+
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | ForkConversationMessage | PermissionResponseMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -116,6 +124,25 @@ interface SessionInfoMessage {
   sessionId: string;
 }
 
+interface PermissionRequestMessage {
+  type: 'permission_request';
+  conversationId: string;
+  requestId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+interface AskUserQuestionMessage {
+  type: 'ask_user_question';
+  conversationId: string;
+  requestId: string;
+  questions: Array<{
+    question: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>;
+}
+
 type OutgoingMessage =
   | AssistantMessage
   | ToolRequestMessage
@@ -124,7 +151,9 @@ type OutgoingMessage =
   | StreamChunkMessage
   | RunStatusMessage
   | SessionInfoMessage
-  | ForkConversationResultMessage;
+  | ForkConversationResultMessage
+  | PermissionRequestMessage
+  | AskUserQuestionMessage;
 
 interface SDKUserMessage {
   type: 'user';
@@ -275,6 +304,10 @@ function isIncomingMessage(value: unknown): value is IncomingMessage {
     return isString(value.sourceConversationId) && isString(value.newConversationId);
   }
 
+  if (value.type === 'permission_response') {
+    return isString(value.requestId) && isString(value.behavior);
+  }
+
   return false;
 }
 
@@ -380,6 +413,7 @@ const ALLOWED_TOOLS = [
   'SendMessage',
   'Skill',
   'NotebookEdit',
+  'AskUserQuestion',
   'mcp__flux__*',
 ];
 
@@ -389,6 +423,13 @@ const sessions = new Map<string, ConversationSession>();
 const telegramSessionMap = new Map<string, string>();
 const telegramConversationMeta = new Map<string, { chatId: string; threadId?: number }>();
 const mcpAuthTokens = new Map<string, string>();
+const pendingPermissions = new Map<string, {
+  resolve: (result: { behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }) => void;
+  conversationId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  timeout: NodeJS.Timeout;
+}>();
 
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
@@ -407,6 +448,57 @@ function sanitizeAppInstruction(instruction: string | undefined): string | undef
   const maxLen = 2_000;
   const clipped = trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
   return clipped.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+}
+
+const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
+  /\brm\b/i,
+  /\brm\s+-rf\b/i,
+  /\brm\s+-fr\b/i,
+  /\bsudo\s+rm\b/i,
+  /\bgit\s+reset\s+--hard\b/i,
+  /\bgit\s+clean\s+-f(?:d|x|dx|fd|fdx)?\b/i,
+  /\bgit\s+checkout\s+--\b/i,
+  /\bgit\s+branch\s+-D\b/i,
+  /\bgit\s+push\s+--force(?!-with-lease)\b/i,
+  /\bgit\s+rebase\s+--abort\b/i,
+  /\bgit\s+rebase\s+--skip\b/i,
+  /\bgit\s+stash\s+(?:drop|clear)\b/i,
+];
+
+function collectCommandLikeInputValues(input: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  const keys = ['command', 'cmd', 'script', 'shell', 'bash', 'args'];
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      values.push(value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      const combined = value.filter((item): item is string => typeof item === 'string').join(' ');
+      if (combined.trim().length > 0) values.push(combined);
+    }
+  }
+  return values;
+}
+
+function requiresApproval(toolName: string, input: Record<string, unknown>): boolean {
+  const lowerToolName = toolName.toLowerCase();
+  const isCommandExecutionTool =
+    lowerToolName.includes('shell') ||
+    lowerToolName.includes('bash') ||
+    lowerToolName.includes('terminal') ||
+    lowerToolName.includes('applescript') ||
+    lowerToolName.includes('command');
+
+  const commandCandidates = collectCommandLikeInputValues(input);
+  if (!isCommandExecutionTool && commandCandidates.length === 0) {
+    return false;
+  }
+
+  return commandCandidates.some((command) =>
+    DANGEROUS_COMMAND_PATTERNS.some((pattern) => pattern.test(command)),
+  );
 }
 
 interface ConversationSession {
@@ -504,8 +596,13 @@ export function startBridge(port: number): void {
         activeClient = null;
       }
 
-      // Fail any pending tool calls waiting on Swift.
+      // Fail any pending tool calls and permissions waiting on Swift.
       flushPendingToolCalls('Flux is offline. Open the app to reconnect.');
+      for (const [requestId, pending] of pendingPermissions.entries()) {
+        clearTimeout(pending.timeout);
+        pending.resolve({ behavior: 'deny', message: 'Flux is offline. Open the app to reconnect.' });
+        pendingPermissions.delete(requestId);
+      }
     });
 
     ws.on('error', (error) => {
@@ -545,6 +642,11 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
     case 'fork_conversation':
       handleForkConversation(message);
       break;
+    case 'permission_response':
+      handlePermissionResponse(message);
+      break;
+    default:
+      log.warn('Unknown message type:', (message as Record<string, unknown>).type);
   }
 }
 
@@ -721,18 +823,64 @@ function startSessionRun(session: ConversationSession, messages: QueuedUserMessa
 async function runAgentSession(session: ConversationSession): Promise<void> {
   if (!session.stream) return;
 
-  sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: true });
+  const conversationId = session.conversationId;
+  sendToClient(activeClient, { type: 'run_status', conversationId, isWorking: true });
 
   const runId = crypto.randomUUID();
   const shouldFork = session.forkOnNextRun === true;
   session.forkOnNextRun = false;
 
+  const canUseTool = (
+    toolName: string,
+    input: Record<string, unknown>,
+  ): Promise<{ behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }> => {
+    if (toolName !== 'AskUserQuestion' && !requiresApproval(toolName, input)) {
+      return Promise.resolve({ behavior: 'allow', updatedInput: input });
+    }
+
+    const requestId = crypto.randomUUID();
+
+    if (toolName === 'AskUserQuestion') {
+      const questions = (input.questions ?? []) as Array<{
+        question: string;
+        options: Array<{ label: string; description?: string }>;
+        multiSelect?: boolean;
+      }>;
+      sendToClient(activeClient, {
+        type: 'ask_user_question',
+        conversationId,
+        requestId,
+        questions,
+      });
+    } else {
+      sendToClient(activeClient, {
+        type: 'permission_request',
+        conversationId,
+        requestId,
+        toolName,
+        input,
+      });
+    }
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingPermissions.delete(requestId);
+        resolve({ behavior: 'deny', message: 'Permission request timed out' });
+      }, 120_000);
+
+      pendingPermissions.set(requestId, { resolve, conversationId, toolName, input, timeout });
+    });
+  };
+
   try {
     for await (const message of query({
       prompt: session.stream,
-      options: buildQueryOptions(session.conversationId, runId, {
+      options: buildQueryOptions(conversationId, runId, {
         resume: session.sessionId,
         resumeSessionAt: session.lastAssistantUuid,
+        permissionMode: 'default',
+        allowDangerouslySkipPermissions: false,
+        canUseTool,
         includePartialMessages: true,
         ...(shouldFork ? { forkSession: true } : {}),
       }),
@@ -747,7 +895,8 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
     clearIdle(session);
     session.isRunning = false;
     session.stream = null;
-    sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: false });
+    flushPendingPermissions(conversationId, 'Session ended');
+    sendToClient(activeClient, { type: 'run_status', conversationId, isWorking: false });
 
     if (session.pendingMessages.length > 0) {
       const next = [...session.pendingMessages];
@@ -1091,6 +1240,7 @@ function evictSession(conversationId: string, reason = 'Session expired due to i
   session.toolUseByIndex.clear();
   flushPendingToolCompletions(session);
   clearPendingToolCallsForConversation(conversationId, reason);
+  flushPendingPermissions(conversationId, reason);
 
   sessions.delete(conversationId);
   telegramConversationMeta.delete(conversationId);
@@ -1323,6 +1473,40 @@ function clearPendingToolCallsForConversation(conversationId: string, reason: st
       resultPreview: reason,
     });
     pendingToolCalls.delete(toolUseId);
+  }
+}
+
+function handlePermissionResponse(message: PermissionResponseMessage): void {
+  const pending = pendingPermissions.get(message.requestId);
+  if (!pending) {
+    log.warn(`No pending permission for requestId=${message.requestId}`);
+    return;
+  }
+  clearTimeout(pending.timeout);
+  pendingPermissions.delete(message.requestId);
+
+  if (message.behavior === 'allow') {
+    if (pending.toolName === 'AskUserQuestion') {
+      const answers = message.answers ?? {};
+      const updatedInput: Record<string, unknown> = {
+        ...pending.input,
+        answers,
+      };
+      pending.resolve({ behavior: 'allow', updatedInput });
+      return;
+    }
+    pending.resolve({ behavior: 'allow', updatedInput: pending.input });
+  } else {
+    pending.resolve({ behavior: 'deny', message: message.message || 'User denied this action' });
+  }
+}
+
+function flushPendingPermissions(conversationId: string, reason: string): void {
+  for (const [requestId, pending] of pendingPermissions.entries()) {
+    if (pending.conversationId !== conversationId) continue;
+    clearTimeout(pending.timeout);
+    pending.resolve({ behavior: 'deny', message: reason });
+    pendingPermissions.delete(requestId);
   }
 }
 
