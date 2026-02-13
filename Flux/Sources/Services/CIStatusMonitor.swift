@@ -18,6 +18,10 @@ enum CIAggregateStatus: Equatable, Sendable {
 /// Lightweight monitor that polls `gh run list` to maintain a live aggregate
 /// CI status for the notch indicator. Uses adaptive polling independent of the
 /// 5-minute `WatcherEngine` alert cycle.
+///
+/// When a repo transitions status (e.g. running → passing) the monitor uses
+/// Apple Foundation Models to craft a one-line ticker message, then pushes it
+/// to `IslandWindowManager` for display below the island.
 @MainActor
 @Observable
 final class CIStatusMonitor {
@@ -34,7 +38,23 @@ final class CIStatusMonitor {
     private let steadyPollInterval: TimeInterval = 30
     private let activePollInterval: TimeInterval = 10
 
+    /// Previous repo statuses used to detect transitions.
+    private var previousRepoStatuses: [String: CIAggregateStatus] = [:]
+
+    /// Per-repo latest run metadata for generating rich ticker messages.
+    private var latestRunInfo: [String: CIRunInfo] = [:]
+
     private init() {}
+
+    // MARK: - Run Info
+
+    /// Lightweight metadata about the latest workflow run for ticker messages.
+    struct CIRunInfo: Sendable {
+        let workflowName: String
+        let headBranch: String
+        let conclusion: String
+        let event: String      // "pull_request", "push", etc.
+    }
 
     // MARK: - Lifecycle
 
@@ -69,75 +89,165 @@ final class CIStatusMonitor {
         guard !repos.isEmpty else {
             aggregateStatus = .idle
             repoStatuses = [:]
+            previousRepoStatuses = [:]
+            latestRunInfo = [:]
             updatePollingCadence(for: .idle)
             return
         }
 
         var statuses: [String: CIAggregateStatus] = [:]
+        var runInfos: [String: CIRunInfo] = [:]
 
-        await withTaskGroup(of: (String, CIAggregateStatus).self) { group in
+        await withTaskGroup(of: (String, CIAggregateStatus, CIRunInfo?).self) { group in
             for repo in repos {
                 group.addTask { [self] in
-                    let status = await self.checkRepo(repo)
-                    return (repo, status)
+                    let (status, info) = await self.checkRepo(repo)
+                    return (repo, status, info)
                 }
             }
 
-            for await (repo, status) in group {
+            for await (repo, status, info) in group {
                 statuses[repo] = status
+                if let info { runInfos[repo] = info }
             }
         }
 
+        // Detect transitions and fire ticker notifications.
+        let oldStatuses = previousRepoStatuses
+        previousRepoStatuses = statuses
+        latestRunInfo = runInfos
         repoStatuses = statuses
         aggregateStatus = aggregate(statuses)
         updatePollingCadence(for: aggregateStatus)
+
+        // Only fire transitions when we had a valid previous state (not the first poll).
+        if !oldStatuses.isEmpty {
+            for (repo, newStatus) in statuses {
+                let oldStatus = oldStatuses[repo] ?? .unknown
+                if oldStatus != newStatus, shouldFireTicker(from: oldStatus, to: newStatus) {
+                    await generateTickerMessage(repo: repo, from: oldStatus, to: newStatus, info: runInfos[repo])
+                }
+            }
+        }
+    }
+
+    /// Returns true for transitions worth notifying about.
+    private func shouldFireTicker(from old: CIAggregateStatus, to newSt: CIAggregateStatus) -> Bool {
+        switch (old, newSt) {
+        case (.running, .passing), (.running, .failing), (.failing, .passing):
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - Per-Repo Check
 
-    private func checkRepo(_ repo: String) async -> CIAggregateStatus {
+    private func checkRepo(_ repo: String) async -> (CIAggregateStatus, CIRunInfo?) {
         do {
             let result = try await runGH([
                 "run", "list",
                 "--repo", repo,
                 "--limit", "1",
-                "--json", "conclusion,status",
+                "--json", "conclusion,status,name,headBranch,event",
             ])
 
             Log.app.info("CIStatusMonitor: \(repo) exitCode=\(result.exitCode) output=\(result.output)")
 
             guard result.exitCode == 0 else {
-                return .unknown
+                return (.unknown, nil)
             }
 
             guard let data = result.output.data(using: .utf8),
                   let runs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                return .unknown
+                return (.unknown, nil)
             }
 
             // No workflow runs at all — repo has no CI, treat as neutral/passing
             guard let latest = runs.first else {
-                return .passing
+                return (.passing, nil)
             }
 
             let status = latest["status"] as? String ?? ""
             let conclusion = latest["conclusion"] as? String ?? ""
+            let workflowName = latest["name"] as? String ?? "CI"
+            let headBranch = latest["headBranch"] as? String ?? ""
+            let event = latest["event"] as? String ?? ""
+
+            let info = CIRunInfo(
+                workflowName: workflowName,
+                headBranch: headBranch,
+                conclusion: conclusion.isEmpty ? status : conclusion,
+                event: event
+            )
 
             if status == "in_progress" || status == "queued" || status == "waiting" || status == "requested" || status == "pending" {
-                return .running
+                return (.running, info)
             }
 
             switch conclusion {
             case "success":
-                return .passing
+                return (.passing, info)
             case "failure", "timed_out", "cancelled", "action_required":
-                return .failing
+                return (.failing, info)
             default:
-                return .unknown
+                return (.unknown, info)
             }
         } catch {
             Log.app.error("CIStatusMonitor: failed to check \(repo) — \(error.localizedDescription)")
-            return .unknown
+            return (.unknown, nil)
+        }
+    }
+
+    // MARK: - Ticker Message Generation
+
+    private func generateTickerMessage(repo: String, from oldStatus: CIAggregateStatus, to newStatus: CIAggregateStatus, info: CIRunInfo?) async {
+        let shortRepo = repo.components(separatedBy: "/").last ?? repo
+        let branchPart = info?.headBranch ?? ""
+        let workflowPart = info?.workflowName ?? "CI"
+
+        // Try Foundation Models first for a polished one-liner.
+        let message: String
+        if FoundationModelsClient.shared.isAvailable {
+            let systemPrompt = """
+            You write ultra-short, punchy one-liner status updates for a developer dashboard ticker.
+            Keep it under 60 characters. Use one emoji. No hashtags. No quotes.
+            """
+            let userPrompt: String
+            switch newStatus {
+            case .passing:
+                userPrompt = "The workflow '\(workflowPart)' on repo '\(shortRepo)' branch '\(branchPart)' just went all green (passed). Celebrate briefly."
+            case .failing:
+                userPrompt = "The workflow '\(workflowPart)' on repo '\(shortRepo)' branch '\(branchPart)' just failed. Report it tersely."
+            default:
+                userPrompt = "The workflow '\(workflowPart)' on repo '\(shortRepo)' branch '\(branchPart)' changed status to \(newStatus). Report it tersely."
+            }
+
+            do {
+                let generated = try await FoundationModelsClient.shared.completeText(system: systemPrompt, user: userPrompt)
+                let cleaned = generated.trimmingCharacters(in: .whitespacesAndNewlines)
+                message = cleaned.isEmpty ? fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart, branch: branchPart) : cleaned
+            } catch {
+                Log.app.info("CIStatusMonitor: Foundation Models unavailable, using fallback — \(error.localizedDescription)")
+                message = fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart, branch: branchPart)
+            }
+        } else {
+            message = fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart, branch: branchPart)
+        }
+
+        Log.app.info("CIStatusMonitor: ticker → \(message)")
+        IslandWindowManager.shared.showTickerNotification(message)
+    }
+
+    private func fallbackMessage(repo: String, to status: CIAggregateStatus, workflow: String, branch: String) -> String {
+        let branchLabel = branch.isEmpty ? "" : " (\(branch))"
+        switch status {
+        case .passing:
+            return "✅ \(repo)\(branchLabel) — \(workflow) passed"
+        case .failing:
+            return "❌ \(repo)\(branchLabel) — \(workflow) failed"
+        default:
+            return "🔄 \(repo)\(branchLabel) — \(workflow) status changed"
         }
     }
 

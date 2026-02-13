@@ -40,6 +40,8 @@ final class IslandWindowManager: ObservableObject {
     @Published var showingClipboardNotification = false
     @Published var showingDictationNotification = false
     @Published var dictationNotificationMessage = ""
+    @Published var showingTickerNotification = false
+    @Published var tickerNotificationMessage = ""
     private var targetScreen: NSScreen?
     private var notchGeometry: NotchGeometry?
     /// Distance from screen top to the island (menu bar height on non-notch screens).
@@ -51,6 +53,7 @@ final class IslandWindowManager: ObservableObject {
     private var hoverTimer: DispatchWorkItem?
     private var clipboardNotificationDismissWorkItem: DispatchWorkItem?
     private var dictationNotificationDismissWorkItem: DispatchWorkItem?
+    private var tickerNotificationDismissWorkItem: DispatchWorkItem?
 
     private init() {}
 
@@ -164,10 +167,14 @@ final class IslandWindowManager: ObservableObject {
         showingClipboardNotification = false
         showingDictationNotification = false
         dictationNotificationMessage = ""
+        showingTickerNotification = false
+        tickerNotificationMessage = ""
         clipboardNotificationDismissWorkItem?.cancel()
         clipboardNotificationDismissWorkItem = nil
         dictationNotificationDismissWorkItem?.cancel()
         dictationNotificationDismissWorkItem = nil
+        tickerNotificationDismissWorkItem?.cancel()
+        tickerNotificationDismissWorkItem = nil
     }
 
     func expand() {
@@ -218,6 +225,19 @@ final class IslandWindowManager: ObservableObject {
         }
         dictationNotificationDismissWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: workItem)
+    }
+
+    func showTickerNotification(_ message: String) {
+        tickerNotificationDismissWorkItem?.cancel()
+        tickerNotificationMessage = message
+        showingTickerNotification = true
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.showingTickerNotification = false
+            self?.tickerNotificationMessage = ""
+        }
+        tickerNotificationDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0, execute: workItem)
     }
 
     // MARK: - Event Monitors

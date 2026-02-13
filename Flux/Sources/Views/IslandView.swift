@@ -73,9 +73,9 @@ struct IslandView: View {
         isDictatingClosed ? closedDictationWidthBoost : 0
     }
 
-    /// Show the right slot when CI repos are configured OR dictation is active.
+    /// Show the right slot when dictation is active.
     private var showRightSlot: Bool {
-        isDictatingClosed || CIStatusMonitor.shared.aggregateStatus != .idle
+        isDictatingClosed
     }
 
     private var closedRightSlotWidth: CGFloat {
@@ -254,10 +254,31 @@ struct IslandView: View {
                     )
                     .offset(y: notificationBaseOffset + (windowManager.showingClipboardNotification ? 44 : 0))
             }
+
+            // CI ticker bar — scrolling one-liner notification below the island.
+            if windowManager.showingTickerNotification {
+                TickerBarView(
+                    message: windowManager.tickerNotificationMessage,
+                    barWidth: notchSize.width
+                )
+                .id(windowManager.tickerNotificationMessage) // fresh animation per message
+                .transition(
+                    .asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .opacity
+                    )
+                )
+                .offset(
+                    y: notificationBaseOffset
+                        + (windowManager.showingClipboardNotification ? 44 : 0)
+                        + (windowManager.showingDictationNotification ? 44 : 0)
+                )
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingClipboardNotification)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingDictationNotification)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingTickerNotification)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 clearClosedIndicatorsWorkItem?.cancel()
@@ -415,7 +436,7 @@ struct IslandView: View {
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
 
-            // Right slot — CI status dot or app icon during dictation
+            // Right slot — app icon during dictation
             ZStack {
                 if isDictatingClosed, let icon = dictationAppIcon {
                     Image(nsImage: icon)
@@ -423,9 +444,6 @@ struct IslandView: View {
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 20, height: 20)
                         .clipShape(RoundedRectangle(cornerRadius: 5))
-                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
-                } else if CIStatusMonitor.shared.aggregateStatus != .idle {
-                    CIStatusDot(status: CIStatusMonitor.shared.aggregateStatus)
                         .transition(.opacity.combined(with: .scale(scale: 0.6)))
                 }
             }
@@ -438,7 +456,6 @@ struct IslandView: View {
         .animation(.easeInOut(duration: 0.2), value: isHovering)
         .animation(.easeInOut(duration: 0.2), value: showActivity)
         .animation(.easeInOut(duration: 0.25), value: isDictatingClosed)
-        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: CIStatusMonitor.shared.aggregateStatus)
     }
 
     // MARK: - Opened Header
