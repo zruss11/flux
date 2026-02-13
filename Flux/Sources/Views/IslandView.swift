@@ -36,6 +36,7 @@ struct IslandView: View {
     @State private var showExpandedContent = false
     @State private var measuredChatHeight: CGFloat = 0
     @State private var skillsVisible = false
+    @State private var hasPendingAttachments = false
     @State private var closedIndicatorsLatched = false
     @State private var clearClosedIndicatorsWorkItem: DispatchWorkItem?
 
@@ -159,9 +160,12 @@ struct IslandView: View {
         if case .folderDetail = contentType {
             return maxExpandedHeight
         }
-        // No messages yet — compact initial state with just the input row
+        // No messages yet — compact initial state with just the input row.
+        // Bump height when attachments are pending so the preview + pills stay visible.
         if messageCount == 0 && !skillsVisible {
-            return minExpandedHeight + 80
+            let base = minExpandedHeight + 80
+            let attachmentBoost: CGFloat = hasPendingAttachments ? 80 : 0
+            return base + attachmentBoost
         }
         // Grow to fit measured chat content + header + input row + padding
         // Header ~36pt, input row ~52pt, divider + padding ~20pt
@@ -248,6 +252,7 @@ struct IslandView: View {
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
                 .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: hasPendingAttachments)
                 .padding(.top, hasNotch ? 0 : windowManager.topOffset)
 
             let notificationBaseOffset = currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset)
@@ -329,6 +334,14 @@ struct IslandView: View {
         }
         .onPreferenceChange(SkillsVisibleKey.self) { visible in
             skillsVisible = visible
+        }
+        .onPreferenceChange(HasPendingAttachmentsKey.self) { hasAttachments in
+            hasPendingAttachments = hasAttachments
+        }
+        .onChange(of: hasPendingAttachments) { _, _ in
+            if isExpanded {
+                windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
+            }
         }
         .onChange(of: measuredChatHeight) { _, _ in
             if isExpanded {
