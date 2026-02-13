@@ -2,7 +2,6 @@ import SwiftUI
 @preconcurrency import ScreenCaptureKit
 @preconcurrency import ApplicationServices
 import AVFoundation
-import AppKit
 
 struct OnboardingView: View {
     var onComplete: () -> Void
@@ -15,6 +14,11 @@ struct OnboardingView: View {
 
     var allPermissionsGranted: Bool {
         accessibilityGranted && screenRecordingGranted && microphoneGranted
+    }
+
+    var shouldShowRestartHint: Bool {
+        (didRequestAccessibility && !accessibilityGranted) ||
+        (didRequestScreenRecording && !screenRecordingGranted)
     }
 
     var body: some View {
@@ -98,25 +102,13 @@ struct OnboardingView: View {
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.5))
 
-                        if didRequestAccessibility && !accessibilityGranted {
-                            Text("macOS may require restarting Flux after enabling Accessibility.")
+                        if shouldShowRestartHint {
+                            Text("macOS may require restarting Flux after enabling permissions.")
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.5))
 
                             Button("Restart Flux") {
-                                relaunch()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-
-                        if didRequestScreenRecording && !screenRecordingGranted {
-                            Text("macOS may require restarting Flux after enabling Screen Recording.")
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.5))
-
-                            Button("Restart Flux") {
-                                relaunch()
+                                AppRelauncher.relaunch()
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
@@ -140,12 +132,10 @@ struct OnboardingView: View {
                     )
                 }
             }
-            .edgesIgnoringSafeArea(.top)
+            .ignoresSafeArea(.container, edges: .top)
             .task {
                 while !Task.isCancelled {
-                    await MainActor.run {
-                        checkPermissions()
-                    }
+                    checkPermissions()
                     try? await Task.sleep(for: .seconds(1))
                 }
             }
@@ -156,16 +146,6 @@ struct OnboardingView: View {
         accessibilityGranted = AXIsProcessTrusted()
         screenRecordingGranted = CGPreflightScreenCaptureAccess()
         microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-    }
-
-    private func relaunch() {
-        let appURL = Bundle.main.bundleURL
-        let config = NSWorkspace.OpenConfiguration()
-        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in
-            Task { @MainActor in
-                NSApp.terminate(nil)
-            }
-        }
     }
 }
 
@@ -220,24 +200,5 @@ struct PermissionRow: View {
                         .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
                 )
         }
-    }
-}
-
-struct FluxButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.2 : 0.1))
-                    .overlay(
-                        Capsule()
-                            .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
-                    )
-            )
-            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
 }
