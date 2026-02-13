@@ -1,68 +1,99 @@
 import SwiftUI
 
-/// Animated stock-ticker–style text bar that slides below the island to display
-/// a one-line CI (or generic) notification message.
+/// Animated stock-ticker–style text bar that extends organically from the
+/// bottom of the island. Designed to look like the island itself is growing
+/// a "chin" that reveals scrolling text, then retracting.
 struct TickerBarView: View {
     let message: String
-    /// Width to match the closed island.
+    /// Width to match the closed island (including horizontal padding).
     var barWidth: CGFloat = 260
+    /// Bottom corner radius — should match the island's bottom radius.
+    var cornerRadius: CGFloat = 14
+    /// Total visible duration before the bar retracts.
+    var displayDuration: Double = 6.0
+
+    // MARK: - State
 
     @State private var textWidth: CGFloat = 0
-    @State private var offset: CGFloat = 0
-    @State private var appeared = false
+    @State private var scrollOffset: CGFloat = 0
+    @State private var revealed = false
+    @State private var dismissed = false
 
-    /// Total scroll distance: start off-screen right, scroll until fully off-screen left.
+    private let barHeight: CGFloat = 28
+
+    /// Total scroll distance: from right edge off-screen to left edge off-screen.
     private var scrollDistance: CGFloat {
         barWidth + textWidth
     }
 
-    /// Duration scales with text length so speed feels consistent.
+    /// Speed-based duration so text always scrolls at a consistent pace.
     private var scrollDuration: Double {
-        max(4.0, Double(scrollDistance) / 60.0)
+        max(3.5, Double(scrollDistance) / 55.0)
     }
 
     var body: some View {
+        // Container — flat top, rounded bottom, matching island aesthetic.
         ZStack {
-            // Clipping container at the island width
-            Rectangle()
-                .fill(.clear)
-                .frame(width: barWidth, height: 28)
-                .clipped()
-                .overlay {
-                    // Scrolling text
-                    Text(message)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .fixedSize()
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear
-                                    .onAppear {
-                                        textWidth = geo.size.width
-                                    }
-                            }
-                        )
-                        .offset(x: offset)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            // Scrolling text — clipped to the bar width
+            Text(message)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.92))
+                .fixedSize()
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.onAppear { textWidth = geo.size.width }
+                    }
+                )
+                .offset(x: scrollOffset)
         }
-        .frame(width: barWidth, height: 28)
+        .frame(width: barWidth, height: barHeight)
+        .clipped()
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.black)
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: cornerRadius,
+                bottomTrailingRadius: cornerRadius,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
+            .fill(.black)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(.white.opacity(0.12), lineWidth: 0.5)
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: cornerRadius,
+                bottomTrailingRadius: cornerRadius,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
+            .stroke(.white.opacity(0.08), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.5), radius: 10, y: 3)
+        // The "extrude" effect: clip height from 0 → barHeight
+        .mask(
+            Rectangle()
+                .frame(height: revealed ? barHeight : 0)
+                .frame(maxHeight: barHeight, alignment: .top)
+        )
+        // Subtle glow underneath
+        .shadow(color: .black.opacity(0.6), radius: 8, y: 4)
         .onAppear {
-            // Start from right edge
-            offset = barWidth / 2
-            // Small delay to let geometry reader measure, then start scrolling
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            // Phase 1: Extend the bar downward (organic growth)
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.78)) {
+                revealed = true
+            }
+
+            // Phase 2: Start scrolling text after the bar has extended
+            scrollOffset = barWidth / 2 + 10
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 withAnimation(.linear(duration: scrollDuration)) {
-                    offset = -(barWidth / 2 + textWidth)
+                    scrollOffset = -(textWidth + barWidth / 2 + 10)
+                }
+            }
+
+            // Phase 3: Retract the bar back up after display duration
+            DispatchQueue.main.asyncAfter(deadline: .now() + displayDuration - 0.5) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                    revealed = false
                 }
             }
         }

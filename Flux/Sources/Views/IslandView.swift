@@ -255,24 +255,18 @@ struct IslandView: View {
                     .offset(y: notificationBaseOffset + (windowManager.showingClipboardNotification ? 44 : 0))
             }
 
-            // CI ticker bar — scrolling one-liner notification below the island.
-            if windowManager.showingTickerNotification {
+            // CI ticker bar — extends organically from the island's bottom edge.
+            if windowManager.showingTickerNotification, !isExpanded {
                 TickerBarView(
                     message: windowManager.tickerNotificationMessage,
-                    barWidth: notchSize.width
+                    barWidth: currentWidth + hoverWidthBoost,
+                    cornerRadius: bottomRadius,
+                    displayDuration: windowManager.tickerDisplayDuration
                 )
                 .id(windowManager.tickerNotificationMessage) // fresh animation per message
-                .transition(
-                    .asymmetric(
-                        insertion: .move(edge: .top).combined(with: .opacity),
-                        removal: .opacity
-                    )
-                )
-                .offset(
-                    y: notificationBaseOffset
-                        + (windowManager.showingClipboardNotification ? 44 : 0)
-                        + (windowManager.showingDictationNotification ? 44 : 0)
-                )
+                .transition(.opacity)
+                .offset(y: currentHeight + hoverHeightBoost - 2 + (hasNotch ? 0 : windowManager.topOffset))
+                .allowsHitTesting(false)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -893,6 +887,7 @@ struct IslandSettingsView: View {
     @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
     @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
+    @AppStorage("ciTickerDuration") private var ciTickerDuration: Double = 6.0
 
     @State private var discordBotToken = ""
     @State private var slackBotToken = ""
@@ -1532,6 +1527,27 @@ struct IslandSettingsView: View {
                 if githubReposExpanded {
                     githubReposInlineSection
                 }
+
+                // CI Ticker Duration
+                HStack(spacing: 8) {
+                    Image(systemName: "textformat.abc")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 20)
+                    Text("Ticker")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.9))
+                    Spacer()
+                    Text("\(Int(ciTickerDuration))s")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(width: 28, alignment: .trailing)
+                    Slider(value: $ciTickerDuration, in: 3...12, step: 1)
+                        .frame(width: 80)
+                        .tint(.white.opacity(0.6))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
 
                 divider
 

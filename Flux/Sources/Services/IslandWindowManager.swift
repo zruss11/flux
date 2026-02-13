@@ -42,6 +42,7 @@ final class IslandWindowManager: ObservableObject {
     @Published var dictationNotificationMessage = ""
     @Published var showingTickerNotification = false
     @Published var tickerNotificationMessage = ""
+    @Published var tickerDisplayDuration: Double = 6.0
     private var targetScreen: NSScreen?
     private var notchGeometry: NotchGeometry?
     /// Distance from screen top to the island (menu bar height on non-notch screens).
@@ -229,7 +230,10 @@ final class IslandWindowManager: ObservableObject {
 
     func showTickerNotification(_ message: String) {
         tickerNotificationDismissWorkItem?.cancel()
+        let duration = UserDefaults.standard.double(forKey: "ciTickerDuration")
+        let resolvedDuration = duration > 0 ? duration : 6.0
         tickerNotificationMessage = message
+        tickerDisplayDuration = resolvedDuration
         showingTickerNotification = true
 
         let workItem = DispatchWorkItem { [weak self] in
@@ -237,7 +241,7 @@ final class IslandWindowManager: ObservableObject {
             self?.tickerNotificationMessage = ""
         }
         tickerNotificationDismissWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + resolvedDuration, execute: workItem)
     }
 
     // MARK: - Event Monitors

@@ -134,6 +134,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         watcherService.startAll()
         CIStatusMonitor.shared.start()
 
+        // DEBUG: Cmd+Shift+D triggers a test ticker notification.
+        #if DEBUG
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Cmd+Shift+D
+            if event.modifierFlags.contains([.command, .shift]),
+               event.charactersIgnoringModifiers?.lowercased() == "d" {
+                let samples = [
+                    "✅ tixbit-monorepo — all checks passed on PR #455",
+                    "❌ flux CI failed on branch feature/ticker-bar",
+                    "🚀 monorepo deploy pipeline green — ship it!",
+                    "✅ san-juan build passed · 42s",
+                ]
+                let msg = samples.randomElement() ?? samples[0]
+                IslandWindowManager.shared.showTickerNotification(msg)
+                return nil  // consume the event
+            }
+            return event
+        }
+        #endif
+
         // Auto-start tour on first launch after permissions are granted
         if !UserDefaults.standard.bool(forKey: "hasCompletedTour") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
