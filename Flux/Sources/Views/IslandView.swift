@@ -378,22 +378,6 @@ struct IslandView: View {
         let showActivity = showClosedActivityIndicators
 
         return HStack(spacing: 0) {
-            // Left slot — CI status dot or app icon during dictation
-            ZStack {
-                if isDictatingClosed, let icon = dictationAppIcon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 20, height: 20)
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
-                } else if CIStatusMonitor.shared.aggregateStatus != .idle {
-                    CIStatusDot(status: CIStatusMonitor.shared.aggregateStatus)
-                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
-                }
-            }
-            .frame(width: closedRightSlotWidth, height: closedHeight)
-
             ZStack {
                 if isDictatingClosed {
                     HStack(spacing: 4) {
@@ -430,6 +414,22 @@ struct IslandView: View {
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
+
+            // Right slot — CI status dot or app icon during dictation
+            ZStack {
+                if isDictatingClosed, let icon = dictationAppIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                } else if CIStatusMonitor.shared.aggregateStatus != .idle {
+                    CIStatusDot(status: CIStatusMonitor.shared.aggregateStatus)
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                }
+            }
+            .frame(width: closedRightSlotWidth, height: closedHeight)
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)
