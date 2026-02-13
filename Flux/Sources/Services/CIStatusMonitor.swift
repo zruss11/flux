@@ -43,6 +43,8 @@ final class CIStatusMonitor {
 
     /// Per-repo latest run metadata for generating rich ticker messages.
     private var latestRunInfo: [String: CIRunInfo] = [:]
+    private var pendingTickerTransitions: [CITransition] = []
+    private var isProcessingTickerTransitions = false
 
     private init() {}
 
@@ -54,6 +56,13 @@ final class CIStatusMonitor {
         let headBranch: String
         let conclusion: String
         let event: String      // "pull_request", "push", etc.
+    }
+
+    struct CITransition: Sendable {
+        let repo: String
+        let oldStatus: CIAggregateStatus
+        let newStatus: CIAggregateStatus
+        let info: CIRunInfo?
     }
 
     // MARK: - Lifecycle
@@ -122,12 +131,21 @@ final class CIStatusMonitor {
 
         // Only fire transitions when we had a valid previous state (not the first poll).
         if !oldStatuses.isEmpty {
+            var transitions: [CITransition] = []
             for (repo, newStatus) in statuses {
                 let oldStatus = oldStatuses[repo] ?? .unknown
                 if oldStatus != newStatus, shouldFireTicker(from: oldStatus, to: newStatus) {
-                    await generateTickerMessage(repo: repo, from: oldStatus, to: newStatus, info: runInfos[repo])
+                    transitions.append(
+                        CITransition(
+                            repo: repo,
+                            oldStatus: oldStatus,
+                            newStatus: newStatus,
+                            info: runInfos[repo]
+                        )
+                    )
                 }
             }
+            enqueueTickerTransitions(transitions)
         }
     }
 
@@ -243,14 +261,53 @@ final class CIStatusMonitor {
 
     // MARK: - Ticker Message Generation
 
-    private func generateTickerMessage(repo: String, from oldStatus: CIAggregateStatus, to newStatus: CIAggregateStatus, info: CIRunInfo?) async {
-        let shortRepo = repo.components(separatedBy: "/").last ?? repo
-        let branchPart = info?.headBranch ?? ""
-        let workflowPart = info?.workflowName ?? "CI"
+    private func enqueueTickerTransitions(_ transitions: [CITransition]) {
+        guard !transitions.isEmpty else { return }
+        pendingTickerTransitions.append(contentsOf: transitions)
+        guard !isProcessingTickerTransitions else { return }
+
+        isProcessingTickerTransitions = true
+        Task { @MainActor in
+            await processTickerTransitions()
+        }
+    }
+
+    private func processTickerTransitions() async {
+        while !pendingTickerTransitions.isEmpty {
+            let transition = pendingTickerTransitions.removeFirst()
+            let message = await buildTickerMessage(
+                repo: transition.repo,
+                from: transition.oldStatus,
+                to: transition.newStatus,
+                info: transition.info
+            )
+
+            Log.app.info("CIStatusMonitor: ticker → \(message)")
+            IslandWindowManager.shared.showTickerNotification(message)
+
+            let duration = UserDefaults.standard.double(forKey: "ciTickerDuration")
+            let resolvedDuration = duration > 0 ? duration : 6.0
+            let waitNanos = UInt64((resolvedDuration + 0.15) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: waitNanos)
+        }
+
+        isProcessingTickerTransitions = false
+    }
+
+    private func buildTickerMessage(repo: String, from _: CIAggregateStatus, to newStatus: CIAggregateStatus, info: CIRunInfo?) async -> String {
+        let rawRepo = repo.components(separatedBy: "/").last ?? repo
+        let rawBranch = info?.headBranch ?? ""
+        let rawWorkflow = info?.workflowName ?? "CI"
+
+        let repoPart = sanitizePromptField(rawRepo, placeholder: "<repo>")
+        let branchPart = sanitizePromptField(rawBranch, placeholder: "<branch>")
+        let workflowPart = sanitizePromptField(rawWorkflow, placeholder: "<workflow>")
+        let hasSuspiciousInput = repoPart.wasSuspicious || branchPart.wasSuspicious || workflowPart.wasSuspicious
+        let shortRepo = repoPart.value
 
         // Try Foundation Models first for a polished one-liner.
         let message: String
-        if FoundationModelsClient.shared.isAvailable {
+        if FoundationModelsClient.shared.isAvailable && !hasSuspiciousInput {
             let systemPrompt = """
             You write ultra-short, punchy one-liner status updates for a developer dashboard ticker.
             Keep it under 60 characters. Use one emoji. No hashtags. No quotes.
@@ -258,27 +315,75 @@ final class CIStatusMonitor {
             let userPrompt: String
             switch newStatus {
             case .passing:
-                userPrompt = "Repo '\(shortRepo)' branch '\(branchPart)' just went all green (all checks passed). Celebrate briefly."
+                userPrompt = "Repo '\(repoPart.value)' branch '\(branchPart.value)' just went all green (all checks passed). Celebrate briefly."
             case .failing:
-                userPrompt = "Repo '\(shortRepo)' branch '\(branchPart)' has at least one failed check. Report it tersely."
+                userPrompt = "Repo '\(repoPart.value)' branch '\(branchPart.value)' has at least one failed check. Report it tersely."
             default:
-                userPrompt = "The workflow '\(workflowPart)' on repo '\(shortRepo)' branch '\(branchPart)' changed status to \(newStatus). Report it tersely."
+                userPrompt = "The workflow '\(workflowPart.value)' on repo '\(repoPart.value)' branch '\(branchPart.value)' changed status to \(newStatus). Report it tersely."
             }
 
             do {
                 let generated = try await FoundationModelsClient.shared.completeText(system: systemPrompt, user: userPrompt)
                 let cleaned = generated.trimmingCharacters(in: .whitespacesAndNewlines)
-                message = cleaned.isEmpty ? fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart, branch: branchPart) : cleaned
+                message = cleaned.isEmpty ? fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart.value, branch: branchPart.value) : cleaned
             } catch {
                 Log.app.info("CIStatusMonitor: Foundation Models unavailable, using fallback — \(error.localizedDescription)")
-                message = fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart, branch: branchPart)
+                message = fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart.value, branch: branchPart.value)
             }
         } else {
-            message = fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart, branch: branchPart)
+            message = fallbackMessage(repo: shortRepo, to: newStatus, workflow: workflowPart.value, branch: branchPart.value)
+        }
+        return message
+    }
+
+    private struct SanitizedPromptField {
+        let value: String
+        let wasSuspicious: Bool
+    }
+
+    private func sanitizePromptField(_ raw: String, placeholder: String) -> SanitizedPromptField {
+        let cappedRaw = String(raw.prefix(120))
+        let lowerRaw = cappedRaw.lowercased()
+        let suspiciousMarkers = [
+            "ignore previous",
+            "ignore above",
+            "system prompt",
+            "assistant:",
+            "user:",
+            "```",
+            "<script",
+            "</script>",
+            "drop table",
+        ]
+        let containsSuspiciousMarker = suspiciousMarkers.contains { lowerRaw.contains($0) }
+        let containsControlCharacters = cappedRaw.unicodeScalars.contains(where: { scalar in
+            (scalar.value < 32 || scalar.value == 127) && scalar.value != 32
+        })
+        let isSuspicious = containsSuspiciousMarker || containsControlCharacters
+
+        if isSuspicious {
+            return SanitizedPromptField(value: placeholder, wasSuspicious: true)
         }
 
-        Log.app.info("CIStatusMonitor: ticker → \(message)")
-        IslandWindowManager.shared.showTickerNotification(message)
+        let allowedScalars = cappedRaw.unicodeScalars.filter { scalar in
+            scalar.isASCII && (
+                scalar.properties.isAlphabetic ||
+                scalar.properties.numericType != nil ||
+                scalar.value == 32 ||
+                scalar.value == 45 ||
+                scalar.value == 95 ||
+                scalar.value == 46 ||
+                scalar.value == 47 ||
+                scalar.value == 58
+            )
+        }
+
+        let normalized = String(String.UnicodeScalarView(allowedScalars))
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return SanitizedPromptField(value: normalized.isEmpty ? placeholder : normalized, wasSuspicious: false)
     }
 
     private func fallbackMessage(repo: String, to status: CIAggregateStatus, workflow: String, branch: String) -> String {

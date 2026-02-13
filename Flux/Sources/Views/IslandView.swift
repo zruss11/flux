@@ -57,6 +57,7 @@ struct IslandView: View {
 
     private let closedActiveWidthBoost: CGFloat = 72
     private let closedIndicatorLatchDuration: TimeInterval = 1.6
+    private let tickerMinimumRemainingDuration: TimeInterval = 0.6
 
     private var closedIndicatorSlotWidth: CGFloat {
         showClosedActivityIndicators ? (closedActiveWidthBoost / 2) : 0
@@ -147,6 +148,11 @@ struct IslandView: View {
     private var isExpanded: Bool { windowManager.isExpanded }
     private var isHovering: Bool { windowManager.isHovering }
     private var hasNotch: Bool { windowManager.hasNotch }
+    private var shouldShowTickerWhenClosed: Bool {
+        windowManager.showingTickerNotification
+            && !isExpanded
+            && windowManager.tickerRemainingDuration > tickerMinimumRemainingDuration
+    }
 
     private var messageCount: Int {
         conversationStore.activeConversation?.messages.count ?? 0
@@ -256,7 +262,7 @@ struct IslandView: View {
             }
 
             // CI ticker bar — extends organically from the island's bottom edge.
-            if windowManager.showingTickerNotification, !isExpanded {
+            if shouldShowTickerWhenClosed {
                 TickerBarView(
                     message: windowManager.tickerNotificationMessage,
                     barWidth: currentWidth + hoverWidthBoost,

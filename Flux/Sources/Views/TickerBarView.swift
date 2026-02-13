@@ -17,7 +17,6 @@ struct TickerBarView: View {
     @State private var textWidth: CGFloat = 0
     @State private var scrollOffset: CGFloat = 0
     @State private var revealed = false
-    @State private var dismissed = false
 
     private let barHeight: CGFloat = 28
 
