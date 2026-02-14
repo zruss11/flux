@@ -140,14 +140,30 @@ final class VoiceInput {
 
         switch mode {
         case .liveDeepgram:
-            let deepgramAPIKey = (UserDefaults.standard.string(forKey: STTSettings.deepgramAPIKey) ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let deepgramAPIKey = STTSettings.deepgramKey
             guard !deepgramAPIKey.isEmpty else {
                 onFailure?("Deepgram API key is missing. Set it in Settings.")
                 return false
             }
 
-        case .live, .batchOnDevice:
+        case .live:
+            // When using Deepgram, skip Apple Speech gating.
+            if STTProvider.selected != .deepgram {
+                guard #available(macOS 26.0, *) else {
+                    Log.voice.error("On-device speech transcription requires macOS 26+")
+                    onFailure?("On-device transcription requires macOS 26 or newer.")
+                    return false
+                }
+
+                let speechPermitted = await ensureSpeechRecognitionPermission()
+                guard speechPermitted else {
+                    Log.voice.warning("Speech recognition permission not granted")
+                    onFailure?("Speech recognition permission not granted.")
+                    return false
+                }
+            }
+
+        case .batchOnDevice:
             guard #available(macOS 26.0, *) else {
                 Log.voice.error("On-device speech transcription requires macOS 26+")
                 onFailure?("On-device transcription requires macOS 26 or newer.")
@@ -296,8 +312,7 @@ final class VoiceInput {
             return false
         }
 
-        let deepgramAPIKey = (UserDefaults.standard.string(forKey: STTSettings.deepgramAPIKey) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let deepgramAPIKey = STTSettings.deepgramKey
         guard !deepgramAPIKey.isEmpty else {
             cleanUp()
             failureCallback?("Deepgram API key is missing. Set it in Settings.")
@@ -523,6 +538,7 @@ final class VoiceInput {
             let finalText = await session.finish()
             self.transcript = finalText
             if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                session.invalidate()
                 failureCallback?("No speech detected.")
             } else {
                 callback?(finalText)

@@ -5,7 +5,7 @@ struct SettingsView: View {
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage(STTSettings.providerKey) private var sttProviderRaw = STTProvider.appleOnDevice.rawValue
-    @AppStorage(STTSettings.deepgramAPIKey) private var deepgramAPIKey = ""
+    @State private var deepgramAPIKey = STTSettings.deepgramKey
 
     @State private var automationService = AutomationService.shared
     @State private var showAutomationsManager = false
@@ -22,10 +22,15 @@ struct SettingsView: View {
 
                 SecureField("Deepgram API Key", text: $deepgramAPIKey)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: deepgramAPIKey) { _, newValue in
+                        STTSettings.setDeepgramKey(newValue)
+                    }
 
-                Text("Deepgram live streaming requires a valid API key when Provider is set to Deepgram.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if sttProviderRaw == STTProvider.deepgram.rawValue {
+                    Text("Deepgram live streaming requires a valid API key when Provider is set to Deepgram.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("AI") {

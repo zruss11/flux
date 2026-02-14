@@ -924,7 +924,7 @@ struct IslandSettingsView: View {
     @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
     @AppStorage(STTSettings.providerKey) private var sttProviderRaw = STTProvider.appleOnDevice.rawValue
-    @AppStorage(STTSettings.deepgramAPIKey) private var deepgramAPIKey = ""
+    @State private var deepgramAPIKey = STTSettings.deepgramKey
     @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
     @AppStorage("ciTickerDuration") private var ciTickerDuration: Double = 6.0
 
@@ -1154,6 +1154,9 @@ struct IslandSettingsView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(.white)
                             .focused($fieldFocused)
+                            .onChange(of: deepgramAPIKey) { _, newValue in
+                                STTSettings.setDeepgramKey(newValue)
+                            }
                             .onSubmit { editingField = nil }
                             .onAppear {
                                 IslandWindowManager.shared.makeKeyIfNeeded()

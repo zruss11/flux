@@ -203,7 +203,7 @@ final class DictationManager {
                 }
             }
 
-            let preferredMode: VoiceInputMode = STTProvider.selected == .deepgram ? .liveDeepgram : .batchOnDevice
+            let preferredMode = STTProvider.selected.preferredVoiceInputMode
 
             let started = await input.startRecording(
                 mode: preferredMode,

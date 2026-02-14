@@ -1,10 +1,18 @@
 import Foundation
 import os
 
-final class DeepgramLiveTranscriptionSession {
+final class DeepgramLiveTranscriptionSession: @unchecked Sendable {
     private let session: URLSession
     private let socketTask: URLSessionWebSocketTask
-    private let transcriptLock = OSAllocatedUnfairLock(initialState: "")
+
+    /// Accumulated transcript segments from Deepgram.
+    private let transcriptLock = OSAllocatedUnfairLock(initialState: [String]())
+
+    /// Called on the caller's queue when the WebSocket encounters a fatal error.
+    var onError: ((Error) -> Void)?
+
+    /// Continuation used to signal that the final transcript has arrived after a Finalize message.
+    private let finalizeContinuation = OSAllocatedUnfairLock<CheckedContinuation<Void, Never>?>(initialState: nil)
 
     private init(session: URLSession, socketTask: URLSessionWebSocketTask) {
         self.session = session
@@ -46,18 +54,31 @@ final class DeepgramLiveTranscriptionSession {
     }
 
     func finish() async -> String {
-        let finalizePayload = "{\"type\":\"Finalize\"}"
-        if let data = finalizePayload.data(using: .utf8) {
-            try? await socketTask.send(.data(data))
+        // Send finalize as a text frame per Deepgram's WebSocket API.
+        try? await socketTask.send(.string("{\"type\":\"Finalize\"}"))
+
+        // Wait for Deepgram to send the final transcript (up to 3 s timeout).
+        await withCheckedContinuation { continuation in
+            finalizeContinuation.withLock { $0 = continuation }
+
+            // Safety timeout so we never block indefinitely.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                self?.resumeFinalizeContinuationIfNeeded()
+            }
         }
 
-        // Let Deepgram flush final hypothesis before closure.
-        try? await Task.sleep(for: .milliseconds(250))
-
         socketTask.cancel(with: .normalClosure, reason: nil)
-        session.invalidateAndCancel()
+        session.finishTasksAndInvalidate()
 
-        return transcriptLock.withLock { $0 }.trimmingCharacters(in: .whitespacesAndNewlines)
+        return transcriptLock.withLock { segments in
+            segments.joined(separator: " ")
+        }.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Invalidates the URLSession (for error paths where `finish()` is never called).
+    func invalidate() {
+        socketTask.cancel(with: .abnormalClosure, reason: nil)
+        session.invalidateAndCancel()
     }
 
     private func receiveLoop() {
@@ -66,16 +87,41 @@ final class DeepgramLiveTranscriptionSession {
             switch result {
             case .success(let message):
                 if let jsonData = message.payloadData,
-                   let response = try? JSONDecoder().decode(DeepgramMessage.self, from: jsonData),
-                   let transcript = response.channel?.alternatives?.first?.transcript,
-                   !transcript.isEmpty {
-                    transcriptLock.withLock { $0 = transcript }
+                   let response = try? JSONDecoder().decode(DeepgramMessage.self, from: jsonData) {
+
+                    // Check if this is a final result (is_final == true) which
+                    // indicates the end of an utterance segment.
+                    if let transcript = response.channel?.alternatives?.first?.transcript,
+                       !transcript.isEmpty {
+                        if response.isFinal == true {
+                            transcriptLock.withLock { $0.append(transcript) }
+
+                            // If we were waiting for a finalize response, resume.
+                            if response.speechFinal == true || response.type == "Finalize" {
+                                resumeFinalizeContinuationIfNeeded()
+                            }
+                        }
+                    }
+
+                    // A Finalize response from Deepgram signals all data has been flushed.
+                    if response.type == "Finalize" {
+                        resumeFinalizeContinuationIfNeeded()
+                    }
                 }
                 receiveLoop()
 
             case .failure(let error):
                 Log.voice.error("Deepgram receive loop ended: \(error.localizedDescription, privacy: .public)")
+                session.invalidateAndCancel()
+                onError?(error)
             }
+        }
+    }
+
+    private func resumeFinalizeContinuationIfNeeded() {
+        finalizeContinuation.withLock { cont in
+            cont?.resume()
+            cont = nil
         }
     }
 }
@@ -103,6 +149,16 @@ private struct DeepgramMessage: Decodable {
     }
 
     let channel: Channel?
+    let type: String?
+    let isFinal: Bool?
+    let speechFinal: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case channel
+        case type
+        case isFinal = "is_final"
+        case speechFinal = "speech_final"
+    }
 }
 
 enum DeepgramError: LocalizedError {

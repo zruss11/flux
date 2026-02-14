@@ -140,7 +140,7 @@ struct ChatView: View {
                                     sendMessage()
                                 }
                                 if !started,
-                                   STTProvider.selected == .appleOnDevice,
+                                   STTProvider.selected != .deepgram,
                                    SFSpeechRecognizer.authorizationStatus() != .authorized {
                                     showSpeechPermissionAlert = true
                                 }
