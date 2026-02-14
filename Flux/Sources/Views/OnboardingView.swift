@@ -110,8 +110,7 @@ struct OnboardingView: View {
                             Button("Restart Flux") {
                                 AppRelauncher.relaunch()
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            .buttonStyle(FluxButtonStyle())
                         }
                     }
                 }
