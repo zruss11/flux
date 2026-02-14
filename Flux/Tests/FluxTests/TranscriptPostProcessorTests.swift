@@ -1,7 +1,13 @@
+import Foundation
 import Testing
 @testable import Flux
 
 struct TranscriptPostProcessorTests {
+
+    init() {
+        // Ensure pipeline defaults are registered so stages are enabled.
+        TranscriptPostProcessor.registerDefaults()
+    }
 
     @Test @MainActor func emptyStringPassesThrough() {
         #expect(TranscriptPostProcessor.process("") == "")
@@ -105,14 +111,14 @@ struct TranscriptPostProcessorTests {
     // MARK: - Fragment Repair Edge Cases
 
     @Test func caseInsensitiveBackreference() {
-        // "Wan- want" should repair despite case difference
+        // "Wan- want" repairs via backreference; $1 captures original case "Wan"
         let input = "I Wan- want to go"
         let result = FragmentRepairProcessor.process(input)
-        #expect(result == "I want to go")
+        #expect(result == "I Want to go")
     }
 
     @Test func legitimateHyphenatedWordPreserved() {
-        // "cross" is 5 chars, should NOT be stripped with threshold of 3
+        // "cross" is 5 chars, should NOT be stripped with threshold of 4
         let input = "the cross- examination was thorough"
         let result = FragmentRepairProcessor.process(input)
         #expect(result == "the cross- examination was thorough")

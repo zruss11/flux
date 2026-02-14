@@ -33,10 +33,13 @@ struct IntentCorrectionProcessor {
         guard !text.isEmpty else { return text }
 
         var result = text
+        var didCorrect = false
 
         // Scan for the *last* occurrence of any trigger phrase. This handles
         // chained corrections like "A, wait, B, no, C" → "C".
         while let (_, range) = findLastTrigger(in: result) {
+            didCorrect = true
+
             // Keep everything after the trigger phrase.
             let afterTrigger = result[range.upperBound...]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -54,15 +57,17 @@ struct IntentCorrectionProcessor {
                 break
             }
 
-            // Optionally keep a sentence-level connector. If the text before
-            // the trigger ends with a period, keep the part before as a
-            // separate sentence, otherwise discard it entirely.
+            // If the text before the trigger contains a sentence boundary (.),
+            // keep all completed sentences and only discard the partial clause
+            // after the last period.
             let beforeTrigger = String(result[..<range.lowerBound])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: ","))
 
-            if beforeTrigger.hasSuffix(".") {
-                result = beforeTrigger + " " + capitalizeFirst(afterTrigger)
+            if let lastPeriod = beforeTrigger.lastIndex(of: ".") {
+                let completedSentences = String(beforeTrigger[...lastPeriod])
+                    .trimmingCharacters(in: .whitespaces)
+                result = completedSentences + " " + capitalizeFirst(afterTrigger)
             } else {
                 result = afterTrigger
             }
@@ -75,8 +80,10 @@ struct IntentCorrectionProcessor {
         )
         result = result.trimmingCharacters(in: .whitespaces)
 
-        // Recapitalize the first character.
-        result = capitalizeFirst(result)
+        // Recapitalize the first character only if a correction was applied.
+        if didCorrect {
+            result = capitalizeFirst(result)
+        }
 
         return result
     }

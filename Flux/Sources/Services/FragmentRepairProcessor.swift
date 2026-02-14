@@ -13,7 +13,7 @@ struct FragmentRepairProcessor {
     // Maximum character count for the pre-dash portion of a word fragment
     // before it is considered an orphan and stripped.  Kept conservative
     // to avoid removing legitimate prefixes like "cross-" or "trans-".
-    private static let maxOrphanFragmentLength = 3
+    private static let maxOrphanFragmentLength = 4
 
     // Matches a broken word fragment (word + hyphen) at a word boundary that
     // is immediately followed by a space.  Used as a fallback to strip
