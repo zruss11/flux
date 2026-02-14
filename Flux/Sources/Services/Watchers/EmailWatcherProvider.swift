@@ -9,6 +9,19 @@ struct EmailWatcherProvider: WatcherProvider {
 
     private static let gmailBase = "https://gmail.googleapis.com/gmail/v1/users/me"
 
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static let rfc2822Formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        return f
+    }()
+
     func check(
         config: Watcher,
         credentials: [String: String],
@@ -18,6 +31,9 @@ struct EmailWatcherProvider: WatcherProvider {
             Log.app.warning("EmailWatcher: no gmail_token credential provided")
             return WatcherCheckResult(alerts: [])
         }
+
+        // Capture checkpoint at check START to avoid dropping emails that arrive during the run.
+        let checkStartEpochMs = Int(Date().timeIntervalSince1970 * 1000)
 
         let lastCheckMs = Int(previousState?["lastCheckEpochMs"] ?? "")
             ?? Int(Date().addingTimeInterval(-300).timeIntervalSince1970 * 1000)
@@ -34,7 +50,11 @@ struct EmailWatcherProvider: WatcherProvider {
         let listURL = "\(Self.gmailBase)/messages?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")&maxResults=\(maxResults)"
 
         // List unread messages
-        var listReq = URLRequest(url: URL(string: listURL)!)
+        guard let listParsedURL = URL(string: listURL) else {
+            throw WatcherError.apiError("EmailWatcher: invalid Gmail list URL")
+        }
+        var listReq = URLRequest(url: listParsedURL)
+        listReq.timeoutInterval = 30
         listReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         let (listData, listResp) = try await URLSession.shared.data(for: listReq)
@@ -45,27 +65,34 @@ struct EmailWatcherProvider: WatcherProvider {
 
         let listJSON = try JSONSerialization.jsonObject(with: listData) as? [String: Any]
         guard let messageRefs = listJSON?["messages"] as? [[String: Any]], !messageRefs.isEmpty else {
-            return WatcherCheckResult(alerts: [], nextState: ["lastCheckEpochMs": "\(Int(Date().timeIntervalSince1970 * 1000))"])
+            return WatcherCheckResult(alerts: [], nextState: ["lastCheckEpochMs": "\(checkStartEpochMs)"])
         }
 
         // Fetch details for each message
         var alerts: [WatcherAlert] = []
         for ref in messageRefs.prefix(maxResults) {
             guard let messageId = ref["id"] as? String else { continue }
-            if let alert = try? await fetchMessageAlert(messageId: messageId, token: token, config: config) {
+            do {
+                let alert = try await fetchMessageAlert(messageId: messageId, token: token, config: config)
                 alerts.append(alert)
+            } catch {
+                Log.app.warning("EmailWatcher: failed to fetch message \(messageId): \(error.localizedDescription)")
             }
         }
 
         return WatcherCheckResult(
             alerts: alerts,
-            nextState: ["lastCheckEpochMs": "\(Int(Date().timeIntervalSince1970 * 1000))"]
+            nextState: ["lastCheckEpochMs": "\(checkStartEpochMs)"]
         )
     }
 
     private func fetchMessageAlert(messageId: String, token: String, config: Watcher) async throws -> WatcherAlert {
         let url = "\(Self.gmailBase)/messages/\(messageId)?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date"
-        var req = URLRequest(url: URL(string: url)!)
+        guard let parsedURL = URL(string: url) else {
+            throw WatcherError.apiError("EmailWatcher: invalid message URL for \(messageId)")
+        }
+        var req = URLRequest(url: parsedURL)
+        req.timeoutInterval = 30
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -95,7 +122,7 @@ struct EmailWatcherProvider: WatcherProvider {
             summary: "From: \(from)\n\(snippet)",
             sourceUrl: "https://mail.google.com/mail/u/0/#inbox/\(threadId)",
             suggestedActions: ["Open in Gmail", "Reply", "Archive"],
-            timestamp: ISO8601DateFormatter().date(from: dateStr ?? "") ?? Date(),
+            timestamp: Self.rfc2822Formatter.date(from: dateStr ?? "") ?? Date(),
             dedupeKey: "email:\(messageId)"
         )
     }

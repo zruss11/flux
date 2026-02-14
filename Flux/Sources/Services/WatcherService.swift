@@ -108,6 +108,12 @@ final class WatcherService {
     }
 
     func deleteWatcher(id: String) {
+        // Clean up keychain credentials before removal.
+        if let watcher = watchers.first(where: { $0.id == id }) {
+            for key in watcher.credentialKeys {
+                Self.deleteCredential(watcherId: id, key: key)
+            }
+        }
         engine.stopWatcher(id: id)
         watchers.removeAll { $0.id == id }
         saveWatchers()
@@ -199,6 +205,13 @@ final class WatcherService {
             try KeychainService.setString(value, forKey: "flux.watcher.\(watcherId).\(key)")
         } catch {
             Log.app.error("WatcherService: failed to save credential \(key) for \(watcherId): \(error.localizedDescription)")
+        }
+
+        // Restart the watcher so it picks up the new credential.
+        let service = WatcherService.shared
+        if let watcher = service.watchers.first(where: { $0.id == watcherId }), watcher.enabled {
+            let creds = service.loadCredentialsFromKeychain(for: watcher)
+            service.engine.startWatcher(watcher, credentials: creds)
         }
     }
 

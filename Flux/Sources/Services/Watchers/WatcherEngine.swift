@@ -122,6 +122,12 @@ final class WatcherEngine {
                 previousState: previousState
             )
 
+            // Suppress late results if the watcher was stopped during the check.
+            guard timers[watcher.id] != nil else {
+                Log.app.info("WatcherEngine: \(watcher.name) was stopped during check — discarding results")
+                return
+            }
+
             // Persist state.
             if let nextState = result.nextState {
                 states[watcher.id] = nextState

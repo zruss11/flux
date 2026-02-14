@@ -10,6 +10,12 @@ struct GitHubWatcherProvider: WatcherProvider {
 
     private static let apiBase = "https://api.github.com"
 
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     func check(
         config: Watcher,
         credentials: [String: String],
@@ -26,8 +32,11 @@ struct GitHubWatcherProvider: WatcherProvider {
             "X-GitHub-Api-Version": "2022-11-28",
         ]
 
+        // Capture checkpoint at check START to avoid missing events during the run.
+        let checkStartISO = Self.isoFormatter.string(from: Date())
+
         let lastCheckISO = previousState?["lastCheckISO"]
-            ?? ISO8601DateFormatter().string(from: Date().addingTimeInterval(-300))
+            ?? Self.isoFormatter.string(from: Date().addingTimeInterval(-300))
 
         var alerts: [WatcherAlert] = []
 
@@ -50,7 +59,7 @@ struct GitHubWatcherProvider: WatcherProvider {
 
         return WatcherCheckResult(
             alerts: alerts,
-            nextState: ["lastCheckISO": ISO8601DateFormatter().string(from: Date())]
+            nextState: ["lastCheckISO": checkStartISO]
         )
     }
 
@@ -58,7 +67,11 @@ struct GitHubWatcherProvider: WatcherProvider {
 
     private func checkNotifications(config: Watcher, headers: [String: String], since: String) async throws -> [WatcherAlert] {
         let urlString = "\(Self.apiBase)/notifications?since=\(since.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? since)&all=false"
-        var req = URLRequest(url: URL(string: urlString)!)
+        guard let url = URL(string: urlString) else {
+            throw WatcherError.apiError("GitHubWatcher: invalid notifications URL")
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 30
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
 
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -103,7 +116,7 @@ struct GitHubWatcherProvider: WatcherProvider {
             summary: "\(repoFullName) · \(formatReason(reason))",
             sourceUrl: sourceUrl,
             suggestedActions: suggestedActions(for: reason),
-            timestamp: ISO8601DateFormatter().date(from: updatedAt) ?? Date(),
+            timestamp: Self.isoFormatter.date(from: updatedAt) ?? Date(),
             dedupeKey: "gh-notif:\(id)"
         )
     }
@@ -112,7 +125,12 @@ struct GitHubWatcherProvider: WatcherProvider {
 
     private func checkWorkflowRuns(config: Watcher, headers: [String: String], repo: String, since: String) async throws -> [WatcherAlert] {
         let urlString = "\(Self.apiBase)/repos/\(repo)/actions/runs?status=failure&per_page=5"
-        var req = URLRequest(url: URL(string: urlString)!)
+        guard let url = URL(string: urlString) else {
+            Log.app.warning("GitHubWatcher: invalid workflow runs URL for repo \(repo)")
+            return []
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 30
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
 
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -125,14 +143,14 @@ struct GitHubWatcherProvider: WatcherProvider {
             return []
         }
 
-        let sinceDate = ISO8601DateFormatter().date(from: since) ?? Date.distantPast
+        let sinceDate = Self.isoFormatter.date(from: since) ?? Date.distantPast
 
         return runs.compactMap { run -> WatcherAlert? in
             guard let runId = run["id"] as? Int,
                   let name = run["name"] as? String,
                   let branch = run["head_branch"] as? String,
                   let updatedAtStr = run["updated_at"] as? String,
-                  let updatedAt = ISO8601DateFormatter().date(from: updatedAtStr),
+                  let updatedAt = Self.isoFormatter.date(from: updatedAtStr),
                   updatedAt > sinceDate,
                   let htmlUrl = run["html_url"] as? String else {
                 return nil
