@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Usage: bin/get-pr-comments PR_NUMBER
+# Lists all unresolved PR review threads with their thread IDs and summaries.
+set -euo pipefail
+
+PR_NUMBER="${1:?Usage: bin/get-pr-comments PR_NUMBER}"
+REPO="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+
+# Use GraphQL to get review threads with resolution status
+gh api graphql -f query='
+query($owner: String!, $repo: String!, $pr: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first: 1) {
+            nodes {
+              body
+            }
+          }
+        }
+      }
+    }
+  }
+}' -f owner="${REPO%%/*}" -f repo="${REPO##*/}" -F pr="$PR_NUMBER" \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | {
+    thread_id: .id,
+    path: .path,
+    line: .line,
+    outdated: .isOutdated,
+    body: (.comments.nodes[0].body | split("\n")[0:3] | join(" | "))
+  }'
