@@ -49,7 +49,10 @@ enum STTSettings {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !legacyValue.isEmpty {
             setDeepgramKey(legacyValue)
-            UserDefaults.standard.removeObject(forKey: deepgramAPIKey)
+            // Only remove legacy key if Keychain write succeeded
+            if readKeychain(account: keychainAccount) != nil {
+                UserDefaults.standard.removeObject(forKey: deepgramAPIKey)
+            }
         }
         return legacyValue
     }

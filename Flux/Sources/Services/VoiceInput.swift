@@ -184,9 +184,6 @@ final class VoiceInput {
 
         switch mode {
         case .live:
-            if STTProvider.selected == .deepgram {
-                return await beginDeepgramLiveRecording()
-            }
             return await beginLiveRecording()
         case .liveDeepgram:
             return await beginDeepgramLiveRecording()
@@ -328,6 +325,15 @@ final class VoiceInput {
 
         do {
             let session = try DeepgramLiveTranscriptionSession.connect(apiKey: deepgramAPIKey)
+            session.onError = { [weak self] error in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if self.isRecording {
+                        self.cleanUp()
+                        self.onFailure?("Deepgram connection lost: \(error.localizedDescription)")
+                    }
+                }
+            }
             liveSessionAny = session
 
             inputNode.installTap(
@@ -536,9 +542,9 @@ final class VoiceInput {
             self.audioEngine = nil
 
             let finalText = await session.finish()
+            session.invalidate()
             self.transcript = finalText
             if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                session.invalidate()
                 failureCallback?("No speech detected.")
             } else {
                 callback?(finalText)
