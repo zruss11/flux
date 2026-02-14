@@ -474,6 +474,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+
+
     private func handleToolRequest(toolName: String, input: [String: Any]) async -> String {
         let intInput: (String) -> Int? = { key in
             if let value = input[key] as? Int {
