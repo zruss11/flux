@@ -23,4 +23,3 @@ mutation($threadId: ID!) {
 
 gh api graphql -f query="$mutation" -F threadId="$thread_id" >/dev/null
 echo "resolved: $thread_id"
-
