@@ -41,6 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         SecretMigration.migrateUserDefaultsTokensToKeychainIfNeeded()
+        TranscriptPostProcessor.registerDefaults()
 
         setupStatusItem()
         setupAutomationThreadObserver()

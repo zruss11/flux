@@ -190,7 +190,7 @@ struct ChatView: View {
                                     return
                                 }
                                 let started = await voiceInput.startRecording(mode: .live) { transcript in
-                                    inputText = DictionaryCorrector.apply(transcript, using: CustomDictionaryStore.shared.entries)
+                                    inputText = TranscriptPostProcessor.process(transcript)
                                     sendMessage()
                                 }
                                 if !started && SFSpeechRecognizer.authorizationStatus() != .authorized {
