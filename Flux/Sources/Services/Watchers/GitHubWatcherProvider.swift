@@ -21,6 +21,9 @@ struct GitHubWatcherProvider: WatcherProvider {
             return WatcherCheckResult(alerts: [])
         }
 
+        // Capture checkpoint at check START to avoid missing events during the run.
+        let checkStartISO = ISO8601DateFormatter().string(from: Date())
+
         let lastCheckISO = previousState?["lastCheckISO"]
             ?? ISO8601DateFormatter().string(from: Date().addingTimeInterval(-300))
 
@@ -48,7 +51,7 @@ struct GitHubWatcherProvider: WatcherProvider {
 
         return WatcherCheckResult(
             alerts: alerts,
-            nextState: ["lastCheckISO": ISO8601DateFormatter().string(from: Date())]
+            nextState: ["lastCheckISO": checkStartISO]
         )
     }
 

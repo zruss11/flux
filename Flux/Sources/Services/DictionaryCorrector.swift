@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct DictionaryCorrector {
 
@@ -49,6 +50,8 @@ struct DictionaryCorrector {
             var seen = Set<String>()
 
             for pair in pairs {
+                let trimmed = pair.alias.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
                 let key = pair.alias.lowercased()
                 if !seen.contains(key) {
                     seen.insert(key)
@@ -70,7 +73,7 @@ struct DictionaryCorrector {
                 replacementsMap = map
                 cache = (cacheKey, regex, map)
             } catch {
-                print("Failed to compile regex for dictionary: \(error)")
+                Log.app.error("Failed to compile regex for dictionary: \(error)")
                 cache = nil
                 return text
             }

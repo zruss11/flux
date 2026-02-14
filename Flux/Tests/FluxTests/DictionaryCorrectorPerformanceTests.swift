@@ -69,6 +69,9 @@ final class DictionaryCorrectorPerformanceTests: XCTestCase {
         XCTAssertEqual(DictionaryCorrector.apply("valid", using: entries), "Valid")
         // Original text should pass through unchanged if only empty/whitespace aliases exist
         XCTAssertEqual(DictionaryCorrector.apply("hello world", using: entries), "hello world")
+        // Verify non-word-char inputs aren't corrupted by empty alias matching
+        XCTAssertEqual(DictionaryCorrector.apply("   ", using: entries), "   ")
+        XCTAssertEqual(DictionaryCorrector.apply("(hello)", using: entries), "(hello)")
     }
 
     func testRegexSpecialCharactersInAliases() {

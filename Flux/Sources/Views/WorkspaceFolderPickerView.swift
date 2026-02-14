@@ -22,11 +22,12 @@ struct WorkspaceFolderPickerView: View {
     @State private var showHidden: Bool = false
     @State private var contents: [FileItem] = []
     @State private var errorMessage: String?
+    @State private var pathText: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
-            // Breadcrumb bar
-            breadcrumbBar
+            // Editable path bar
+            pathBar
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
 
@@ -49,9 +50,11 @@ struct WorkspaceFolderPickerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: 460)
         .onAppear {
+            pathText = currentDirectory.path
             loadContents()
         }
-        .onChange(of: currentDirectory) { _, _ in
+        .onChange(of: currentDirectory) { _, newValue in
+            pathText = newValue.path
             loadContents()
         }
         .onChange(of: showHidden) { _, _ in
@@ -59,66 +62,69 @@ struct WorkspaceFolderPickerView: View {
         }
     }
 
-    // MARK: - Breadcrumb Bar
+    // MARK: - Path Bar
 
-    private var pathSegments: [(name: String, url: URL)] {
-        var segments: [(name: String, url: URL)] = []
-        var url = currentDirectory.standardizedFileURL
+    private var pathBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.35))
 
-        // Build from current dir back to root
-        while url.path != "/" {
-            let name = url.lastPathComponent
-            segments.insert((name: name, url: url), at: 0)
-            url = url.deletingLastPathComponent()
+            TextField("/path/to/folder", text: $pathText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+                .onSubmit {
+                    navigateToTypedPath()
+                }
+                .onExitCommand {
+                    pathText = currentDirectory.path  // Reset on Escape
+                }
+
+            Button {
+                navigateToTypedPath()
+            } label: {
+                let isModified = pathText.trimmingCharacters(in: .whitespacesAndNewlines) != currentDirectory.path
+                Image(systemName: isModified ? "arrow.right.circle.fill" : "checkmark.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(isModified ? .blue.opacity(0.7) : .green.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .help(pathText.trimmingCharacters(in: .whitespacesAndNewlines) != currentDirectory.path ? "Go to path" : "Current directory")
         }
-        // Add root
-        segments.insert((name: "/", url: URL(fileURLWithPath: "/")), at: 0)
-
-        // Show abbreviated: last 4 segments maximum
-        if segments.count > 4 {
-            let ellipsis: [(name: String, url: URL)] = [segments[0], (name: "...", url: segments[0].url)]
-            return ellipsis + segments.suffix(3)
-        }
-
-        return segments
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                )
+        )
     }
 
-    private var breadcrumbBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(Array(pathSegments.enumerated()), id: \.offset) { index, segment in
-                    if index > 0 {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.3))
-                    }
+    private func navigateToTypedPath() {
+        errorMessage = nil  // Clear any previous errors
+        let trimmed = pathText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let expanded = NSString(string: trimmed).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded)
 
-                    if segment.name == "..." {
-                        Text("...")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                    } else {
-                        Button {
-                            navigateTo(segment.url)
-                        } label: {
-                            Text(segment.name)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .lineLimit(1)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(.white.opacity(0.06))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+            errorMessage = "Path not found:\n\(trimmed)"
+            pathText = currentDirectory.path
+            return
         }
+
+        guard isDir.boolValue else {
+            errorMessage = "Not a directory:\n\(trimmed)"
+            pathText = currentDirectory.path
+            return
+        }
+
+        navigateTo(url)
     }
 
     // MARK: - Quick Access Row
@@ -369,6 +375,7 @@ struct WorkspaceFolderPickerView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             currentDirectory = url
             selectedURL = nil
+            errorMessage = nil  // Clear any previous errors
         }
     }
 }
