@@ -5,6 +5,8 @@ struct SettingsView: View {
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
 
+    @AppStorage(TranscriptPostProcessor.intentCorrectionKey) private var intentCorrectionEnabled = true
+
     @State private var automationService = AutomationService.shared
     @State private var showAutomationsManager = false
 
@@ -57,6 +59,14 @@ struct SettingsView: View {
                 Button("Manage Automations") {
                     showAutomationsManager = true
                 }
+            }
+
+            Section("Dictation") {
+                Toggle("Intent Correction", isOn: $intentCorrectionEnabled)
+
+                Text("Detects self-corrections like \"wait\", \"scratch that\", or \"actually\" and keeps only the corrected phrase.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
