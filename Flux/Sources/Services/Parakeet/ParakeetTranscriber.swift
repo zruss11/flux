@@ -4,11 +4,11 @@ import os
 
 // MARK: - ParakeetTranscriber
 
-/// CoreML-based RNNT/TDT transcriber using Parakeet TDT 0.6B models.
+/// CoreML-based RNNT/TDT transcriber using Parakeet TDT v3 models.
 ///
 /// Pipeline:
 /// ```
-/// PCM Audio → FBank Features → Preprocessor → Encoder → Decoder + Joint → Token IDs → Text
+/// PCM Audio → MelEncoder (or software FBank) → Preprocessor → Encoder → Decoder + Joint → Token IDs → Text
 /// ```
 ///
 /// This transcriber operates in batch mode: it processes a complete audio recording
@@ -66,7 +66,14 @@ actor ParakeetTranscriber {
         let startTime = CFAbsoluteTimeGetCurrent()
 
         // Step 1: Extract mel-scale features.
-        let melFeatures = featureExtractor.extract(from: pcmData)
+        // Prefer the CoreML MelEncoder model if available; fall back to software FBank.
+        let melFeatures: [[Float]]
+        if let melEncoderModel = modelManager.melEncoderModel {
+            melFeatures = try extractFeaturesWithCoreML(pcmData: pcmData, melEncoder: melEncoderModel)
+        } else {
+            melFeatures = featureExtractor.extract(from: pcmData)
+        }
+
         guard !melFeatures.isEmpty else {
             throw TranscriptionError.featureExtractionFailed
         }
@@ -105,6 +112,63 @@ actor ParakeetTranscriber {
         Log.voice.info("[ParakeetTranscriber] Total: \(String(format: "%.1f", totalTime * 1000))ms, RTF: \(String(format: "%.2f", realtimeFactor))")
 
         return text
+    }
+
+    // MARK: - CoreML MelEncoder
+
+    /// Extract mel features using the CoreML MelEncoder model.
+    private func extractFeaturesWithCoreML(pcmData: Data, melEncoder: MLModel) throws -> [[Float]] {
+        // Convert Int16 PCM to Float32 in range [-1, 1] (the v3 model expects Float32 PCM).
+        let sampleCount = pcmData.count / MemoryLayout<Int16>.size
+        let inputArray = try MLMultiArray(
+            shape: [1, NSNumber(value: sampleCount)],
+            dataType: .float32
+        )
+
+        pcmData.withUnsafeBytes { rawBuffer in
+            guard let int16Ptr = rawBuffer.bindMemory(to: Int16.self).baseAddress else { return }
+            for i in 0..<sampleCount {
+                inputArray[i] = NSNumber(value: Float(int16Ptr[i]) / Float(Int16.max))
+            }
+        }
+
+        let input = try MLDictionaryFeatureProvider(
+            dictionary: ["audio" as NSString: inputArray]
+        )
+        let output = try melEncoder.prediction(from: input)
+
+        // Extract mel features from output.
+        guard let melArray = extractFirstMultiArray(from: output) else {
+            throw TranscriptionError.featureExtractionFailed
+        }
+
+        // Convert MLMultiArray to [[Float]]. Shape is typically [1, numFrames, numMelBins].
+        let shape = melArray.shape.map(\.intValue)
+        let numFrames: Int
+        let numMelBins: Int
+
+        if shape.count >= 3 {
+            numFrames = shape[1]
+            numMelBins = shape[2]
+        } else if shape.count == 2 {
+            numFrames = shape[0]
+            numMelBins = shape[1]
+        } else {
+            return []
+        }
+
+        var features: [[Float]] = []
+        features.reserveCapacity(numFrames)
+
+        for frame in 0..<numFrames {
+            var bins = [Float](repeating: 0, count: numMelBins)
+            for bin in 0..<numMelBins {
+                bins[bin] = melArray[frame * numMelBins + bin].floatValue
+            }
+            features.append(bins)
+        }
+
+        return features
     }
 
     // MARK: - Encoder
