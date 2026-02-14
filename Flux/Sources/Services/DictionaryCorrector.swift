@@ -2,10 +2,14 @@ import Foundation
 
 struct DictionaryCorrector {
 
-    // Cache for compiled regex and replacement map to avoid expensive recompilation.
-    // Keyed by the dictionary entries themselves (which are Hashable).
+    /// Cached compiled regex and replacement map to avoid expensive recompilation.
+    /// Uses only the semantic content (text + aliases) as the cache key, so metadata
+    /// changes like `updatedAt` don't needlessly invalidate the cache.
+    ///
+    /// This is a single static cache designed for the app's one global dictionary.
+    /// If multiple dictionary sets were used concurrently, they would thrash this cache.
     @MainActor
-    private static var cache: (entries: [DictionaryEntry], regex: NSRegularExpression, replacements: [String: String])?
+    private static var cache: (key: [[String]], regex: NSRegularExpression, replacements: [String: String])?
 
     @MainActor
     static func apply(_ text: String, using entries: [DictionaryEntry]) -> String {
@@ -14,8 +18,11 @@ struct DictionaryCorrector {
         let regex: NSRegularExpression
         let replacementsMap: [String: String]
 
-        // Check if cache is valid (entries match)
-        if let cached = cache, cached.entries == entries {
+        // Build a semantic cache key from only text + aliases (ignores id, dates, etc.)
+        let cacheKey = entries.map { [$0.text] + $0.aliases }
+
+        // Check if cache is valid (semantic content matches)
+        if let cached = cache, cached.key == cacheKey {
             regex = cached.regex
             replacementsMap = cached.replacements
         } else {
@@ -61,9 +68,10 @@ struct DictionaryCorrector {
             do {
                 regex = try NSRegularExpression(pattern: fullPattern, options: .caseInsensitive)
                 replacementsMap = map
-                cache = (entries, regex, map)
+                cache = (cacheKey, regex, map)
             } catch {
                 print("Failed to compile regex for dictionary: \(error)")
+                cache = nil
                 return text
             }
         }
