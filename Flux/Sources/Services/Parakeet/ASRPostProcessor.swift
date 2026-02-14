@@ -177,7 +177,7 @@ struct ASRPostProcessor {
     /// - "send the update send the update" → "send the update"
     /// - "please check please check the file" → "please check the file"
     private static let phraseRepeatPattern = try! NSRegularExpression(
-        pattern: #"\b((?:\w+\s+){1,4}\w+)\s+\1\b"#,
+        pattern: #"\b((?:\w+\s+){0,4}\w+)\s+\1\b"#,
         options: .caseInsensitive
     )
 
@@ -238,10 +238,14 @@ struct ASRPostProcessor {
         for match in matches {
             guard let matchRange = Range(match.range, in: result) else { continue }
             let matchedText = String(result[matchRange])
+                .trimmingCharacters(in: .whitespaces)
 
             if let number = parseSpokenNumber(matchedText) {
                 let formatted = formatNumber(number)
-                result.replaceSubrange(matchRange, with: formatted)
+                // Preserve a trailing space if the match consumed one.
+                let fullMatch = String(result[matchRange])
+                let suffix = fullMatch.hasSuffix(" ") ? " " : ""
+                result.replaceSubrange(matchRange, with: formatted + suffix)
             }
         }
 
