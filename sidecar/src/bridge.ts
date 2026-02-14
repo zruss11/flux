@@ -700,7 +700,6 @@ function handleForkConversation(message: ForkConversationMessage): void {
   };
 
   sessions.set(newConversationId, forkedSession);
-  touchIdle(forkedSession);
   sendToClient(activeClient, {
     type: 'fork_conversation_result',
     conversationId: newConversationId,
