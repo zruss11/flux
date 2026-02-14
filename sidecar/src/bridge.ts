@@ -447,7 +447,7 @@ function sanitizeAppInstruction(instruction: string | undefined): string | undef
   if (trimmed.length === 0) return undefined;
   const maxLen = 2_000;
   const clipped = trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
-  return clipped.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  return clipped.replace(/\r\n|\r/g, '\n');
 }
 
 const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
@@ -1129,8 +1129,7 @@ function flushPendingToolCompletions(session: ConversationSession): void {
   session.pendingToolCompletions.clear();
 }
 
-function buildFluxSystemPrompt(): string {
-  let prompt = `You are Flux, a macOS AI desktop copilot. Your role is to help users accomplish tasks on their Mac by reading their screen when necessary and taking actions on their behalf.
+const FLUX_SYSTEM_PROMPT = `You are Flux, a macOS AI desktop copilot. Your role is to help users accomplish tasks on their Mac by reading their screen when necessary and taking actions on their behalf.
 
 You have access to the following tools:
 
@@ -1166,6 +1165,9 @@ Important guidelines:
 - Ask clarifying questions when the user's request is ambiguous or lacks necessary details
 - When you use memory skills to remember information about the user, apply them silently without announcing that you're doing so
 - For straightforward requests that don't require screen information, proceed directly with the appropriate action`;
+
+function buildFluxSystemPrompt(): string {
+  let prompt = FLUX_SYSTEM_PROMPT;
 
   // Inject live app context so the agent knows what the user is working in.
   // NOTE: This prompt is built once at session start. If the user switches apps
@@ -1593,23 +1595,24 @@ function parseImageToolResult(raw: string): { mediaType: string; data: string } 
   return null;
 }
 
+const TOOL_INPUT_SUMMARY_KEYS = [
+  'path',
+  'file',
+  'target',
+  'command',
+  'script',
+  'query',
+  'url',
+  'text',
+  'content',
+  'id',
+  'name',
+  'scheduleExpression',
+  'schedule',
+];
+
 function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
-  const candidates = [
-    'path',
-    'file',
-    'target',
-    'command',
-    'script',
-    'query',
-    'url',
-    'text',
-    'content',
-    'id',
-    'name',
-    'scheduleExpression',
-    'schedule',
-  ];
-  for (const key of candidates) {
+  for (const key of TOOL_INPUT_SUMMARY_KEYS) {
     const val = input[key];
     if (typeof val === 'string' && val.length > 0) {
       return val.length > 80 ? val.substring(0, 77) + '...' : val;
