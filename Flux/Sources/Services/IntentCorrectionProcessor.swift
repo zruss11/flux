@@ -5,12 +5,15 @@ struct IntentCorrectionProcessor {
     /// Trigger phrases that indicate the speaker is correcting themselves.
     /// When detected, the clause *before* the trigger is discarded and only
     /// the correction (after the trigger) is kept.
+    ///
+    /// All entries are lowercased — matching is done against a lowercased copy
+    /// of the input text.
     private static let triggers = [
         "scratch that",
         "never mind",
         "correction",
         "actually",
-        "I mean",
+        "i mean",
         "sorry",
         "wait",
         "no,",
@@ -33,7 +36,7 @@ struct IntentCorrectionProcessor {
 
         // Scan for the *last* occurrence of any trigger phrase. This handles
         // chained corrections like "A, wait, B, no, C" → "C".
-        while let (trigger, range) = findLastTrigger(in: result) {
+        while let (_, range) = findLastTrigger(in: result) {
             // Keep everything after the trigger phrase.
             let afterTrigger = result[range.upperBound...]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -63,12 +66,6 @@ struct IntentCorrectionProcessor {
             } else {
                 result = afterTrigger
             }
-
-            // Discard trigger "actually" when it appears inside a legitimate
-            // phrase rather than as a correction marker.  The heuristic: if
-            // the remaining text is the same or longer than the original, the
-            // trigger was embedded and we should stop re-scanning.
-            if trigger == "actually" { break }
         }
 
         // Clean up spacing
@@ -86,26 +83,45 @@ struct IntentCorrectionProcessor {
 
     // MARK: - Private Helpers
 
+    /// Finds the last occurrence of any trigger phrase in `text`, matching
+    /// only on word boundaries to avoid false positives (e.g. "wait" inside
+    /// "awaiting").
     private static func findLastTrigger(in text: String) -> (trigger: String, range: Range<String.Index>)? {
         let lowered = text.lowercased()
         var best: (trigger: String, range: Range<String.Index>)? = nil
 
         for trigger in triggers {
-            // Search case-insensitively by working on the lowered copy.
-            if let foundRange = lowered.range(of: trigger, options: .backwards) {
-                if let current = best {
-                    // Keep the one that appears later in the string.
-                    if foundRange.lowerBound > current.range.lowerBound {
-                        // Map range back to the original text indices.
-                        let origRange = text.index(text.startIndex, offsetBy: lowered.distance(from: lowered.startIndex, to: foundRange.lowerBound))
-                            ..< text.index(text.startIndex, offsetBy: lowered.distance(from: lowered.startIndex, to: foundRange.upperBound))
-                        best = (trigger, origRange)
-                    }
-                } else {
-                    let origRange = text.index(text.startIndex, offsetBy: lowered.distance(from: lowered.startIndex, to: foundRange.lowerBound))
-                        ..< text.index(text.startIndex, offsetBy: lowered.distance(from: lowered.startIndex, to: foundRange.upperBound))
+            // Build a word-boundary–aware pattern for the trigger.
+            let escaped = NSRegularExpression.escapedPattern(for: trigger)
+            // Triggers ending with punctuation (like "no,") should not
+            // require a trailing word boundary.
+            let needsTrailingBoundary = trigger.last?.isLetter ?? false
+            let pattern = "\\b" + escaped + (needsTrailingBoundary ? "\\b" : "")
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+                continue
+            }
+
+            let nsRange = NSRange(lowered.startIndex..., in: lowered)
+            // Collect all matches and pick the last one.
+            let matches = regex.matches(in: lowered, range: nsRange)
+            guard let lastMatch = matches.last,
+                  let matchRange = Range(lastMatch.range, in: lowered) else {
+                continue
+            }
+
+            // Map the range from the lowered copy back to the original text.
+            let startOffset = lowered.distance(from: lowered.startIndex, to: matchRange.lowerBound)
+            let endOffset = lowered.distance(from: lowered.startIndex, to: matchRange.upperBound)
+            let origStart = text.index(text.startIndex, offsetBy: startOffset)
+            let origEnd = text.index(text.startIndex, offsetBy: endOffset)
+            let origRange = origStart..<origEnd
+
+            if let current = best {
+                if origRange.lowerBound > current.range.lowerBound {
                     best = (trigger, origRange)
                 }
+            } else {
+                best = (trigger, origRange)
             }
         }
 

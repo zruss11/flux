@@ -148,27 +148,38 @@ struct NumberConversionProcessor {
 
         var total = 0
         var current = 0
+        var hasExplicitValue = false
 
         for token in tokens {
             if token == "a" {
                 current = 1
+                hasExplicitValue = true
             } else if let v = ones[token] {
+                // "zero hundred" / "zero thousand" is invalid — reject the
+                // whole run when zero appears before a multiplier.
+                if v == 0 && tokens.count > 1 {
+                    return nil
+                }
                 current += v
+                hasExplicitValue = true
             } else if let v = tens[token] {
                 current += v
+                hasExplicitValue = true
             } else if token == "hundred" {
                 current = (current == 0 ? 1 : current) * 100
+                hasExplicitValue = true
             } else if let mult = multipliers[token], mult >= 1000 {
                 current = (current == 0 ? 1 : current) * mult
                 total += current
                 current = 0
+                hasExplicitValue = true
             } else {
                 return nil // unknown token
             }
         }
 
         total += current
-        return total > 0 ? total : nil
+        return hasExplicitValue ? total : nil
     }
 
     // MARK: - Helpers

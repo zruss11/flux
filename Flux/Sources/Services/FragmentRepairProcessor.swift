@@ -10,6 +10,11 @@ struct FragmentRepairProcessor {
         options: .caseInsensitive
     )
 
+    // Maximum character count for the pre-dash portion of a word fragment
+    // before it is considered an orphan and stripped.  Kept conservative
+    // to avoid removing legitimate prefixes like "cross-" or "trans-".
+    private static let maxOrphanFragmentLength = 3
+
     // Matches a broken word fragment (word + hyphen) at a word boundary that
     // is immediately followed by a space.  Used as a fallback to strip
     // orphaned fragments like "abso- the thing is" that don't repeat.
@@ -50,7 +55,7 @@ struct FragmentRepairProcessor {
             let matched = String(mutableResult[range])
             // Only strip if the fragment part (before dash) is short
             let fragmentPart = matched.prefix(while: { $0 != "-" })
-            if fragmentPart.count <= 5 {
+            if fragmentPart.count <= maxOrphanFragmentLength {
                 mutableResult.replaceSubrange(range, with: "")
             }
         }
