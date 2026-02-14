@@ -677,11 +677,6 @@ function handleForkConversation(message: ForkConversationMessage): void {
     log.warn(`Cannot fork: no SDK session found for conversation ${sourceConversationId}`);
     const reason = 'Unable to fork: the source conversation has no active session.';
     sendToClient(activeClient, {
-      type: 'assistant_message',
-      conversationId: newConversationId,
-      content: reason,
-    });
-    sendToClient(activeClient, {
       type: 'fork_conversation_result',
       conversationId: newConversationId,
       success: false,
@@ -705,6 +700,7 @@ function handleForkConversation(message: ForkConversationMessage): void {
   };
 
   sessions.set(newConversationId, forkedSession);
+  touchIdle(forkedSession);
   sendToClient(activeClient, {
     type: 'fork_conversation_result',
     conversationId: newConversationId,

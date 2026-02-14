@@ -19,7 +19,8 @@ final class AgentBridge: @unchecked Sendable {
     var onToolUseComplete: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, resultPreview
     var onRunStatus: ((String, Bool) -> Void)?  // conversationId, isWorking
     /// Called when the sidecar sends `session_info` with a conversation/session pairing.
-    /// Useful for tracking downstream UI state tied to a newly created session.
+    /// Currently used for debug logging; the session ID itself is tracked by the sidecar
+    /// and is essential for features like session forking (`forkOnNextRun`).
     var onSessionInfo: ((String, String) -> Void)?  // conversationId, sessionId
     var onForkConversationResult: ((String, Bool, String?) -> Void)?  // conversationId, success, reason
     var onPermissionRequest: ((String, String, String, [String: String]) -> Void)?  // conversationId, requestId, toolName, input

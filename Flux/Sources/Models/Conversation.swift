@@ -476,6 +476,7 @@ final class ConversationStore {
 
         return newConversation.id
     }
+
     // MARK: - Folder Management
 
     @discardableResult

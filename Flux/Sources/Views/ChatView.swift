@@ -574,7 +574,6 @@ struct ChatView: View {
             }
         }
         .onDisappear {
-            agentBridge.onForkConversationResult = nil
             forkBannerDismissTask?.cancel()
         }
         .onChange(of: conversationStore.workspacePath) { _, newPath in
