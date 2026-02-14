@@ -81,7 +81,9 @@ final class DictationWaveformPanel {
             context.allowsImplicitAnimation = true
             panel.animator().setFrameOrigin(NSPoint(x: hiddenX, y: originY))
         }, completionHandler: { [weak self] in
-            self?.cleanup()
+            MainActor.assumeIsolated {
+                self?.cleanup()
+            }
         })
     }
 

@@ -45,7 +45,23 @@ interface SetTelegramConfigMessage {
   defaultChatId: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage;
+interface ActiveAppUpdateMessage {
+  type: 'active_app_update';
+  appName: string;
+  bundleId: string;
+  pid: number;
+  appInstruction?: string;
+}
+
+interface PermissionResponseMessage {
+  type: 'permission_response';
+  requestId: string;
+  behavior: 'allow' | 'deny';
+  message?: string;
+  answers?: Record<string, string>;
+}
+
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | PermissionResponseMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -89,13 +105,34 @@ interface RunStatusMessage {
   isWorking: boolean;
 }
 
+interface PermissionRequestMessage {
+  type: 'permission_request';
+  conversationId: string;
+  requestId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+interface AskUserQuestionMessage {
+  type: 'ask_user_question';
+  conversationId: string;
+  requestId: string;
+  questions: Array<{
+    question: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>;
+}
+
 type OutgoingMessage =
   | AssistantMessage
   | ToolRequestMessage
   | ToolUseStartMessage
   | ToolUseCompleteMessage
   | StreamChunkMessage
-  | RunStatusMessage;
+  | RunStatusMessage
+  | PermissionRequestMessage
+  | AskUserQuestionMessage;
 
 interface SDKUserMessage {
   type: 'user';
@@ -130,8 +167,46 @@ const log = createLogger('bridge');
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const AGENT_IDLE_TIMEOUT_MS = 120_000;
+function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function parseSettingSources(value: string | undefined): Array<'user' | 'project' | 'local'> {
+  const raw = value?.trim();
+  if (!raw) return ['project'];
+  const valid = new Set(['user', 'project', 'local']);
+  const parsed = raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item): item is 'user' | 'project' | 'local' => valid.has(item));
+  return parsed.length > 0 ? parsed : ['project'];
+}
+
+const AGENT_MODEL = process.env.FLUX_AGENT_MODEL || 'claude-sonnet-4-20250514';
+const AGENT_SETTING_SOURCES = parseSettingSources(process.env.FLUX_AGENT_SETTING_SOURCES);
+const AGENT_IDLE_TIMEOUT_MS = parsePositiveIntEnv(process.env.FLUX_AGENT_IDLE_TIMEOUT_MS, 900_000);
+const AGENT_WARMUP_ENABLED = process.env.FLUX_AGENT_WARMUP_ENABLED !== '0';
+const AGENT_WARMUP_MAX_ATTEMPTS = parsePositiveIntEnv(process.env.FLUX_AGENT_WARMUP_MAX_ATTEMPTS, 2);
 const TOOL_TIMEOUT_MS = 60_000;
+const ALLOWED_TOOLS = [
+  'WebSearch',
+  'WebFetch',
+  'ToolSearch',
+  'TodoWrite',
+  'Task',
+  'TaskOutput',
+  'TaskStop',
+  'TeamCreate',
+  'TeamDelete',
+  'SendMessage',
+  'Skill',
+  'NotebookEdit',
+  'AskUserQuestion',
+  'mcp__flux__*',
+];
 
 process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
 
@@ -139,10 +214,83 @@ const sessions = new Map<string, ConversationSession>();
 const telegramSessionMap = new Map<string, string>();
 const telegramConversationMeta = new Map<string, { chatId: string; threadId?: number }>();
 const mcpAuthTokens = new Map<string, string>();
+const pendingPermissions = new Map<string, {
+  resolve: (result: { behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }) => void;
+  conversationId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  timeout: NodeJS.Timeout;
+}>();
 
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
 let mcpBridgeUrl = '';
+let agentWarmupPromise: Promise<void> | null = null;
+let agentWarmupAttempts = 0;
+let agentWarmupComplete = false;
+
+/** Currently active (frontmost) app, updated live by the Swift client. */
+let lastActiveApp: { appName: string; bundleId: string; pid: number; appInstruction?: string } | null = null;
+
+function sanitizeAppInstruction(instruction: string | undefined): string | undefined {
+  if (!instruction) return undefined;
+  const trimmed = instruction.trim();
+  if (trimmed.length === 0) return undefined;
+  const maxLen = 2_000;
+  const clipped = trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
+  return clipped.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+}
+
+const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
+  /\brm\b/i,
+  /\brm\s+-rf\b/i,
+  /\brm\s+-fr\b/i,
+  /\bsudo\s+rm\b/i,
+  /\bgit\s+reset\s+--hard\b/i,
+  /\bgit\s+clean\s+-f(?:d|x|dx|fd|fdx)?\b/i,
+  /\bgit\s+checkout\s+--\b/i,
+  /\bgit\s+branch\s+-D\b/i,
+  /\bgit\s+push\s+--force(?!-with-lease)\b/i,
+  /\bgit\s+rebase\s+--abort\b/i,
+  /\bgit\s+rebase\s+--skip\b/i,
+  /\bgit\s+stash\s+(?:drop|clear)\b/i,
+];
+
+function collectCommandLikeInputValues(input: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  const keys = ['command', 'cmd', 'script', 'shell', 'bash', 'args'];
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      values.push(value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      const combined = value.filter((item): item is string => typeof item === 'string').join(' ');
+      if (combined.trim().length > 0) values.push(combined);
+    }
+  }
+  return values;
+}
+
+function requiresApproval(toolName: string, input: Record<string, unknown>): boolean {
+  const lowerToolName = toolName.toLowerCase();
+  const isCommandExecutionTool =
+    lowerToolName.includes('shell') ||
+    lowerToolName.includes('bash') ||
+    lowerToolName.includes('terminal') ||
+    lowerToolName.includes('applescript') ||
+    lowerToolName.includes('command');
+
+  const commandCandidates = collectCommandLikeInputValues(input);
+  if (!isCommandExecutionTool && commandCandidates.length === 0) {
+    return false;
+  }
+
+  return commandCandidates.some((command) =>
+    DANGEROUS_COMMAND_PATTERNS.some((pattern) => pattern.test(command)),
+  );
+}
 
 interface ConversationSession {
   conversationId: string;
@@ -215,6 +363,8 @@ export function startBridge(port: number): void {
   startMcpBridge(port + 1);
 
   log.info(`WebSocket server listening on port ${port}`);
+  log.info(`Agent config: model=${AGENT_MODEL}, settingSources=${AGENT_SETTING_SOURCES.join(',')}, idleMs=${AGENT_IDLE_TIMEOUT_MS}`);
+  maybeStartAgentWarmup('bridge_start');
 
   wss.on('connection', (ws) => {
     log.info('Swift app connected');
@@ -235,8 +385,13 @@ export function startBridge(port: number): void {
         activeClient = null;
       }
 
-      // Fail any pending tool calls waiting on Swift.
+      // Fail any pending tool calls and permissions waiting on Swift.
       flushPendingToolCalls('Flux is offline. Open the app to reconnect.');
+      for (const [requestId, pending] of pendingPermissions.entries()) {
+        clearTimeout(pending.timeout);
+        pending.resolve({ behavior: 'deny', message: 'Flux is offline. Open the app to reconnect.' });
+        pendingPermissions.delete(requestId);
+      }
     });
 
     ws.on('error', (error) => {
@@ -257,6 +412,7 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
       runtimeApiKey = message.apiKey;
       if (runtimeApiKey) {
         process.env.ANTHROPIC_API_KEY = runtimeApiKey;
+        maybeStartAgentWarmup('api_key_updated');
       }
       log.info('API key updated from Swift app');
       break;
@@ -269,9 +425,25 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
         defaultChatId: message.defaultChatId ?? '',
       });
       break;
+    case 'active_app_update':
+      handleActiveAppUpdate(message);
+      break;
+    case 'permission_response':
+      handlePermissionResponse(message);
+      break;
     default:
       log.warn('Unknown message type:', (message as Record<string, unknown>).type);
   }
+}
+
+function handleActiveAppUpdate(message: ActiveAppUpdateMessage): void {
+  lastActiveApp = {
+    appName: message.appName ?? 'Unknown',
+    bundleId: message.bundleId ?? 'unknown',
+    pid: message.pid ?? 0,
+    appInstruction: sanitizeAppInstruction(message.appInstruction),
+  };
+  log.info(`Active app updated: ${lastActiveApp.appName} (${lastActiveApp.bundleId})`);
 }
 
 function handleMcpAuth(message: McpAuthMessage): void {
@@ -294,11 +466,12 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
     sendToClient(ws, {
       type: 'assistant_message',
       conversationId,
-      content: 'No Anthropic API key configured. Please set your API key in Settings.',
+      content: 'No Anthropic API key configured. Please set your API key in Island Settings.',
     });
     return;
   }
 
+  maybeStartAgentWarmup('first_chat');
   enqueueUserMessage(conversationId, content, images);
 }
 
@@ -391,47 +564,63 @@ function startSessionRun(session: ConversationSession, messages: QueuedUserMessa
 async function runAgentSession(session: ConversationSession): Promise<void> {
   if (!session.stream) return;
 
-  sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: true });
+  const conversationId = session.conversationId;
+  sendToClient(activeClient, { type: 'run_status', conversationId, isWorking: true });
 
   const runId = crypto.randomUUID();
-  const mcpServerConfig = resolveMcpServerConfig(session.conversationId, runId);
+  const canUseTool = (
+    toolName: string,
+    input: Record<string, unknown>,
+  ): Promise<{ behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }> => {
+    if (toolName !== 'AskUserQuestion' && !requiresApproval(toolName, input)) {
+      return Promise.resolve({ behavior: 'allow', updatedInput: input });
+    }
+
+    const requestId = crypto.randomUUID();
+
+    if (toolName === 'AskUserQuestion') {
+      const questions = (input.questions ?? []) as Array<{
+        question: string;
+        options: Array<{ label: string; description?: string }>;
+        multiSelect?: boolean;
+      }>;
+      sendToClient(activeClient, {
+        type: 'ask_user_question',
+        conversationId,
+        requestId,
+        questions,
+      });
+    } else {
+      sendToClient(activeClient, {
+        type: 'permission_request',
+        conversationId,
+        requestId,
+        toolName,
+        input,
+      });
+    }
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingPermissions.delete(requestId);
+        resolve({ behavior: 'deny', message: 'Permission request timed out' });
+      }, 120_000);
+
+      pendingPermissions.set(requestId, { resolve, conversationId, toolName, input, timeout });
+    });
+  };
 
   try {
     for await (const message of query({
       prompt: session.stream,
-      options: {
-        cwd: process.cwd(),
+      options: buildQueryOptions(conversationId, runId, {
         resume: session.sessionId,
         resumeSessionAt: session.lastAssistantUuid,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
+        permissionMode: 'default',
+        allowDangerouslySkipPermissions: false,
+        canUseTool,
         includePartialMessages: true,
-        settingSources: ['project', 'user'],
-        allowedTools: [
-          'WebSearch',
-          'WebFetch',
-          'ToolSearch',
-          'TodoWrite',
-          'Task',
-          'TaskOutput',
-          'TaskStop',
-          'TeamCreate',
-          'TeamDelete',
-          'SendMessage',
-          'Skill',
-          'NotebookEdit',
-          'mcp__flux__*',
-        ],
-        mcpServers: {
-          flux: mcpServerConfig,
-        },
-        model: 'claude-sonnet-4-20250514',
-        systemPrompt: {
-          type: 'preset',
-          preset: 'claude_code',
-          append: buildFluxSystemPrompt(),
-        },
-      },
+      }),
     })) {
       handleAgentMessage(session, message as any);
     }
@@ -439,7 +628,8 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
     clearIdle(session);
     session.isRunning = false;
     session.stream = null;
-    sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: false });
+    flushPendingPermissions(conversationId, 'Session ended');
+    sendToClient(activeClient, { type: 'run_status', conversationId, isWorking: false });
 
     if (session.pendingMessages.length > 0) {
       const next = [...session.pendingMessages];
@@ -450,6 +640,74 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
 
     touchIdle(session);
   }
+}
+
+function buildQueryOptions(
+  conversationId: string,
+  runId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    cwd: process.cwd(),
+    permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
+    includePartialMessages: true,
+    settingSources: AGENT_SETTING_SOURCES,
+    allowedTools: ALLOWED_TOOLS,
+    mcpServers: {
+      flux: resolveMcpServerConfig(conversationId, runId),
+    },
+    model: AGENT_MODEL,
+    systemPrompt: {
+      type: 'preset',
+      preset: 'claude_code',
+      append: buildFluxSystemPrompt(),
+    },
+    ...overrides,
+  };
+}
+
+function maybeStartAgentWarmup(trigger: string): void {
+  if (!AGENT_WARMUP_ENABLED) return;
+  if (!runtimeApiKey) return;
+  if (agentWarmupComplete) return;
+  if (agentWarmupPromise) return;
+  if (agentWarmupAttempts >= AGENT_WARMUP_MAX_ATTEMPTS) return;
+
+  agentWarmupAttempts += 1;
+  agentWarmupPromise = runAgentWarmup(trigger)
+    .then(() => {
+      agentWarmupComplete = true;
+    })
+    .catch((error) => {
+      log.warn(`Agent warmup failed (${trigger}):`, error instanceof Error ? error.message : error);
+    })
+    .finally(() => {
+      agentWarmupPromise = null;
+    });
+}
+
+async function runAgentWarmup(trigger: string): Promise<void> {
+  const startedAt = Date.now();
+  const warmupConversationId = `warmup-${crypto.randomUUID()}`;
+  const runId = crypto.randomUUID();
+
+  log.info(`Starting agent warmup (trigger=${trigger})`);
+
+  for await (const message of query({
+    prompt: 'Warmup run. Reply with exactly: ok',
+    options: buildQueryOptions(warmupConversationId, runId, {
+      includePartialMessages: false,
+      persistSession: false,
+      maxTurns: 1,
+      thinking: { type: 'disabled' },
+      effort: 'low',
+    }),
+  })) {
+    if (message.type === 'result') break;
+  }
+
+  log.info(`Agent warmup completed in ${Date.now() - startedAt}ms`);
 }
 
 function handleAgentMessage(session: ConversationSession, message: any): void {
@@ -585,7 +843,7 @@ function flushPendingToolCompletions(session: ConversationSession): void {
 }
 
 function buildFluxSystemPrompt(): string {
-  return `You are Flux, a macOS AI desktop copilot. Your role is to help users accomplish tasks on their Mac by reading their screen when necessary and taking actions on their behalf.
+  let prompt = `You are Flux, a macOS AI desktop copilot. Your role is to help users accomplish tasks on their Mac by reading their screen when necessary and taking actions on their behalf.
 
 You have access to the following tools:
 
@@ -594,6 +852,11 @@ You have access to the following tools:
 - mcp__flux__read_ax_tree: Reads accessibility tree text from the frontmost window
 - mcp__flux__capture_screen: Captures a visual screenshot of the screen
 - mcp__flux__read_selected_text: Reads currently selected text
+- mcp__flux__read_clipboard_history: Reads recent clipboard history (last 10 copied items with source app and timestamp)
+
+**Session Context Tools** (use these to understand what the user was recently doing across their desktop):
+- mcp__flux__read_session_history: Read which apps/windows the user recently visited (with timestamps)
+- mcp__flux__get_session_context_summary: Get a human-readable text summary of recent app activity
 
 **Action Tools** (use these to perform tasks on behalf of the user):
 - mcp__flux__execute_applescript: Execute AppleScript commands
@@ -601,6 +864,10 @@ You have access to the following tools:
 - mcp__flux__send_slack_message: Send messages via Slack
 - mcp__flux__send_discord_message: Send messages via Discord
 - mcp__flux__send_telegram_message: Send messages via Telegram
+
+**GitHub / CI Tools**:
+- mcp__flux__check_github_status: Check GitHub CI/CD status and notifications via gh CLI. Returns recent CI failures and notifications. Pass optional repo (owner/repo) to filter.
+- mcp__flux__manage_github_repos: Manage the list of watched GitHub repos (list/add/remove). Use this when the user asks to watch or stop watching a repo.
 
 **Delegation Tool**:
 - TeamCreate: For complex tasks requiring research, planning, or multi-step workflows, spin up a small agent team to delegate work
@@ -612,6 +879,19 @@ Important guidelines:
 - Ask clarifying questions when the user's request is ambiguous or lacks necessary details
 - When you use memory skills to remember information about the user, apply them silently without announcing that you're doing so
 - For straightforward requests that don't require screen information, proceed directly with the appropriate action`;
+
+  // Inject live app context so the agent knows what the user is working in.
+  // NOTE: This prompt is built once at session start. If the user switches apps
+  // mid-conversation, the context won't update until the next query session.
+  if (lastActiveApp) {
+    prompt += `\n\nThe user is currently using: ${lastActiveApp.appName} (${lastActiveApp.bundleId}).`;
+    prompt += '\nTailor your responses to the context of this application when relevant.';
+    if (lastActiveApp.appInstruction) {
+      prompt += `\n\nApp-specific instructions:\n${lastActiveApp.appInstruction}`;
+    }
+  }
+
+  return prompt;
 }
 
 function getSession(conversationId: string): ConversationSession {
@@ -670,6 +950,7 @@ function evictSession(conversationId: string, reason = 'Session expired due to i
   session.toolUseByIndex.clear();
   flushPendingToolCompletions(session);
   clearPendingToolCallsForConversation(conversationId, reason);
+  flushPendingPermissions(conversationId, reason);
 
   sessions.delete(conversationId);
   telegramConversationMeta.delete(conversationId);
@@ -904,6 +1185,40 @@ function clearPendingToolCallsForConversation(conversationId: string, reason: st
   }
 }
 
+function handlePermissionResponse(message: PermissionResponseMessage): void {
+  const pending = pendingPermissions.get(message.requestId);
+  if (!pending) {
+    log.warn(`No pending permission for requestId=${message.requestId}`);
+    return;
+  }
+  clearTimeout(pending.timeout);
+  pendingPermissions.delete(message.requestId);
+
+  if (message.behavior === 'allow') {
+    if (pending.toolName === 'AskUserQuestion') {
+      const answers = message.answers ?? {};
+      const updatedInput: Record<string, unknown> = {
+        ...pending.input,
+        answers,
+      };
+      pending.resolve({ behavior: 'allow', updatedInput });
+      return;
+    }
+    pending.resolve({ behavior: 'allow', updatedInput: pending.input });
+  } else {
+    pending.resolve({ behavior: 'deny', message: message.message || 'User denied this action' });
+  }
+}
+
+function flushPendingPermissions(conversationId: string, reason: string): void {
+  for (const [requestId, pending] of pendingPermissions.entries()) {
+    if (pending.conversationId !== conversationId) continue;
+    clearTimeout(pending.timeout);
+    pending.resolve({ behavior: 'deny', message: reason });
+    pendingPermissions.delete(requestId);
+  }
+}
+
 function flushPendingToolCalls(reason: string): void {
   for (const [toolUseId, pending] of pendingToolCalls.entries()) {
     clearTimeout(pending.timeout);
@@ -932,7 +1247,7 @@ function sendToClient(ws: WebSocket | null, message: OutgoingMessage): void {
 async function handleTelegramMessage(chatId: string, threadId: number | undefined, text: string): Promise<void> {
   if (!runtimeApiKey) {
     await telegramBot.sendMessage(
-      'No Anthropic API key configured. Open Flux Settings and set your API key.',
+      'No Anthropic API key configured. Open Island Settings and set your API key.',
       chatId,
       threadId,
     );

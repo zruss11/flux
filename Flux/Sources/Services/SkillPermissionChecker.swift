@@ -20,7 +20,7 @@ enum SkillPermissionChecker {
             return false
         case .reminders:
             let status = EKEventStore.authorizationStatus(for: .reminder)
-            return status == .fullAccess || status == .authorized
+            return status == .fullAccess
         }
     }
 

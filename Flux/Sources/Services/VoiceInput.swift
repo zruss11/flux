@@ -1,7 +1,12 @@
 @preconcurrency import AVFoundation
 import Foundation
+@preconcurrency import Speech
 import os
-import Speech
+
+enum VoiceInputMode: Sendable {
+    case live
+    case batchOnDevice
+}
 
 /// Thread-safe accumulator for PCM data written from the audio tap thread.
 private final class PCMAccumulator: @unchecked Sendable {
@@ -24,12 +29,29 @@ private final class PCMAccumulator: @unchecked Sendable {
     }
 }
 
+private final class SpeechRecognitionTaskBox: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.flux.voice.speech-task")
+    private var task: SFSpeechRecognitionTask?
+
+    func set(_ newTask: SFSpeechRecognitionTask?) {
+        queue.sync {
+            task = newTask
+        }
+    }
+
+    func cancelAndClear() {
+        queue.sync {
+            task?.cancel()
+            task = nil
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class VoiceInput {
     var isRecording = false
     var transcript = ""
-    var isTranscriberAvailable = false
     var audioLevelMeter: AudioLevelMeter?
 
     /// Called when recording starts (`true`) or stops (`false`), for coordination
@@ -37,9 +59,12 @@ final class VoiceInput {
     var onRecordingStateChanged: ((Bool) -> Void)?
 
     private var audioEngine: AVAudioEngine?
-    private let pcmAccumulator = PCMAccumulator()
     private var onComplete: ((String) -> Void)?
+    private var onFailure: ((String) -> Void)?
     private var tapInstalled = false
+    private var recordingMode: VoiceInputMode = .live
+
+    private let pcmAccumulator = PCMAccumulator()
 
     @ObservationIgnored
     private var liveSessionAny: Any?
@@ -62,6 +87,10 @@ final class VoiceInput {
 
     var isPermissionGranted: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
+    var isSpeechRecognitionGranted: Bool {
+        SFSpeechRecognizer.authorizationStatus() == .authorized
     }
 
     func ensureMicrophonePermission() async -> Bool {
@@ -92,101 +121,295 @@ final class VoiceInput {
         }
     }
 
-    // MARK: - Transcriber health
-
-    func checkTranscriberHealth() async {
-        do {
-            let url = URL(string: "http://localhost:7848/health")!
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-            request.timeoutInterval = 3
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                isTranscriberAvailable = httpResponse.statusCode == 200
-            } else {
-                isTranscriberAvailable = false
-            }
-        } catch {
-            isTranscriberAvailable = false
-        }
-    }
-
     // MARK: - Recording
 
-    func startRecording(onComplete: @escaping (String) -> Void) async {
-        guard !isRecording else { return }
+    @discardableResult
+    func startRecording(
+        mode: VoiceInputMode,
+        onComplete: @escaping (String) -> Void,
+        onFailure: ((String) -> Void)? = nil
+    ) async -> Bool {
+        guard !isRecording else {
+            onFailure?("Recording already in progress.")
+            return false
+        }
 
-        let permitted = await ensureMicrophonePermission()
-        guard permitted else {
+        let micPermitted = await ensureMicrophonePermission()
+        guard micPermitted else {
             Log.voice.warning("Microphone permission not granted")
-            return
+            onFailure?("Microphone permission not granted.")
+            return false
         }
 
+        guard #available(macOS 26.0, *) else {
+            Log.voice.error("On-device speech transcription requires macOS 26+")
+            onFailure?("On-device transcription requires macOS 26 or newer.")
+            return false
+        }
+
+        let speechPermitted = await ensureSpeechRecognitionPermission()
+        guard speechPermitted else {
+            Log.voice.warning("Speech recognition permission not granted")
+            onFailure?("Speech recognition permission not granted.")
+            return false
+        }
+
+        self.recordingMode = mode
         self.onComplete = onComplete
+        self.onFailure = onFailure
 
-        if #available(macOS 26.0, *) {
-            // Prefer Apple's new on-device live transcription when available.
-            let speechPermitted = await ensureSpeechRecognitionPermission()
-            if speechPermitted, await beginLiveRecording() {
-                return
-            }
+        switch mode {
+        case .live:
+            return await beginLiveRecording()
+        case .batchOnDevice:
+            return beginBatchRecording()
         }
-
-        beginBatchRecording()
     }
 
     func stopRecording() {
         guard isRecording else { return }
 
-        if #available(macOS 26.0, *), let session = liveSessionAny as? LiveSpeechSession {
-            stopLiveRecording(session: session)
-            return
-        }
-
-        audioEngine?.stop()
-        if tapInstalled {
-            audioEngine?.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        isRecording = false
-        onRecordingStateChanged?(false)
-        IslandWindowManager.shared.suppressDeactivationCollapse = false
-
-        let pcmData = pcmAccumulator.takeAll()
-        audioEngine = nil
-
-        guard !pcmData.isEmpty else {
-            Log.voice.warning("No audio data recorded")
-            cleanUp()
-            return
-        }
-
-        let callback = onComplete
-        onComplete = nil
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                let wavURL = try self.writeWAVFile(pcmData: pcmData)
-                let transcribedText = try await self.transcribe(wavFile: wavURL)
-                try? FileManager.default.removeItem(at: wavURL)
-
-                self.transcript = transcribedText
-                if !transcribedText.isEmpty {
-                    callback?(transcribedText)
-                }
-            } catch {
-                Log.voice.error("Transcription error: \(error)")
+        switch recordingMode {
+        case .live:
+            if #available(macOS 26.0, *),
+               let session = liveSessionAny as? LiveSpeechSession {
+                stopLiveRecording(session: session)
+                return
             }
+
+            Log.voice.error("Missing live speech session while stopping recording")
+            let failureCallback = onFailure
+            cleanUp()
+            failureCallback?("Live transcription session ended unexpectedly.")
+
+        case .batchOnDevice:
+            stopBatchRecording()
         }
     }
 
     // MARK: - Private
 
+    @available(macOS 26.0, *)
+    private func beginLiveRecording() async -> Bool {
+        let failureCallback = onFailure
+        let engine = AVAudioEngine()
+        self.audioEngine = engine
+
+        let inputNode = engine.inputNode
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            Log.voice.error("No audio input available")
+            cleanUp()
+            failureCallback?("No audio input device available.")
+            return false
+        }
+
+        do {
+            let session = try LiveSpeechSession(
+                inputFormat: inputFormat,
+                onTranscriptUpdate: { [weak self] text in
+                    self?.transcript = text
+                }
+            )
+            liveSessionAny = session
+            await session.prepare()
+
+            let analyzerFormat = session.analyzerFormat
+            let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat)
+
+            inputNode.installTap(
+                onBus: 0,
+                bufferSize: 4096,
+                format: inputFormat,
+                block: LiveSpeechSession.makeTapBlock(
+                    analyzerFormat: analyzerFormat,
+                    converter: converter,
+                    feeder: session.feeder,
+                    meter: audioLevelMeter
+                )
+            )
+            tapInstalled = true
+
+            session.start()
+
+            engine.prepare()
+            try engine.start()
+
+            IslandWindowManager.shared.suppressDeactivationCollapse = true
+            isRecording = true
+            onRecordingStateChanged?(true)
+            transcript = ""
+            return true
+        } catch {
+            Log.voice.error("Live transcription start error: \(error)")
+            if tapInstalled {
+                engine.inputNode.removeTap(onBus: 0)
+                tapInstalled = false
+            }
+            cleanUp()
+            failureCallback?("Unable to start live transcription.")
+            return false
+        }
+    }
+
+    private func beginBatchRecording() -> Bool {
+        let failureCallback = onFailure
+        let engine = AVAudioEngine()
+        self.audioEngine = engine
+
+        let inputNode = engine.inputNode
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            Log.voice.error("No audio input available")
+            cleanUp()
+            failureCallback?("No audio input device available.")
+            return false
+        }
+
+        let targetFormat = VoiceInput.targetFormat
+        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+            Log.voice.error("Failed to create batch audio converter")
+            cleanUp()
+            failureCallback?("Unable to prepare batch dictation audio pipeline.")
+            return false
+        }
+
+        pcmAccumulator.reset()
+
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 4096,
+            format: inputFormat,
+            block: VoiceInput.makeBatchTapBlock(
+                converter: converter,
+                inputSampleRate: inputFormat.sampleRate,
+                targetFormat: targetFormat,
+                accumulator: pcmAccumulator,
+                meter: audioLevelMeter
+            )
+        )
+        tapInstalled = true
+
+        do {
+            engine.prepare()
+            try engine.start()
+            IslandWindowManager.shared.suppressDeactivationCollapse = true
+            isRecording = true
+            onRecordingStateChanged?(true)
+            transcript = ""
+            return true
+        } catch {
+            Log.voice.error("Batch audio engine start error: \(error)")
+            if tapInstalled {
+                engine.inputNode.removeTap(onBus: 0)
+                tapInstalled = false
+            }
+            cleanUp()
+            failureCallback?("Unable to start batch dictation recording.")
+            return false
+        }
+    }
+
+    @available(macOS 26.0, *)
+    private func stopLiveRecording(session: LiveSpeechSession) {
+        // Keep the audio engine running so SpeechAnalyzer can drain remaining buffers.
+        let engine = audioEngine
+        let hadTap = tapInstalled
+
+        isRecording = false
+        onRecordingStateChanged?(false)
+        IslandWindowManager.shared.suppressDeactivationCollapse = false
+
+        let callback = onComplete
+        let failureCallback = onFailure
+        onComplete = nil
+        onFailure = nil
+        liveSessionAny = nil
+        recordingMode = .live
+
+        Task { @MainActor in
+            let finalText = await session.stop()
+
+            engine?.stop()
+            if hadTap {
+                engine?.inputNode.removeTap(onBus: 0)
+            }
+            self.tapInstalled = false
+            self.audioEngine = nil
+
+            self.transcript = finalText
+            if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                failureCallback?("No speech detected.")
+            } else {
+                callback?(finalText)
+            }
+        }
+    }
+
+    private func stopBatchRecording() {
+        let engine = audioEngine
+        let hadTap = tapInstalled
+
+        engine?.stop()
+        if hadTap {
+            engine?.inputNode.removeTap(onBus: 0)
+        }
+
+        tapInstalled = false
+        audioEngine = nil
+        isRecording = false
+        onRecordingStateChanged?(false)
+        recordingMode = .live
+        IslandWindowManager.shared.suppressDeactivationCollapse = false
+
+        let callback = onComplete
+        let failureCallback = onFailure
+        onComplete = nil
+        onFailure = nil
+        liveSessionAny = nil
+
+        let pcmData = pcmAccumulator.takeAll()
+        guard !pcmData.isEmpty else {
+            failureCallback?("No audio captured.")
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            do {
+                let wavURL = try self.writeWAVFile(pcmData: pcmData)
+                defer { try? FileManager.default.removeItem(at: wavURL) }
+
+                guard #available(macOS 26.0, *) else {
+                    throw TranscriptionError.unsupportedOS
+                }
+
+                let transcribedText = try await self.transcribeWAVOnDevice(wavURL)
+                let trimmed = transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.transcript = trimmed
+
+                if trimmed.isEmpty {
+                    failureCallback?("No speech detected.")
+                } else {
+                    callback?(trimmed)
+                }
+            } catch let error as TranscriptionError {
+                Log.voice.error("Batch transcription error: \(error.localizedDescription, privacy: .public)")
+                failureCallback?(error.localizedDescription)
+            } catch {
+                Log.voice.error("Batch transcription error: \(error.localizedDescription, privacy: .public)")
+                failureCallback?("Dictation transcription failed.")
+            }
+        }
+    }
+
     /// Audio tap blocks created inside a `@MainActor` context inherit `@MainActor` isolation.
     /// On macOS 26+, CoreAudio may invoke the tap on a non-main queue and Swift will trap
     /// if the block is `@MainActor`. Build the tap block in a `nonisolated` context.
-    private nonisolated static func makeTapBlock(
+    private nonisolated static func makeBatchTapBlock(
         converter: AVAudioConverter,
         inputSampleRate: Double,
         targetFormat: AVAudioFormat,
@@ -220,169 +443,6 @@ final class VoiceInput {
                 accumulator.append(data)
             }
         }
-    }
-
-    private func beginBatchRecording() {
-        let engine = AVAudioEngine()
-        self.audioEngine = engine
-
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
-            Log.voice.error("No audio input available")
-            cleanUp()
-            return
-        }
-
-        let targetFmt = VoiceInput.targetFormat
-
-        guard let converter = AVAudioConverter(from: inputFormat, to: targetFmt) else {
-            Log.voice.error("Failed to create audio converter")
-            cleanUp()
-            return
-        }
-
-        pcmAccumulator.reset()
-
-        inputNode.installTap(
-            onBus: 0,
-            bufferSize: 4096,
-            format: inputFormat,
-            block: VoiceInput.makeTapBlock(
-                converter: converter,
-                inputSampleRate: inputFormat.sampleRate,
-                targetFormat: targetFmt,
-                accumulator: pcmAccumulator,
-                meter: audioLevelMeter
-            )
-        )
-        tapInstalled = true
-
-        do {
-            engine.prepare()
-            try engine.start()
-            IslandWindowManager.shared.suppressDeactivationCollapse = true
-            isRecording = true
-            onRecordingStateChanged?(true)
-            transcript = ""
-        } catch {
-            Log.voice.error("Audio engine start error: \(error)")
-            if tapInstalled {
-                engine.inputNode.removeTap(onBus: 0)
-                tapInstalled = false
-            }
-            cleanUp()
-        }
-    }
-
-    @available(macOS 26.0, *)
-    private func beginLiveRecording() async -> Bool {
-        let engine = AVAudioEngine()
-        self.audioEngine = engine
-
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
-            Log.voice.error("No audio input available")
-            cleanUp()
-            return false
-        }
-
-        do {
-            let session = try LiveSpeechSession(
-                inputFormat: inputFormat,
-                onTranscriptUpdate: { [weak self] text in
-                    self?.transcript = text
-                }
-            )
-            self.liveSessionAny = session
-            await session.prepare()
-
-            // Audio format conversion for analyzer input (if needed).
-            let analyzerFormat = session.analyzerFormat
-            let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat)
-
-            // Feed analyzer input from the realtime tap thread. No actor hops.
-            inputNode.installTap(
-                onBus: 0,
-                bufferSize: 4096,
-                format: inputFormat,
-                block: LiveSpeechSession.makeTapBlock(
-                    analyzerFormat: analyzerFormat,
-                    converter: converter,
-                    feeder: session.feeder,
-                    meter: audioLevelMeter
-                )
-            )
-            tapInstalled = true
-
-            session.start()
-
-            engine.prepare()
-            try engine.start()
-
-            IslandWindowManager.shared.suppressDeactivationCollapse = true
-            isRecording = true
-            onRecordingStateChanged?(true)
-            transcript = ""
-            return true
-        } catch {
-            Log.voice.error("Live transcription start error: \(error)")
-            if tapInstalled {
-                engine.inputNode.removeTap(onBus: 0)
-                tapInstalled = false
-            }
-            liveSessionAny = nil
-            cleanUp()
-            return false
-        }
-    }
-
-    @available(macOS 26.0, *)
-    private func stopLiveRecording(session: LiveSpeechSession) {
-        // Keep the audio engine running so the transcriber can drain
-        // any remaining audio buffers before we tear it down.
-        let engine = audioEngine
-        let hadTap = tapInstalled
-
-        isRecording = false
-        onRecordingStateChanged?(false)
-        IslandWindowManager.shared.suppressDeactivationCollapse = false
-
-        let callback = onComplete
-        onComplete = nil
-        liveSessionAny = nil
-
-        Task { @MainActor in
-            // session.stop() finishes the feeder stream and waits for the
-            // transcriber to flush its final segment.
-            let finalText = await session.stop()
-
-            // NOW tear down the audio engine after the session has drained.
-            engine?.stop()
-            if hadTap {
-                engine?.inputNode.removeTap(onBus: 0)
-            }
-            self.tapInstalled = false
-            self.audioEngine = nil
-
-            self.transcript = finalText
-            if !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                callback?(finalText)
-            }
-        }
-    }
-
-    private func cleanUp() {
-        audioEngine = nil
-        pcmAccumulator.reset()
-        isRecording = false
-        onRecordingStateChanged?(false)
-        IslandWindowManager.shared.suppressDeactivationCollapse = false
-        onComplete = nil
-        liveSessionAny = nil
     }
 
     // MARK: - WAV file writing
@@ -427,43 +487,101 @@ final class VoiceInput {
         return wavURL
     }
 
-    // MARK: - Transcription via local parakeet server
+    // MARK: - On-device file transcription
 
-    private func transcribe(wavFile: URL) async throws -> String {
-        let wavData = try Data(contentsOf: wavFile)
-
-        var request = URLRequest(url: URL(string: "http://localhost:7848/transcribe")!)
-        request.httpMethod = "POST"
-        request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
-        request.httpBody = wavData
-        request.timeoutInterval = 30
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw TranscriptionError.serverError(statusCode: statusCode)
+    @available(macOS 26.0, *)
+    private func transcribeWAVOnDevice(_ wavFile: URL, timeout: TimeInterval = 12) async throws -> String {
+        guard let recognizer = SFSpeechRecognizer(locale: Locale.current) else {
+            throw TranscriptionError.unavailableRecognizer
+        }
+        guard recognizer.isAvailable else {
+            throw TranscriptionError.recognizerUnavailable
         }
 
-        let decoded = try JSONDecoder().decode(TranscriptionResponse.self, from: data)
-        return decoded.text
+        return try await withCheckedThrowingContinuation { continuation in
+            let request = SFSpeechURLRecognitionRequest(url: wavFile)
+            request.requiresOnDeviceRecognition = true
+            request.shouldReportPartialResults = false
+
+            let continuationState = OSAllocatedUnfairLock(initialState: false)
+            let taskBox = SpeechRecognitionTaskBox()
+
+            func resolve(_ result: Result<String, Error>) {
+                let shouldResume = continuationState.withLock { resumed in
+                    if resumed {
+                        return false
+                    }
+                    resumed = true
+                    return true
+                }
+
+                guard shouldResume else { return }
+                taskBox.cancelAndClear()
+
+                switch result {
+                case .success(let text):
+                    continuation.resume(returning: text)
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+
+            let task = recognizer.recognitionTask(with: request) { result, error in
+                if let error {
+                    resolve(.failure(error))
+                    return
+                }
+
+                guard let result else { return }
+                guard result.isFinal else { return }
+
+                let text = result.bestTranscription.formattedString
+                resolve(.success(text))
+            }
+
+            taskBox.set(task)
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+                resolve(.failure(TranscriptionError.timeout))
+            }
+        }
+    }
+
+    private func cleanUp() {
+        if tapInstalled {
+            audioEngine?.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        audioEngine?.stop()
+        audioEngine = nil
+        isRecording = false
+        onRecordingStateChanged?(false)
+        transcript = ""
+        recordingMode = .live
+        pcmAccumulator.reset()
+        IslandWindowManager.shared.suppressDeactivationCollapse = false
+        onComplete = nil
+        onFailure = nil
+        liveSessionAny = nil
     }
 }
 
-// MARK: - Supporting types
-
-private struct TranscriptionResponse: Decodable {
-    let text: String
-}
-
 private enum TranscriptionError: LocalizedError {
-    case serverError(statusCode: Int)
+    case unavailableRecognizer
+    case recognizerUnavailable
+    case timeout
+    case unsupportedOS
 
     var errorDescription: String? {
         switch self {
-        case .serverError(let statusCode):
-            return "Transcription server returned status \(statusCode)"
+        case .unavailableRecognizer:
+            return "Speech recognizer is unavailable for the current locale."
+        case .recognizerUnavailable:
+            return "Speech recognizer is temporarily unavailable."
+        case .timeout:
+            return "Dictation timed out waiting for a transcription result."
+        case .unsupportedOS:
+            return "On-device transcription requires macOS 26 or newer."
         }
     }
 }

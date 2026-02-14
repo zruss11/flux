@@ -7,6 +7,7 @@ enum NotificationPayloadKey {
 
 extension Notification.Name {
     static let telegramConfigDidChange = Notification.Name("telegramConfigDidChange")
+    static let appInstructionsDidChange = Notification.Name("appInstructionsDidChange")
     static let automationOpenThreadRequested = Notification.Name("automationOpenThreadRequested")
     static let islandOpenConversationRequested = Notification.Name("islandOpenConversationRequested")
     static let islandOpenFolderPickerRequested = Notification.Name("islandOpenFolderPickerRequested")

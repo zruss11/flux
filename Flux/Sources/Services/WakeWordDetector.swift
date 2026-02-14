@@ -338,9 +338,12 @@ final class WakeWordDetector {
                 self.voiceInput?.stopRecording()
             }
 
-            await voiceInput.startRecording { [weak self] transcript in
-                self?.handleCommandTranscript(transcript)
-            }
+            await voiceInput.startRecording(
+                mode: .batchOnDevice,
+                onComplete: { [weak self] transcript in
+                    self?.handleCommandTranscript(transcript)
+                }
+            )
         }
     }
 

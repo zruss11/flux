@@ -16,6 +16,104 @@ struct ToolCallInfo: Identifiable, Codable {
     }
 }
 
+// MARK: - Pending Permission Request
+
+struct PendingPermissionRequest: Identifiable, Codable {
+    let id: String          // requestId from the sidecar
+    let toolName: String
+    let input: [String: String]  // simplified key-value for display
+    var status: PermissionStatus = .pending
+
+    enum PermissionStatus: String, Codable {
+        case pending
+        case approved
+        case denied
+    }
+}
+
+// MARK: - Pending Ask User Question
+
+struct PendingAskUserQuestion: Identifiable, Codable {
+    let id: String          // requestId from the sidecar
+    let questions: [Question]
+    var answers: [String: String] = [:]
+    var status: PermissionStatus = .pending
+
+    struct Question: Codable, Identifiable {
+        let id: UUID
+        let question: String
+        let options: [Option]
+        let multiSelect: Bool
+
+        init(id: UUID = UUID(), question: String, options: [Option], multiSelect: Bool) {
+            self.id = id
+            self.question = question
+            self.options = options
+            self.multiSelect = multiSelect
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case question
+            case options
+            case multiSelect
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+            question = try container.decode(String.self, forKey: .question)
+            options = try container.decode([Option].self, forKey: .options)
+            multiSelect = try container.decode(Bool.self, forKey: .multiSelect)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(question, forKey: .question)
+            try container.encode(options, forKey: .options)
+            try container.encode(multiSelect, forKey: .multiSelect)
+        }
+
+        struct Option: Codable, Identifiable {
+            let id: UUID
+            let label: String
+            let description: String?
+
+            init(id: UUID = UUID(), label: String, description: String?) {
+                self.id = id
+                self.label = label
+                self.description = description
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case id
+                case label
+                case description
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+                label = try container.decode(String.self, forKey: .label)
+                description = try container.decodeIfPresent(String.self, forKey: .description)
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(id, forKey: .id)
+                try container.encode(label, forKey: .label)
+                try container.encodeIfPresent(description, forKey: .description)
+            }
+        }
+    }
+
+    enum PermissionStatus: String, Codable {
+        case pending
+        case answered
+    }
+}
+
 // MARK: - Display Segments
 
 /// A display-oriented view of the conversation that groups consecutive tool calls
@@ -24,12 +122,16 @@ enum DisplaySegment: Identifiable {
     case userMessage(Message)
     case assistantText(Message)
     case toolCallGroup(id: String, calls: [ToolCallInfo])
+    case permissionRequest(PendingPermissionRequest)
+    case askUserQuestion(PendingAskUserQuestion)
 
     var id: String {
         switch self {
         case .userMessage(let m): return "user-\(m.id)"
         case .assistantText(let m): return "text-\(m.id)"
         case .toolCallGroup(let id, _): return "tools-\(id)"
+        case .permissionRequest(let req): return "perm-\(req.id)"
+        case .askUserQuestion(let q): return "ask-\(q.id)"
         }
     }
 }
@@ -230,6 +332,65 @@ final class ConversationStore {
                 saveConversation(conversations[convIndex])
                 lastScrollConversationId = conversationId
                 scrollRevision &+= 1
+                return
+            }
+        }
+    }
+
+    // MARK: - Permission Request Tracking
+
+    func addPermissionRequest(to conversationId: UUID, request: PendingPermissionRequest) {
+        guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+
+        if let lastIndex = conversations[index].messages.indices.last,
+           conversations[index].messages[lastIndex].role == .assistant {
+            conversations[index].messages[lastIndex].permissionRequests.append(request)
+        } else {
+            var message = Message(role: .assistant, content: "")
+            message.permissionRequests.append(request)
+            conversations[index].messages.append(message)
+        }
+        lastScrollConversationId = conversationId
+        scrollRevision &+= 1
+    }
+
+    func resolvePermissionRequest(in conversationId: UUID, requestId: String, approved: Bool) {
+        guard let convIndex = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+
+        for msgIndex in conversations[convIndex].messages.indices.reversed() {
+            if let reqIndex = conversations[convIndex].messages[msgIndex].permissionRequests.firstIndex(where: { $0.id == requestId }) {
+                conversations[convIndex].messages[msgIndex].permissionRequests[reqIndex].status = approved ? .approved : .denied
+                saveConversation(conversations[convIndex])
+                return
+            }
+        }
+    }
+
+    // MARK: - Ask User Question Tracking
+
+    func addAskUserQuestion(to conversationId: UUID, question: PendingAskUserQuestion) {
+        guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+
+        if let lastIndex = conversations[index].messages.indices.last,
+           conversations[index].messages[lastIndex].role == .assistant {
+            conversations[index].messages[lastIndex].askUserQuestions.append(question)
+        } else {
+            var message = Message(role: .assistant, content: "")
+            message.askUserQuestions.append(question)
+            conversations[index].messages.append(message)
+        }
+        lastScrollConversationId = conversationId
+        scrollRevision &+= 1
+    }
+
+    func resolveAskUserQuestion(in conversationId: UUID, requestId: String, answers: [String: String]) {
+        guard let convIndex = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+
+        for msgIndex in conversations[convIndex].messages.indices.reversed() {
+            if let reqIndex = conversations[convIndex].messages[msgIndex].askUserQuestions.firstIndex(where: { $0.id == requestId }) {
+                conversations[convIndex].messages[msgIndex].askUserQuestions[reqIndex].status = .answered
+                conversations[convIndex].messages[msgIndex].askUserQuestions[reqIndex].answers = answers
+                saveConversation(conversations[convIndex])
                 return
             }
         }
@@ -471,6 +632,12 @@ struct Conversation: Identifiable, Codable {
                 if !message.toolCalls.isEmpty {
                     segments.append(.toolCallGroup(id: message.id.uuidString, calls: message.toolCalls))
                 }
+                for req in message.permissionRequests {
+                    segments.append(.permissionRequest(req))
+                }
+                for q in message.askUserQuestions {
+                    segments.append(.askUserQuestion(q))
+                }
             case .system:
                 segments.append(.assistantText(message))
             }
@@ -488,6 +655,8 @@ struct Message: Identifiable, Codable {
     var content: String
     var imageAttachments: [MessageImageAttachment]
     var toolCalls: [ToolCallInfo]
+    var permissionRequests: [PendingPermissionRequest]
+    var askUserQuestions: [PendingAskUserQuestion]
     let timestamp: Date
 
     init(
@@ -496,6 +665,8 @@ struct Message: Identifiable, Codable {
         content: String,
         imageAttachments: [MessageImageAttachment] = [],
         toolCalls: [ToolCallInfo] = [],
+        permissionRequests: [PendingPermissionRequest] = [],
+        askUserQuestions: [PendingAskUserQuestion] = [],
         timestamp: Date = Date()
     ) {
         self.id = id
@@ -503,6 +674,8 @@ struct Message: Identifiable, Codable {
         self.content = content
         self.imageAttachments = imageAttachments
         self.toolCalls = toolCalls
+        self.permissionRequests = permissionRequests
+        self.askUserQuestions = askUserQuestions
         self.timestamp = timestamp
     }
 
@@ -512,6 +685,8 @@ struct Message: Identifiable, Codable {
         case content
         case imageAttachments
         case toolCalls
+        case permissionRequests
+        case askUserQuestions
         case timestamp
     }
 
@@ -522,6 +697,8 @@ struct Message: Identifiable, Codable {
         content = try container.decode(String.self, forKey: .content)
         imageAttachments = try container.decodeIfPresent([MessageImageAttachment].self, forKey: .imageAttachments) ?? []
         toolCalls = try container.decodeIfPresent([ToolCallInfo].self, forKey: .toolCalls) ?? []
+        permissionRequests = try container.decodeIfPresent([PendingPermissionRequest].self, forKey: .permissionRequests) ?? []
+        askUserQuestions = try container.decodeIfPresent([PendingAskUserQuestion].self, forKey: .askUserQuestions) ?? []
         timestamp = try container.decode(Date.self, forKey: .timestamp)
     }
 
@@ -532,6 +709,8 @@ struct Message: Identifiable, Codable {
         try container.encode(content, forKey: .content)
         try container.encode(imageAttachments, forKey: .imageAttachments)
         try container.encode(toolCalls, forKey: .toolCalls)
+        try container.encode(permissionRequests, forKey: .permissionRequests)
+        try container.encode(askUserQuestions, forKey: .askUserQuestions)
         try container.encode(timestamp, forKey: .timestamp)
     }
 

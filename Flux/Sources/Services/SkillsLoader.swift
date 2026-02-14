@@ -68,7 +68,7 @@ enum SkillsLoader {
         }
 
         let fm = FileManager.default
-        var seen = Set<String>() // dedupe by directory name
+        var seen = Set<String>() // dedupe by slash-command path
         var skills: [Skill] = []
 
         for skillsDir in searchDirs {
@@ -76,22 +76,19 @@ enum SkillsLoader {
             Log.skills.debug("Checking \(skillsDir.path) — exists: \(dirExists)")
             guard dirExists else { continue }
 
-            guard let entries = try? fm.contentsOfDirectory(
-                at: skillsDir,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            ) else {
+            let skillEntries = discoverCommandDirectories(in: skillsDir, fileManager: fm)
+            guard !skillEntries.isEmpty else {
                 Log.skills.warning("Failed to list contents of \(skillsDir.path)")
                 continue
             }
 
-            Log.skills.debug("Found \(entries.count) entries in \(skillsDir.lastPathComponent)")
+            Log.skills.debug("Found \(skillEntries.count) skill directories in \(skillsDir.lastPathComponent)")
 
-            for entry in entries {
-                let dirName = entry.lastPathComponent
+            for skillEntry in skillEntries {
+                let dirName = relativeCommandName(for: skillEntry, in: skillsDir) ?? skillEntry.lastPathComponent
                 guard !seen.contains(dirName) else { continue }
 
-                let resolved = entry.resolvingSymlinksInPath()
+                let resolved = skillEntry.resolvingSymlinksInPath()
 
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: resolved.path, isDirectory: &isDir),
@@ -124,6 +121,40 @@ enum SkillsLoader {
 
         Log.skills.info("Loaded \(skills.count) skills total")
         return skills.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    // MARK: - Discovery
+
+    /// Finds skill directories by locating `SKILL.md` files under the given root.
+    private static func discoverCommandDirectories(in root: URL, fileManager: FileManager) -> [URL] {
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var results: [URL] = []
+        for case let url as URL in enumerator {
+            if url.lastPathComponent == "SKILL.md" {
+                results.append(url.deletingLastPathComponent())
+            }
+        }
+        return results
+    }
+
+    /// Computes a slash-command-safe path relative to the given root directory.
+    private static func relativeCommandName(for skillDir: URL, in root: URL) -> String? {
+        let normalizedRoot = root.standardizedFileURL
+        let normalizedSkill = skillDir.standardizedFileURL
+
+        let rootComponents = normalizedRoot.pathComponents
+        let skillComponents = normalizedSkill.pathComponents
+        guard skillComponents.count > rootComponents.count else { return nil }
+        return skillComponents
+            .dropFirst(rootComponents.count)
+            .joined(separator: "/")
     }
 
     // MARK: - Load with Recommendations

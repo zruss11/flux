@@ -37,6 +37,7 @@ struct IslandView: View {
     @State private var showExpandedContent = false
     @State private var measuredChatHeight: CGFloat = 0
     @State private var skillsVisible = false
+    @State private var hasPendingAttachments = false
     @State private var closedIndicatorsLatched = false
     @State private var clearClosedIndicatorsWorkItem: DispatchWorkItem?
 
@@ -58,12 +59,14 @@ struct IslandView: View {
 
     private let closedActiveWidthBoost: CGFloat = 72
     private let closedIndicatorLatchDuration: TimeInterval = 1.6
+    private let tickerMinimumRemainingDuration: TimeInterval = 0.6
 
     private var closedIndicatorSlotWidth: CGFloat {
         showClosedActivityIndicators ? (closedActiveWidthBoost / 2) : 0
     }
 
     private let closedDictationWidthBoost: CGFloat = 80
+    private let closedRightSlotFixedWidth: CGFloat = 36
 
     private var isDictatingClosed: Bool {
         !isExpanded && DictationManager.shared.isDictating
@@ -71,6 +74,34 @@ struct IslandView: View {
 
     private var closedDictationSlotWidth: CGFloat {
         isDictatingClosed ? closedDictationWidthBoost : 0
+    }
+
+    /// Show the right slot when dictation is active.
+    private var showRightSlot: Bool {
+        isDictatingClosed
+    }
+
+    private var closedRightSlotWidth: CGFloat {
+        showRightSlot ? closedRightSlotFixedWidth : 0
+    }
+
+    /// The icon of the app that was active when dictation started.
+    private var dictationAppIcon: NSImage? {
+        let bundleId: String? = AppMonitor.shared.currentApp?.bundleId
+            ?? AppMonitor.shared.recentApps.first?.bundleId
+        guard let bundleId else { return nil }
+
+        // Try InstalledAppProvider first (cached, higher quality)
+        if let discovered = InstalledAppProvider.shared.app(forBundleId: bundleId) {
+            return discovered.icon
+        }
+
+        // Fallback: get icon from the running application directly
+        if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) {
+            return runningApp.icon
+        }
+
+        return nil
     }
 
     private var hasPendingToolCalls: Bool {
@@ -109,6 +140,7 @@ struct IslandView: View {
         notchSize.width
             + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
             + (isDictatingClosed ? closedDictationWidthBoost : 0)
+            + closedRightSlotWidth
     }
     private var closedHeight: CGFloat { notchSize.height }
     private var expandedWidth: CGFloat { 480 }
@@ -118,6 +150,11 @@ struct IslandView: View {
     private var isExpanded: Bool { windowManager.isExpanded }
     private var isHovering: Bool { windowManager.isHovering }
     private var hasNotch: Bool { windowManager.hasNotch }
+    private var shouldShowTickerWhenClosed: Bool {
+        windowManager.showingTickerNotification
+            && !isExpanded
+            && windowManager.tickerRemainingDuration > tickerMinimumRemainingDuration
+    }
 
     private var messageCount: Int {
         conversationStore.activeConversation?.messages.count ?? 0
@@ -130,9 +167,12 @@ struct IslandView: View {
         if case .folderDetail = contentType {
             return maxExpandedHeight
         }
-        // No messages yet — compact initial state with just the input row
+        // No messages yet — compact initial state with just the input row.
+        // Bump height when attachments are pending so the preview + pills stay visible.
         if messageCount == 0 && !skillsVisible {
-            return minExpandedHeight + 80
+            let base = minExpandedHeight + 80
+            let attachmentBoost: CGFloat = hasPendingAttachments ? 80 : 0
+            return base + attachmentBoost
         }
         // Grow to fit measured chat content + header + input row + padding
         // Header ~36pt, input row ~52pt, divider + padding ~20pt
@@ -166,7 +206,28 @@ struct IslandView: View {
                 )
                 .padding(.horizontal, isExpanded ? topRadius : bottomRadius)
                 .padding([.horizontal, .bottom], isExpanded ? 12 : 0)
-                .background(.black)
+                .background {
+                    if isExpanded {
+                        ZStack {
+                            // Glass blur layer — ultra-thin material for transparency
+                            RoundedRectangle(cornerRadius: bottomRadius, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                            // Radial gradient overlay — denser center for readability, transparent edges
+                            RadialGradient(
+                                colors: [
+                                    .black.opacity(0.82),
+                                    .black.opacity(0.60),
+                                    .black.opacity(0.35)
+                                ],
+                                center: .center,
+                                startRadius: 20,
+                                endRadius: 300
+                            )
+                        }
+                    } else {
+                        Color.black
+                    }
+                }
                 .clipShape(
                     hasNotch
                         ? AnyShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
@@ -198,9 +259,12 @@ struct IslandView: View {
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
                 .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: hasPendingAttachments)
                 .padding(.top, hasNotch ? 0 : windowManager.topOffset)
 
-            // Clipboard notification that drops below the island
+            let notificationBaseOffset = currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset)
+
+            // Clipboard notification that drops below the island.
             if windowManager.showingClipboardNotification {
                 ClipboardNotificationView()
                     .transition(
@@ -209,11 +273,39 @@ struct IslandView: View {
                             removal: .opacity
                         )
                     )
-                    .offset(y: currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset))
+                    .offset(y: notificationBaseOffset)
+            }
+
+            // Dictation failure notification shown below clipboard notification.
+            if windowManager.showingDictationNotification {
+                DictationNotificationView(message: windowManager.dictationNotificationMessage)
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity
+                        )
+                    )
+                    .offset(y: notificationBaseOffset + (windowManager.showingClipboardNotification ? 44 : 0))
+            }
+
+            // CI ticker bar — extends organically from the island's bottom edge.
+            if shouldShowTickerWhenClosed {
+                TickerBarView(
+                    message: windowManager.tickerNotificationMessage,
+                    barWidth: currentWidth + hoverWidthBoost,
+                    cornerRadius: bottomRadius,
+                    displayDuration: windowManager.tickerDisplayDuration
+                )
+                .id(windowManager.tickerNotificationMessage) // fresh animation per message
+                .transition(.opacity)
+                .offset(y: currentHeight + hoverHeightBoost - 2 + (hasNotch ? 0 : windowManager.topOffset))
+                .allowsHitTesting(false)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingClipboardNotification)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingDictationNotification)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingTickerNotification)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 clearClosedIndicatorsWorkItem?.cancel()
@@ -264,6 +356,14 @@ struct IslandView: View {
         }
         .onPreferenceChange(SkillsVisibleKey.self) { visible in
             skillsVisible = visible
+        }
+        .onPreferenceChange(HasPendingAttachmentsKey.self) { hasAttachments in
+            hasPendingAttachments = hasAttachments
+        }
+        .onChange(of: hasPendingAttachments) { _, _ in
+            if isExpanded {
+                windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
+            }
         }
         .onChange(of: measuredChatHeight) { _, _ in
             if isExpanded {
@@ -374,6 +474,20 @@ struct IslandView: View {
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
+
+            // Right slot — app icon during dictation
+            ZStack {
+                if isDictatingClosed, let icon = dictationAppIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                }
+            }
+            .frame(width: closedRightSlotWidth, height: closedHeight)
+            .offset(x: 6)
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)
@@ -422,7 +536,7 @@ struct IslandView: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white.opacity(0.7))
                         .frame(width: 24, height: 24)
-                        .background(Circle().fill(.white.opacity(0.1)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
@@ -448,7 +562,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
 
@@ -462,7 +576,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
@@ -478,7 +592,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut("n", modifiers: .command)
@@ -493,7 +607,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
 
@@ -507,7 +621,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
@@ -524,7 +638,7 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(.white.opacity(0.08)))
+                        .background(Circle().fill(.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
@@ -536,7 +650,7 @@ struct IslandView: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.white.opacity(0.6))
                     .frame(width: 24, height: 24)
-                    .background(Circle().fill(.white.opacity(0.08)))
+                    .background(Circle().fill(.white.opacity(0.12)))
             }
             .buttonStyle(.plain)
         }
@@ -547,7 +661,7 @@ struct IslandView: View {
     private var expandedBody: some View {
         VStack(spacing: 0) {
             Divider()
-                .overlay(Color.white.opacity(0.1))
+                .overlay(Color.white.opacity(0.15))
 
             Group {
                 switch contentType {
@@ -559,7 +673,7 @@ struct IslandView: View {
                         voiceInput: voiceInput
                     )
                 case .settings:
-                    IslandSettingsView(agentBridge: agentBridge)
+                    IslandSettingsView(conversationStore: conversationStore, agentBridge: agentBridge)
                 case .history:
                     ChatHistoryView(
                         conversationStore: conversationStore,
@@ -666,6 +780,34 @@ private struct ClipboardNotificationView: View {
         .overlay(
             Capsule()
                 .stroke(.white.opacity(0.15), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
+    }
+}
+
+private struct DictationNotificationView: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.bubble.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.red.opacity(0.9))
+
+            Text(message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            Capsule()
+                .fill(.black)
+        )
+        .overlay(
+            Capsule()
+                .stroke(.red.opacity(0.35), lineWidth: 0.8)
         )
         .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
     }
@@ -781,32 +923,44 @@ private struct ClosedWaveformBars: View {
 // MARK: - In-Island Settings
 
 struct IslandSettingsView: View {
+    @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
 
     @AppStorage("anthropicApiKey") private var apiKey = ""
-    @AppStorage("discordChannelId") private var discordChannelId = ""
-    @AppStorage("slackChannelId") private var slackChannelId = ""
-    @AppStorage("telegramChatId") private var telegramChatId = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
+    @AppStorage("githubWatchedRepos") private var githubWatchedRepos = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
+    @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
+    @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
+    @AppStorage("ciTickerDuration") private var ciTickerDuration: Double = 6.0
 
-    @State private var discordBotToken = ""
-    @State private var slackBotToken = ""
-    @State private var telegramBotToken = ""
-    @State private var secretsLoaded = false
     @State private var editingField: EditingField?
     @FocusState private var fieldFocused: Bool
     @State private var permissionRefreshToken: Int = 0
-    @State private var telegramPairingCode = ""
-    @State private var telegramPending: [TelegramPairingRequest] = []
-    @State private var telegramPairingError: String?
     @State private var automationService = AutomationService.shared
     @State private var automationsExpanded = false
+    @State private var dictionaryStore = CustomDictionaryStore.shared
+    @State private var dictionaryExpanded = false
+    @State private var dictionaryEditorMode: DictionaryEditorMode?
+    @State private var pendingDeleteDictionaryEntry: DictionaryEntry?
+    @State private var dictEditorWord = ""
+    @State private var dictEditorAliases = ""
+    @State private var dictEditorDescription = ""
     @State private var automationEditorMode: InlineAutomationEditorMode?
     @State private var pendingDeleteAutomation: Automation?
     @State private var automationActionError: String?
+    @State private var showAppInstructionsEditor = false
+    @State private var appInstructionsCount = 0
+    @State private var githubReposExpanded = false
+    @State private var githubRepoActionError: String?
+    @State private var showRepoProjectPicker = false
+    @State private var showCloneFromURLSheet = false
+    @State private var cloneGitURL = ""
+    @State private var cloneLocationPath = Self.defaultCloneLocationPath
+    @State private var cloneInProgress = false
+    @State private var cloneErrorMessage: String?
 
     // Automation editor fields
     @State private var editorName = ""
@@ -822,18 +976,16 @@ struct IslandSettingsView: View {
     private enum EditingField: Hashable {
         case apiKey
         case linearToken
-        case discordBotToken
-        case discordChannelId
-        case slackBotToken
-        case slackChannelId
-        case telegramBotToken
-        case telegramChatId
-        case telegramPairingCode
     }
 
     private enum InlineAutomationEditorMode: Equatable {
         case create
         case edit(String) // automation ID
+    }
+
+    private enum DictionaryEditorMode: Equatable {
+        case create
+        case edit(UUID)
     }
 
     private enum ScheduleFrequencyOption: String, CaseIterable, Identifiable {
@@ -845,6 +997,17 @@ struct IslandSettingsView: View {
         case monthly = "Monthly"
 
         var id: String { rawValue }
+    }
+
+    private static var defaultCloneLocationPath: String {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        let development = home.appendingPathComponent("Development", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: development.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            return development.path
+        }
+        return home.path
     }
 
     var body: some View {
@@ -932,6 +1095,19 @@ struct IslandSettingsView: View {
                 )
 
                 settingsRow(
+                    icon: "speaker.wave.2",
+                    label: "Dictation sounds",
+                    trailing: {
+                        AnyView(
+                            Toggle("", isOn: $dictationSoundsEnabled)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.mini)
+                        )
+                    }
+                )
+
+                settingsRow(
                     icon: "waveform.badge.magnifyingglass",
                     label: "Enhancement mode",
                     trailing: {
@@ -955,6 +1131,66 @@ struct IslandSettingsView: View {
                         )
                     }
                 )
+
+                settingsRow(
+                    icon: "desktopcomputer",
+                    label: "Capture in-app context",
+                    trailing: {
+                        AnyView(
+                            Toggle("", isOn: $inAppContextTrackingEnabled)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.mini)
+                        )
+                    }
+                )
+
+                settingsRow(
+                    icon: "app.badge",
+                    label: "Per-App Instructions",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 6) {
+                                Text(appInstructionsCount == 0 ? "None" : "\(appInstructionsCount) set")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(appInstructionsCount == 0 ? .white.opacity(0.5) : .green.opacity(0.85))
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.35))
+                            }
+                        )
+                    }
+                )
+                .onTapGesture {
+                    showAppInstructionsEditor = true
+                }
+
+                // Custom Dictionary (expandable)
+                settingsRow(
+                    icon: "character.book.closed",
+                    label: "Custom Dictionary",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 6) {
+                                Text("\(dictionaryStore.entries.count) words")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.5))
+                                Image(systemName: dictionaryExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                        )
+                    }
+                )
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        dictionaryExpanded.toggle()
+                    }
+                }
+
+                if dictionaryExpanded {
+                    dictionaryInlineSection
+                }
 
                 divider
 
@@ -1030,270 +1266,55 @@ struct IslandSettingsView: View {
 
                 divider
 
-                // Discord Bot
-                if editingField == .discordBotToken {
-                    editableRow(icon: "bubble.left.fill", label: "Discord Bot Token") {
-                        SecureField("Bot token", text: $discordBotToken)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                persistDiscordBotToken()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        persistDiscordBotToken()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "bubble.left.fill", label: "Discord Bot", trailing: {
+                
+                // GitHub Watched Repos
+                settingsRow(
+                    icon: "chevron.left.forwardslash.chevron.right",
+                    label: "GitHub Repos",
+                    trailing: {
                         AnyView(
-                            HStack(spacing: 8) {
-                                statusDot(isSet: !discordBotToken.isEmpty && !discordChannelId.isEmpty)
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.35))
-                                    .help(discordBotHelp)
-                            }
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .discordBotToken
-                    }
-                }
-
-                if editingField == .discordChannelId {
-                    editableRow(icon: "bubble.left.fill", label: "Discord Channel ID") {
-                        TextField("Channel ID (e.g. 123456789012345678)", text: $discordChannelId)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "bubble.left.fill", label: "Discord Channel ID", trailing: {
-                        AnyView(statusDot(isSet: !discordChannelId.isEmpty))
-                    })
-                    .onTapGesture {
-                        editingField = .discordChannelId
-                    }
-                }
-
-                // Slack Bot
-                if editingField == .slackBotToken {
-                    editableRow(icon: "number", label: "Slack Bot Token") {
-                        SecureField("xoxb-...", text: $slackBotToken)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                persistSlackBotToken()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        persistSlackBotToken()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "number", label: "Slack Bot", trailing: {
-                        AnyView(
-                            HStack(spacing: 8) {
-                                statusDot(isSet: !slackBotToken.isEmpty && !slackChannelId.isEmpty)
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.35))
-                                    .help(slackBotHelp)
-                            }
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .slackBotToken
-                    }
-                }
-
-                if editingField == .slackChannelId {
-                    editableRow(icon: "number", label: "Slack Channel ID") {
-                        TextField("Channel ID (e.g. C123...)", text: $slackChannelId)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "number", label: "Slack Channel ID", trailing: {
-                        AnyView(statusDot(isSet: !slackChannelId.isEmpty))
-                    })
-                    .onTapGesture {
-                        editingField = .slackChannelId
-                    }
-                }
-
-                // Telegram Bot
-                if editingField == .telegramBotToken {
-                    editableRow(icon: "paperplane.fill", label: "Telegram Bot Token") {
-                        SecureField("Bot token", text: $telegramBotToken)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                persistTelegramBotToken()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        persistTelegramBotToken()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "paperplane.fill", label: "Telegram Bot", trailing: {
-                        AnyView(
-                            HStack(spacing: 8) {
-                                statusDot(isSet: !telegramBotToken.isEmpty && !telegramChatId.isEmpty)
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.35))
-                                    .help(telegramBotHelp)
-                            }
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .telegramBotToken
-                    }
-                }
-
-                if editingField == .telegramChatId {
-                    editableRow(icon: "paperplane.fill", label: "Telegram Chat ID") {
-                        TextField("Chat ID (e.g. 123456789)", text: $telegramChatId)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                notifyTelegramConfigChanged()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        notifyTelegramConfigChanged()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "paperplane.fill", label: "Telegram Chat ID", trailing: {
-                        AnyView(statusDot(isSet: !telegramChatId.isEmpty))
-                    })
-                    .onTapGesture {
-                        editingField = .telegramChatId
-                    }
-                }
-
-                if editingField == .telegramPairingCode {
-                    editableRow(icon: "paperplane.fill", label: "Telegram Pairing Code") {
-                        TextField("PAIRCODE", text: $telegramPairingCode)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit {
-                                approveTelegramPairing()
-                                editingField = nil
-                            }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        approveTelegramPairing()
-                        editingField = nil
-                    }
-                } else {
-                    settingsRow(icon: "paperplane.fill", label: "Telegram Pairing", trailing: {
-                        AnyView(
-                            Text(telegramPending.isEmpty ? "None" : "\(telegramPending.count) pending")
-                                .font(.system(size: 12))
-                                .foregroundStyle(telegramPending.isEmpty ? .white.opacity(0.5) : .orange.opacity(0.9))
-                        )
-                    })
-                    .onTapGesture {
-                        editingField = .telegramPairingCode
-                    }
-                }
-
-                if !telegramPending.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(telegramPending) { request in
-                            HStack(spacing: 8) {
-                                Text(request.username.map { "@\($0)" } ?? "Chat \(request.chatId)")
+                            HStack(spacing: 6) {
+                                let count = githubReposList.count
+                                Text(count == 0 ? "None" : "\(count)")
                                     .font(.system(size: 11))
-                                    .foregroundStyle(.white.opacity(0.8))
-                                Spacer()
-                                Button {
-                                    TelegramPairingStore.removePending(chatId: request.chatId)
-                                    loadTelegramPairing()
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.white.opacity(0.5))
-                                }
-                                .buttonStyle(.plain)
+                                    .foregroundStyle(count > 0 ? .green.opacity(0.85) : .white.opacity(0.5))
+                                Image(systemName: githubReposExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.4))
                             }
-                        }
+                        )
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
+                )
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        githubReposExpanded.toggle()
+                    }
                 }
 
-                if let telegramPairingError {
-                    Text(telegramPairingError)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red.opacity(0.8))
-                        .padding(.horizontal, 12)
+                if githubReposExpanded {
+                    githubReposInlineSection
                 }
+
+                // CI Ticker Duration
+                HStack(spacing: 8) {
+                    Image(systemName: "textformat.abc")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 20)
+                    Text("Ticker")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.9))
+                    Spacer()
+                    Text("\(Int(ciTickerDuration))s")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(width: 28, alignment: .trailing)
+                    Slider(value: $ciTickerDuration, in: 3...12, step: 1)
+                        .frame(width: 80)
+                        .tint(.white.opacity(0.6))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
 
                 divider
 
@@ -1372,22 +1393,15 @@ struct IslandSettingsView: View {
             .padding(.vertical, 8)
         }
         .onAppear {
-            loadSecretsIfNeeded()
+            reloadAppInstructionsCount()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appInstructionsDidChange)) { _ in
+            reloadAppInstructionsCount()
         }
         .onChange(of: editingField) { old, _ in
             switch old {
             case .apiKey:
                 agentBridge.sendApiKey(apiKey)
-            case .discordBotToken:
-                persistDiscordBotToken()
-            case .slackBotToken:
-                persistSlackBotToken()
-            case .telegramBotToken:
-                persistTelegramBotToken()
-            case .telegramChatId:
-                notifyTelegramConfigChanged()
-            case .telegramPairingCode:
-                approveTelegramPairing()
             default:
                 break
             }
@@ -1396,9 +1410,28 @@ struct IslandSettingsView: View {
             // Poll while Settings is visible so status updates after the user toggles permissions in System Settings.
             while !Task.isCancelled {
                 permissionRefreshToken &+= 1
-                loadTelegramPairing()
                 try? await Task.sleep(for: .seconds(1))
             }
+        }
+        .sheet(isPresented: $showAppInstructionsEditor) {
+            AppInstructionsView()
+                .frame(width: 600, height: 680)
+        }
+        .sheet(isPresented: $showRepoProjectPicker) {
+            WorkspaceFolderPickerView(
+                conversationStore: conversationStore,
+                onSelect: { url in
+                    handleOpenProjectSelection(url)
+                },
+                onCancel: {
+                    showRepoProjectPicker = false
+                }
+            )
+            .frame(width: 640, height: 500)
+        }
+        .sheet(isPresented: $showCloneFromURLSheet) {
+            cloneFromURLSheet
+                .frame(width: 860, height: 360)
         }
     }
 
@@ -1471,6 +1504,216 @@ struct IslandSettingsView: View {
         } message: {
             Text(pendingDeleteAutomation?.name ?? "")
         }
+    }
+
+    // MARK: - Custom Dictionary Inline Section
+
+    private var dictionaryInlineSection: some View {
+        VStack(spacing: 2) {
+            ForEach(dictionaryStore.entries) { entry in
+                dictionaryInlineCard(entry)
+            }
+
+            if dictionaryEditorMode != nil {
+                dictionaryInlineEditor
+            }
+
+            if dictionaryEditorMode == nil {
+                HStack(spacing: 0) {
+                    Button {
+                        startCreatingDictionaryEntry()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 12))
+                            Text("Add Word")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(.white.opacity(0.6))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(dictionaryStore.entries.count >= dictionaryStore.maxEntries)
+
+                    Spacer()
+
+                    Text("\(dictionaryStore.entries.count) / \(dictionaryStore.maxEntries)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .padding(.trailing, 12)
+                }
+            }
+        }
+        .confirmationDialog(
+            "Delete dictionary entry?",
+            isPresented: Binding(
+                get: { pendingDeleteDictionaryEntry != nil },
+                set: { if !$0 { pendingDeleteDictionaryEntry = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let pending = pendingDeleteDictionaryEntry else { return }
+                dictionaryStore.remove(id: pending.id)
+                pendingDeleteDictionaryEntry = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteDictionaryEntry = nil
+            }
+        } message: {
+            Text(pendingDeleteDictionaryEntry?.text ?? "")
+        }
+    }
+
+    private func dictionaryInlineCard(_ entry: DictionaryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(entry.text)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+
+                Spacer()
+
+                Button {
+                    startEditingDictionaryEntry(entry)
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    pendingDeleteDictionaryEntry = entry
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if !entry.aliases.isEmpty {
+                Text(entry.aliases.joined(separator: ", "))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+            }
+
+            if !entry.description.isEmpty {
+                Text(entry.description)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.04))
+        )
+        .padding(.horizontal, 8)
+    }
+
+    private var dictionaryInlineEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(dictionaryEditorMode == .create ? "Add Word" : "Edit Word")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+
+            TextField("Word or phrase (e.g. Kubernetes)", text: $dictEditorWord)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+
+            TextField("Spoken forms, comma-separated (e.g. kuber nettys, cube er netties)", text: $dictEditorAliases)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+
+            TextField("Description (optional)", text: $dictEditorDescription)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+
+            HStack(spacing: 8) {
+                Button("Save") {
+                    saveDictionaryEntry()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.blue)
+                .disabled(dictEditorWord.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                Button("Cancel") {
+                    dictionaryEditorMode = nil
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.5))
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.06))
+        )
+        .padding(.horizontal, 8)
+    }
+
+    private func startCreatingDictionaryEntry() {
+        dictEditorWord = ""
+        dictEditorAliases = ""
+        dictEditorDescription = ""
+        dictionaryEditorMode = .create
+    }
+
+    private func startEditingDictionaryEntry(_ entry: DictionaryEntry) {
+        dictEditorWord = entry.text
+        dictEditorAliases = entry.aliases.joined(separator: ", ")
+        dictEditorDescription = entry.description
+        dictionaryEditorMode = .edit(entry.id)
+    }
+
+    private func saveDictionaryEntry() {
+        let word = dictEditorWord.trimmingCharacters(in: .whitespaces)
+        guard !word.isEmpty else { return }
+
+        let aliases = dictEditorAliases
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let description = String(dictEditorDescription.prefix(30))
+
+        switch dictionaryEditorMode {
+        case .create:
+            let entry = DictionaryEntry(
+                text: word,
+                aliases: aliases,
+                description: description
+            )
+            dictionaryStore.add(entry)
+        case .edit(let id):
+            if var existing = dictionaryStore.entries.first(where: { $0.id == id }) {
+                existing.text = word
+                existing.aliases = aliases
+                existing.description = description
+                dictionaryStore.update(existing)
+            }
+        case nil:
+            break
+        }
+
+        dictionaryEditorMode = nil
     }
 
     private func automationInlineCard(_ automation: Automation) -> some View {
@@ -1922,9 +2165,401 @@ struct IslandSettingsView: View {
         )
     }
 
+    private var githubReposList: [String] {
+        githubWatchedRepos
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var githubReposInlineSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Repos to watch for CI failures (owner/repo)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .padding(.horizontal, 12)
+
+            if let githubRepoActionError {
+                Text(githubRepoActionError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red.opacity(0.9))
+                    .padding(.horizontal, 12)
+            }
+
+            // Existing repos
+            ForEach(githubReposList, id: \.self) { repo in
+                HStack(spacing: 8) {
+                    Image(systemName: "book.closed.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.4))
+
+                    Text(repo)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Button {
+                        removeGithubRepo(repo)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.04)))
+                .padding(.horizontal, 8)
+            }
+
+            Menu {
+                Button {
+                    githubRepoActionError = nil
+                    showRepoProjectPicker = true
+                } label: {
+                    Label("Open project", systemImage: "folder")
+                }
+
+                Button {
+                    githubRepoActionError = nil
+                    cloneErrorMessage = nil
+                    cloneGitURL = ""
+                    cloneLocationPath = Self.defaultCloneLocationPath
+                    showCloneFromURLSheet = true
+                } label: {
+                    Label("Clone from URL", systemImage: "globe")
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.6))
+
+                    Text("Add repository")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+
+                    Spacer()
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+            }
+            .menuStyle(.borderlessButton)
+            .padding(.horizontal, 8)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var cloneFromURLSheet: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Clone from URL")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+
+                Spacer()
+
+                Button {
+                    showCloneFromURLSheet = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(.white.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Git URL")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                TextField("https://github.com/user/repo.git", text: $cloneGitURL)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.95))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.white.opacity(0.02))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color(red: 1.0, green: 0.8, blue: 0.74).opacity(0.9), lineWidth: 2)
+                    )
+                    .onSubmit {
+                        cloneRepositoryFromURL()
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Clone location")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                HStack(spacing: 12) {
+                    TextField("", text: $cloneLocationPath)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(.white.opacity(0.02))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+
+                    Button("Browse...") {
+                        browseForCloneLocation()
+                    }
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.white.opacity(0.02))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let cloneErrorMessage {
+                Text(cloneErrorMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red.opacity(0.9))
+            }
+
+            HStack {
+                Spacer()
+                Button(cloneInProgress ? "Cloning..." : "Clone repository") {
+                    cloneRepositoryFromURL()
+                }
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.black.opacity(cloneInProgress ? 0.5 : 0.9))
+                .padding(.horizontal, 26)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(.white.opacity(cloneInProgress ? 0.5 : 0.78))
+                )
+                .buttonStyle(.plain)
+                .disabled(cloneInProgress || cloneGitURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(.horizontal, 30)
+        .padding(.vertical, 24)
+        .background(Color.black.opacity(0.98))
+    }
+
+    @discardableResult
+    private func addGithubRepo(_ repoIdentifier: String) -> Bool {
+        let repo = repoIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !repo.isEmpty else { return false }
+
+        var repos = githubReposList
+        guard !repos.contains(repo) else { return false }
+
+        repos.append(repo)
+        githubWatchedRepos = repos.joined(separator: ",")
+        syncGithubReposToWatcher()
+        return true
+    }
+
+    private func handleOpenProjectSelection(_ projectURL: URL) {
+        showRepoProjectPicker = false
+        githubRepoActionError = nil
+        conversationStore.workspacePath = projectURL.path
+
+        Task {
+            let repoIdentifier = await resolveGitHubRepoFromProject(at: projectURL)
+            await MainActor.run {
+                guard let repoIdentifier else {
+                    githubRepoActionError = "Could not detect a GitHub origin remote for this project."
+                    return
+                }
+                if !addGithubRepo(repoIdentifier) {
+                    githubRepoActionError = "\(repoIdentifier) is already in your watch list."
+                }
+            }
+        }
+    }
+
+    private func cloneRepositoryFromURL() {
+        cloneErrorMessage = nil
+
+        let gitURL = cloneGitURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let repoIdentifier = parseGitHubRepoIdentifier(from: gitURL) else {
+            cloneErrorMessage = "Enter a valid GitHub URL (for example: https://github.com/user/repo.git)."
+            return
+        }
+
+        let destinationPath = cloneLocationPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destinationPath.isEmpty else {
+            cloneErrorMessage = "Choose a clone location."
+            return
+        }
+
+        let destinationURL = URL(fileURLWithPath: destinationPath, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        } catch {
+            cloneErrorMessage = "Unable to use clone location: \(error.localizedDescription)"
+            return
+        }
+
+        cloneInProgress = true
+
+        Task {
+            let cloneResult = await runGit(arguments: ["clone", gitURL], currentDirectory: destinationURL)
+            await MainActor.run {
+                cloneInProgress = false
+
+                guard cloneResult.exitCode == 0 else {
+                    cloneErrorMessage = cloneResult.output.isEmpty ? "Clone failed." : cloneResult.output
+                    return
+                }
+
+                let added = addGithubRepo(repoIdentifier)
+                if !added {
+                    githubRepoActionError = "\(repoIdentifier) is already in your watch list."
+                } else {
+                    githubRepoActionError = nil
+                }
+
+                let repoName = repoIdentifier.split(separator: "/").last.map(String.init) ?? "repository"
+                conversationStore.workspacePath = destinationURL.appendingPathComponent(repoName, isDirectory: true).path
+
+                showCloneFromURLSheet = false
+                cloneGitURL = ""
+            }
+        }
+    }
+
+    private func browseForCloneLocation() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "Choose Clone Location"
+        panel.prompt = "Select"
+        panel.directoryURL = URL(fileURLWithPath: cloneLocationPath, isDirectory: true)
+
+        if panel.runModal() == .OK, let selectedURL = panel.url {
+            cloneLocationPath = selectedURL.path
+        }
+    }
+
+    private func resolveGitHubRepoFromProject(at projectURL: URL) async -> String? {
+        let originResult = await runGit(arguments: ["-C", projectURL.path, "remote", "get-url", "origin"])
+        guard originResult.exitCode == 0 else { return nil }
+        return parseGitHubRepoIdentifier(from: originResult.output)
+    }
+
+    private func parseGitHubRepoIdentifier(from gitURL: String) -> String? {
+        let trimmed = gitURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        func normalizedSlug(_ slug: String) -> String? {
+            var cleaned = slug.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if cleaned.hasSuffix(".git") {
+                cleaned.removeLast(4)
+            }
+            let parts = cleaned.split(separator: "/", omittingEmptySubsequences: true)
+            guard parts.count >= 2 else { return nil }
+            return "\(parts[0])/\(parts[1])"
+        }
+
+        if trimmed.hasPrefix("git@github.com:") {
+            return normalizedSlug(String(trimmed.dropFirst("git@github.com:".count)))
+        }
+
+        if trimmed.hasPrefix("ssh://git@github.com/") {
+            return normalizedSlug(String(trimmed.dropFirst("ssh://git@github.com/".count)))
+        }
+
+        if let url = URL(string: trimmed),
+           let host = url.host?.lowercased(),
+           host == "github.com" || host == "www.github.com" {
+            return normalizedSlug(url.path)
+        }
+
+        if !trimmed.contains("://"), !trimmed.contains("@"), !trimmed.contains(":") {
+            return normalizedSlug(trimmed)
+        }
+
+        return nil
+    }
+
+    private func runGit(arguments: [String], currentDirectory: URL? = nil) async -> (output: String, exitCode: Int32) {
+        let process = Process()
+        let pipe = Pipe()
+
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.currentDirectoryURL = currentDirectory
+
+        var env = ProcessInfo.processInfo.environment
+        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        let currentPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
+        process.environment = env
+
+        return await withCheckedContinuation { continuation in
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: (error.localizedDescription, Int32(1)))
+                return
+            }
+
+            DispatchQueue.global(qos: .utility).async {
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                continuation.resume(returning: (output, process.terminationStatus))
+            }
+        }
+    }
+
+    private func removeGithubRepo(_ repo: String) {
+        var repos = githubReposList
+        repos.removeAll { $0 == repo }
+        githubWatchedRepos = repos.joined(separator: ",")
+        syncGithubReposToWatcher()
+    }
+
+    private func syncGithubReposToWatcher() {
+        WatcherService.shared.updateGitHubRepos(githubWatchedRepos)
+        CIStatusMonitor.shared.forceRefresh()
+    }
+
     private var divider: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.08))
+            .fill(Color.white.opacity(0.12))
             .frame(height: 1)
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
@@ -1979,92 +2614,9 @@ struct IslandSettingsView: View {
         }
     }
 
-    private var discordBotHelp: String {
-        [
-            "Discord bot setup:",
-            "1) Create a bot at Discord Developer Portal (Applications -> Bot).",
-            "2) Copy the bot token and paste it into \"Discord Bot\".",
-            "3) Invite the bot to your server with \"Send Messages\" permission.",
-            "4) Enable Developer Mode in Discord, then right click a channel -> Copy Channel ID.",
-        ].joined(separator: "\n")
+    private func reloadAppInstructionsCount() {
+        appInstructionsCount = AppInstructions.shared.instructions.count
     }
-
-    private var slackBotHelp: String {
-        [
-            "Slack bot setup:",
-            "1) Create a Slack app (From scratch) with a Bot user.",
-            "2) Under OAuth & Permissions, add scopes: chat:write (+ chat:write.public for public channels without inviting the bot).",
-            "3) Install the app to your workspace and copy the Bot User OAuth Token (xoxb-...).",
-            "4) Copy the channel ID (starts with C or G). Invite the bot for private channels.",
-        ].joined(separator: "\n")
-    }
-
-    private var telegramBotHelp: String {
-        [
-            "Telegram bot setup:",
-            "1) Create a bot with @BotFather and copy the token.",
-            "2) Paste the token into \"Telegram Bot\".",
-            "3) DM the bot to receive a pairing code.",
-            "4) Paste the pairing code into \"Telegram Pairing Code\" to approve.",
-            "5) For groups, mention @YourBotName to trigger responses.",
-        ].joined(separator: "\n")
-    }
-
-    private func loadSecretsIfNeeded() {
-        guard !secretsLoaded else { return }
-        secretsLoaded = true
-
-        discordBotToken = KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? ""
-        slackBotToken = KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? ""
-        telegramBotToken = KeychainService.getString(forKey: SecretKeys.telegramBotToken) ?? ""
-    }
-
-    private func persistDiscordBotToken() {
-        do {
-            try KeychainService.setString(discordBotToken, forKey: SecretKeys.discordBotToken)
-        } catch {
-            // Best effort; ignore.
-        }
-    }
-
-    private func persistSlackBotToken() {
-        do {
-            try KeychainService.setString(slackBotToken, forKey: SecretKeys.slackBotToken)
-        } catch {
-            // Best effort; ignore.
-        }
-    }
-
-    private func persistTelegramBotToken() {
-        do {
-            try KeychainService.setString(telegramBotToken, forKey: SecretKeys.telegramBotToken)
-        } catch {
-            // Best effort; ignore.
-        }
-        notifyTelegramConfigChanged()
-    }
-
-    private func notifyTelegramConfigChanged() {
-        NotificationCenter.default.post(name: .telegramConfigDidChange, object: nil)
-    }
-
-    private func loadTelegramPairing() {
-        telegramPending = TelegramPairingStore.loadPending()
-    }
-
-    private func approveTelegramPairing() {
-        telegramPairingError = nil
-        let code = telegramPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let _ = TelegramPairingStore.approve(code: code) else {
-            if !code.isEmpty {
-                telegramPairingError = "Pairing code not found or expired."
-            }
-            return
-        }
-        telegramPairingCode = ""
-        loadTelegramPairing()
-    }
-
     private func editableRow<Field: View>(
         icon: String,
         label: String,
@@ -2096,7 +2648,7 @@ struct IslandSettingsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.10)))
     }
 
     private func settingsRow(
@@ -2120,6 +2672,6 @@ struct IslandSettingsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.0001)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.05)))
     }
 }

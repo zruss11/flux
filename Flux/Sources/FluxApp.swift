@@ -8,7 +8,11 @@ struct FluxApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView()
+            EmptyView()
+        }
+        .commands {
+            // Settings now live entirely inside IslandView.
+            CommandGroup(replacing: .appSettings) { }
         }
     }
 }
@@ -25,6 +29,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let dictationManager = DictationManager.shared
     private let wakeWordDetector = WakeWordDetector.shared
     private let voiceInput = VoiceInput()
+    private let clipboardMonitor = ClipboardMonitor.shared
+    private let watcherService = WatcherService.shared
+    private let watcherAlertsConversationId = UUID(uuidString: "5F9E3C52-8A47-4F9D-9C39-CFFB2E7F2A11")!
 
     private var onboardingWindow: NSWindow?
     private var statusItem: NSStatusItem?
@@ -73,6 +80,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func launchMainApp() {
         Log.app.info("Launching main app — connecting bridge")
         setupBridgeCallbacks()
+        setupWatcherCallbacks()
         setupFunctionKeyMonitor()
         automationService.configureRunner { [weak self] request in
             guard let self else { return false }
@@ -95,6 +103,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         agentBridge.connect()
 
+        // Start monitoring frontmost app changes and forward to sidecar.
+        let appMonitor = AppMonitor.shared
+        appMonitor.onActiveAppChanged = { [weak self] activeApp in
+            let instruction = AppInstructions.shared.instruction(forBundleId: activeApp.bundleId)
+            self?.agentBridge.sendActiveAppUpdate(
+                appName: activeApp.appName,
+                bundleId: activeApp.bundleId,
+                pid: activeApp.pid,
+                appInstruction: instruction?.instruction
+            )
+        }
+        appMonitor.start()
+
+        // If per-app instructions change while Flux is active, immediately resend the current app context.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppInstructionsDidChange(_:)),
+            name: .appInstructionsDidChange,
+            object: nil
+        )
+
         IslandWindowManager.shared.showIsland(
             conversationStore: conversationStore,
             agentBridge: agentBridge,
@@ -103,6 +132,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         dictationManager.start(accessibilityReader: accessibilityReader)
+        SessionContextManager.shared.start()
+        clipboardMonitor.start()
+        watcherService.startAll()
+        CIStatusMonitor.shared.start()
+
+        // DEBUG: Cmd+Shift+D triggers a test ticker notification.
+        #if DEBUG
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Cmd+Shift+D
+            if event.modifierFlags.contains([.command, .shift]),
+               event.charactersIgnoringModifiers?.lowercased() == "d" {
+                let samples = [
+                    "✅ tixbit-monorepo — all checks passed on PR #455",
+                    "❌ flux CI failed on branch feature/ticker-bar",
+                    "🚀 monorepo deploy pipeline green — ship it!",
+                    "✅ san-juan build passed · 42s",
+                ]
+                let msg = samples.randomElement() ?? samples[0]
+                IslandWindowManager.shared.showTickerNotification(msg)
+                return nil  // consume the event
+            }
+            return event
+        }
+        #endif
+
         setupHandsFreeObserver()
 
         // Auto-start hands-free if previously enabled.
@@ -123,8 +177,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Log.app.info("Flux terminating")
         functionKeyMonitor?.stop()
         functionKeyMonitor = nil
+        NotificationCenter.default.removeObserver(
+            self,
+            name: .appInstructionsDidChange,
+            object: nil
+        )
         dictationManager.stop()
         wakeWordDetector.stop()
+        AppMonitor.shared.stop()
+        SessionContextManager.shared.stop()
+        clipboardMonitor.stop()
+        watcherService.onChatAlert = nil
+        CIStatusMonitor.shared.stop()
     }
 
     private func setupStatusItem() {
@@ -207,6 +271,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         handleAutomationOpenThread(notification)
     }
 
+    @objc
+    private func handleAppInstructionsDidChange(_ notification: Notification) {
+        let activeApp = AppMonitor.shared.currentApp ?? AppMonitor.shared.recentApps.first
+        guard let activeApp else { return }
+        let instruction = AppInstructions.shared.instruction(forBundleId: activeApp.bundleId)
+        agentBridge.sendActiveAppUpdate(
+            appName: activeApp.appName,
+            bundleId: activeApp.bundleId,
+            pid: activeApp.pid,
+            appInstruction: instruction?.instruction
+        )
+    }
+
     private func handleAutomationOpenThread(_ notification: Notification) {
         guard let userInfo = notification.userInfo,
               let conversationIdRaw = userInfo[NotificationPayloadKey.conversationId] as? String,
@@ -248,12 +325,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if IslandWindowManager.shared.isShown {
             IslandWindowManager.shared.hideIsland()
         } else {
-            IslandWindowManager.shared.showIsland(
-                conversationStore: conversationStore,
-                agentBridge: agentBridge,
-                screenCapture: screenCapture,
-                voiceInput: voiceInput
-            )
+            IslandWindowManager.shared.showIsland(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture, voiceInput: voiceInput)
         }
     }
 
@@ -351,6 +423,76 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.conversationStore.setConversationRunning(uuid, isRunning: isWorking)
             }
         }
+
+        agentBridge.onPermissionRequest = { [weak self] conversationId, requestId, toolName, input in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                let request = PendingPermissionRequest(id: requestId, toolName: toolName, input: input)
+                self.conversationStore.addPermissionRequest(to: uuid, request: request)
+            }
+        }
+
+        agentBridge.onAskUserQuestion = { [weak self] conversationId, requestId, rawQuestions in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                var questions: [PendingAskUserQuestion.Question] = []
+                for raw in rawQuestions {
+                    guard let questionText = raw["question"] as? String else { continue }
+                    let rawOptions = raw["options"] as? [[String: Any]] ?? []
+                    var options = rawOptions.compactMap { opt -> PendingAskUserQuestion.Question.Option? in
+                        guard let label = opt["label"] as? String else { return nil }
+                        return PendingAskUserQuestion.Question.Option(
+                            label: label,
+                            description: opt["description"] as? String
+                        )
+                    }
+                    let hasOther = options.contains { option in
+                        option.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                            .lowercased()
+                            .hasPrefix("other")
+                    }
+                    if !hasOther {
+                        options.append(PendingAskUserQuestion.Question.Option(label: "Other", description: nil))
+                    }
+                    let multiSelect = raw["multiSelect"] as? Bool ?? false
+                    questions.append(PendingAskUserQuestion.Question(
+                        question: questionText,
+                        options: options,
+                        multiSelect: multiSelect
+                    ))
+                }
+                guard !questions.isEmpty else { return }
+                let pending = PendingAskUserQuestion(id: requestId, questions: questions)
+                self.conversationStore.addAskUserQuestion(to: uuid, question: pending)
+            }
+        }
+    }
+
+    private func setupWatcherCallbacks() {
+        watcherService.onChatAlert = { [weak self] alert in
+            guard let self else { return }
+            Task { @MainActor in
+                self.routeWatcherAlertToChat(alert)
+            }
+        }
+    }
+
+    private func routeWatcherAlertToChat(_ alert: WatcherAlert) {
+        let conversation = conversationStore.ensureConversationExists(
+            id: watcherAlertsConversationId,
+            title: "Watcher Alerts"
+        )
+
+        var content = "[\(alert.watcherName)] \(alert.title)\n\n\(alert.summary)"
+        if let sourceUrl = alert.sourceUrl, !sourceUrl.isEmpty {
+            content += "\n\nSource: \(sourceUrl)"
+        }
+
+        conversationStore.addMessage(
+            to: conversation.id,
+            role: .system,
+            content: content
+        )
     }
 
     private func handleToolRequest(toolName: String, input: [String: Any]) async -> String {
@@ -370,10 +512,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         switch toolName {
         case "capture_screen":
             let target = input["target"] as? String ?? "display"
+            let highlightCaret = input["highlight_caret"] as? Bool ?? false
+            let caretRect: CGRect? = highlightCaret ? accessibilityReader.getCaretBounds() : nil
             if target == "window" {
-                return await screenCapture.captureFrontmostWindow() ?? "Failed to capture window"
+                return await screenCapture.captureFrontmostWindow(caretRect: caretRect) ?? "Failed to capture window"
             } else {
-                return await screenCapture.captureMainDisplay() ?? "Failed to capture display"
+                return await screenCapture.captureMainDisplay(caretRect: caretRect) ?? "Failed to capture display"
             }
 
         case "read_ax_tree":
@@ -538,6 +682,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return encodeJSON(AutomationErrorResponse(ok: false, error: error.localizedDescription))
             }
 
+        case "read_session_history":
+            let appName = input["appName"] as? String
+            let limit = intInput("limit") ?? 10
+            let sessions = SessionContextManager.shared.historyStore.recentSessions(appName: appName, limit: limit)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = .prettyPrinted
+            if let data = try? encoder.encode(sessions), let json = String(data: data, encoding: .utf8) {
+                return json
+            }
+            return "Failed to read session history"
+
+        case "get_session_context_summary":
+            let limit = intInput("limit") ?? 10
+            return SessionContextManager.shared.historyStore.contextSummaryText(limit: limit)
+
+        case "read_clipboard_history":
+            let rawLimit = intInput("limit") ?? 10
+            let limit = min(max(rawLimit, 0), 10)
+            let entries = Array(ClipboardMonitor.shared.store.entries.prefix(limit))
+            return encodeJSON(ClipboardHistoryResponse(ok: true, entries: entries))
+
+        case "check_github_status":
+            let repo = (input["repo"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return await checkGitHubStatus(repo: repo)
+
+        case "manage_github_repos":
+            let action = (input["action"] as? String ?? "list").lowercased()
+            let repo = (input["repo"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return manageGitHubRepos(action: action, repo: repo)
+
         default:
             return "Unknown tool: \(toolName)"
         }
@@ -581,6 +756,216 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let branchName: String?
     }
 
+    private struct ClipboardHistoryResponse: Codable {
+        let ok: Bool
+        let entries: [ClipboardEntry]
+    }
+
+    private struct GitHubReposResponse: Codable {
+        let ok: Bool
+        let repos: [String]
+        let message: String?
+    }
+
+    private func manageGitHubRepos(action: String, repo: String) -> String {
+        let key = "githubWatchedRepos"
+        let raw = UserDefaults.standard.string(forKey: key) ?? ""
+        var repos = raw.components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        switch action {
+        case "add":
+            guard !repo.isEmpty else {
+                return encodeJSON(GitHubReposResponse(ok: false, repos: repos, message: "Missing repo parameter."))
+            }
+            if repos.contains(repo) {
+                return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Repo '\(repo)' is already watched."))
+            }
+            repos.append(repo)
+            let joined = repos.joined(separator: ",")
+            UserDefaults.standard.set(joined, forKey: key)
+            WatcherService.shared.updateGitHubRepos(joined)
+            CIStatusMonitor.shared.forceRefresh()
+            return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Added '\(repo)'."))
+
+        case "remove":
+            guard !repo.isEmpty else {
+                return encodeJSON(GitHubReposResponse(ok: false, repos: repos, message: "Missing repo parameter."))
+            }
+            guard repos.contains(repo) else {
+                return encodeJSON(GitHubReposResponse(ok: false, repos: repos, message: "Repo '\(repo)' is not in the watch list."))
+            }
+            repos.removeAll { $0 == repo }
+            let joined = repos.joined(separator: ",")
+            UserDefaults.standard.set(joined, forKey: key)
+            WatcherService.shared.updateGitHubRepos(joined)
+            CIStatusMonitor.shared.forceRefresh()
+            return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: "Removed '\(repo)'."))
+
+        default: // "list"
+            return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: nil))
+        }
+    }
+
+    // MARK: - GitHub Status (gh CLI)
+
+    private struct GitHubStatusAlert: Codable {
+        let type: String   // "ci" or "notification"
+        let title: String
+        let repo: String
+        let branch: String?
+        let status: String?
+        let url: String
+        let updatedAt: String
+    }
+
+    private struct GitHubStatusResponse: Codable {
+        let ok: Bool
+        let authenticated: Bool
+        let alerts: [GitHubStatusAlert]
+        let error: String?
+    }
+
+    private func checkGitHubStatus(repo: String?) async -> String {
+        // Verify gh CLI is authenticated
+        let authResult = await shellGH(["auth", "status", "--active"])
+        guard authResult.exitCode == 0 else {
+            return encodeJSON(GitHubStatusResponse(
+                ok: false,
+                authenticated: false,
+                alerts: [],
+                error: "gh CLI not authenticated. Run `gh auth login` in terminal."
+            ))
+        }
+
+        var alerts: [GitHubStatusAlert] = []
+
+        // 1. Check CI failures
+        var runArgs = ["run", "list", "--status", "failure", "--limit", "10",
+                       "--json", "databaseId,name,headBranch,updatedAt,conclusion,url,workflowName"]
+        if let repo = repo, !repo.isEmpty {
+            runArgs += ["--repo", repo]
+        }
+        let ciResult = await shellGH(runArgs)
+        if ciResult.exitCode == 0, !ciResult.output.isEmpty,
+           let data = ciResult.output.data(using: .utf8),
+           let runs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            for run in runs {
+                let name = run["workflowName"] as? String ?? run["name"] as? String ?? "Workflow"
+                let branch = run["headBranch"] as? String
+                let conclusion = run["conclusion"] as? String ?? "failure"
+                let url = run["url"] as? String ?? ""
+                let updatedAt = run["updatedAt"] as? String ?? ""
+
+                // Derive repo from the URL: https://github.com/owner/repo/actions/runs/123
+                let repoName: String
+                if let r = repo {
+                    repoName = r
+                } else if let urlRepo = extractRepoFromUrl(url) {
+                    repoName = urlRepo
+                } else {
+                    repoName = ""
+                }
+
+                alerts.append(GitHubStatusAlert(
+                    type: "ci",
+                    title: "CI Failed: \(name)",
+                    repo: repoName,
+                    branch: branch,
+                    status: conclusion,
+                    url: url,
+                    updatedAt: updatedAt
+                ))
+            }
+        }
+
+        // 2. Check recent notifications
+        var notifArgs = ["api", "notifications", "--jq", "."]
+        if let repo = repo, !repo.isEmpty {
+            notifArgs += ["-f", "all=false"]
+        }
+        let notifResult = await shellGH(notifArgs)
+        if notifResult.exitCode == 0, !notifResult.output.isEmpty,
+           let data = notifResult.output.data(using: .utf8),
+           let notifications = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            for notif in notifications.prefix(10) {
+                guard let subject = notif["subject"] as? [String: Any],
+                      let title = subject["title"] as? String,
+                      let repoObj = notif["repository"] as? [String: Any],
+                      let repoFullName = repoObj["full_name"] as? String else { continue }
+
+                // If repo filter is specified, skip non-matching notifications
+                if let filterRepo = repo, !filterRepo.isEmpty,
+                   !repoFullName.lowercased().contains(filterRepo.lowercased()) {
+                    continue
+                }
+
+                let updatedAt = notif["updated_at"] as? String ?? ""
+                let repoHtmlUrl = repoObj["html_url"] as? String ?? "https://github.com/\(repoFullName)"
+
+                alerts.append(GitHubStatusAlert(
+                    type: "notification",
+                    title: title,
+                    repo: repoFullName,
+                    branch: nil,
+                    status: notif["reason"] as? String,
+                    url: repoHtmlUrl,
+                    updatedAt: updatedAt
+                ))
+            }
+        }
+
+        return encodeJSON(GitHubStatusResponse(
+            ok: true,
+            authenticated: true,
+            alerts: alerts,
+            error: nil
+        ))
+    }
+
+    /// Extract owner/repo from a GitHub actions URL.
+    private func extractRepoFromUrl(_ url: String) -> String? {
+        // https://github.com/owner/repo/actions/runs/12345
+        guard let range = url.range(of: #"github\.com/([^/]+/[^/]+)"#, options: .regularExpression) else {
+            return nil
+        }
+        return String(url[range]).replacingOccurrences(of: "github.com/", with: "")
+    }
+
+    /// Runs a `gh` CLI command synchronously and returns the output.
+    private func shellGH(_ arguments: [String]) async -> (output: String, exitCode: Int32) {
+        let process = Process()
+        let pipe = Pipe()
+
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["gh"] + arguments
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        var env = ProcessInfo.processInfo.environment
+        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        let currentPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
+        process.environment = env
+
+        return await withCheckedContinuation { continuation in
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: ("", Int32(1)))
+                return
+            }
+
+            DispatchQueue.global(qos: .utility).async {
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                continuation.resume(returning: (output, process.terminationStatus))
+            }
+        }
+    }
+
     private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {
         let token = (KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -588,10 +973,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
-            return "Slack bot token not set. Open Flux Settings and set Slack Bot Token + Slack Channel ID."
+            return "Slack bot token not set. Open Island Settings and set Slack Bot + Slack Channel ID."
         }
         guard !channel.isEmpty else {
-            return "Slack channel ID not set. Open Flux Settings and set Slack Channel ID."
+            return "Slack channel ID not set. Open Island Settings and set Slack Channel ID."
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Slack message text is empty."
@@ -638,10 +1023,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
-            return "Discord bot token not set. Open Flux Settings and set Discord Bot Token + Discord Channel ID."
+            return "Discord bot token not set. Open Island Settings and set Discord Bot + Discord Channel ID."
         }
         guard !channelId.isEmpty else {
-            return "Discord channel ID not set. Open Flux Settings and set Discord Channel ID."
+            return "Discord channel ID not set. Open Island Settings and set Discord Channel ID."
         }
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Discord message content is empty."
@@ -685,10 +1070,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !token.isEmpty else {
-            return "Telegram bot token not set. Open Flux Settings and set Telegram Bot Token + Telegram Chat ID."
+            return "Telegram bot token not set. Open Island Settings and set Telegram Bot + Telegram Chat ID."
         }
         guard !chatId.isEmpty else {
-            return "Telegram chat ID not set. Open Flux Settings and set Telegram Chat ID."
+            return "Telegram chat ID not set. Open Island Settings and set Telegram Chat ID."
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Telegram message text is empty."
