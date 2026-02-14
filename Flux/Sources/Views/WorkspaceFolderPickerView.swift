@@ -22,9 +22,7 @@ struct WorkspaceFolderPickerView: View {
     @State private var showHidden: Bool = false
     @State private var contents: [FileItem] = []
     @State private var errorMessage: String?
-    @State private var isEditingPath: Bool = false
     @State private var pathText: String = ""
-    @FocusState private var pathFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,9 +50,11 @@ struct WorkspaceFolderPickerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: 460)
         .onAppear {
+            pathText = currentDirectory.path
             loadContents()
         }
-        .onChange(of: currentDirectory) { _, _ in
+        .onChange(of: currentDirectory) { _, newValue in
+            pathText = newValue.path
             loadContents()
         }
         .onChange(of: showHidden) { _, _ in
@@ -70,52 +70,23 @@ struct WorkspaceFolderPickerView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.white.opacity(0.35))
 
-            if isEditingPath {
-                TextField("Enter path…", text: $pathText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .focused($pathFieldFocused)
-                    .onSubmit {
-                        commitPathEdit()
-                    }
-                    .onExitCommand {
-                        cancelPathEdit()
-                    }
+            TextField("/path/to/folder", text: $pathText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+                .onSubmit {
+                    navigateToTypedPath()
+                }
 
-                Button {
-                    commitPathEdit()
-                } label: {
-                    Image(systemName: "arrow.right.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.blue.opacity(0.8))
-                }
-                .buttonStyle(.plain)
-                .help("Go to path")
-
-                Button {
-                    cancelPathEdit()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.white.opacity(0.3))
-                }
-                .buttonStyle(.plain)
-                .help("Cancel")
-            } else {
-                Button {
-                    beginPathEdit()
-                } label: {
-                    Text(currentDirectory.path)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .help("Click to edit path")
+            Button {
+                navigateToTypedPath()
+            } label: {
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.blue.opacity(0.7))
             }
+            .buttonStyle(.plain)
+            .help("Go to path")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -124,24 +95,14 @@ struct WorkspaceFolderPickerView: View {
                 .fill(.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(.white.opacity(isEditingPath ? 0.15 : 0.06), lineWidth: 1)
+                        .strokeBorder(.white.opacity(0.08), lineWidth: 1)
                 )
         )
     }
 
-    private func beginPathEdit() {
-        pathText = currentDirectory.path
-        withAnimation(.easeInOut(duration: 0.15)) {
-            isEditingPath = true
-        }
-        // Delay focus slightly so the TextField is rendered
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            pathFieldFocused = true
-        }
-    }
-
-    private func commitPathEdit() {
+    private func navigateToTypedPath() {
         let trimmed = pathText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
         let expanded = NSString(string: trimmed).expandingTildeInPath
         let url = URL(fileURLWithPath: expanded)
 
@@ -149,22 +110,11 @@ struct WorkspaceFolderPickerView: View {
         if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
             navigateTo(url)
         } else {
-            // If the path is not a valid directory, show a brief error
             errorMessage = "Path not found or is not a directory:\n\(trimmed)"
+            // Reset text back to current directory
+            pathText = currentDirectory.path
         }
-
-        withAnimation(.easeInOut(duration: 0.15)) {
-            isEditingPath = false
         }
-        pathFieldFocused = false
-    }
-
-    private func cancelPathEdit() {
-        withAnimation(.easeInOut(duration: 0.15)) {
-            isEditingPath = false
-        }
-        pathFieldFocused = false
-    }
 
     // MARK: - Quick Access Row
 
