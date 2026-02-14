@@ -300,7 +300,8 @@ struct ChatView: View {
             }
 
             // Workspace folder picker + Skills pill on the same line
-            HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
                 Button {
                     NotificationCenter.default.post(name: .islandOpenFolderPickerRequested, object: nil)
                 } label: {
@@ -344,7 +345,6 @@ struct ChatView: View {
                                 .foregroundStyle(.white.opacity(0.7))
                                 .lineLimit(1)
                         }
-                        .fixedSize()
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(
@@ -477,6 +477,7 @@ struct ChatView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                }
             }
             .padding(.top, 8)
             .padding(.bottom, 12)
