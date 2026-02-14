@@ -801,6 +801,8 @@ function startSessionRun(session: ConversationSession, messages: QueuedUserMessa
     session.stream.push(msg);
   }
   session.isRunning = true;
+  // Skip idle timer for forked sessions until first run completes,
+  // ensuring the fork remains available when the user first interacts with it.
   if (session.forkOnNextRun !== true) {
     touchIdle(session);
   }
