@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreML
 import Foundation
 @preconcurrency import Speech
 import os
@@ -6,6 +7,8 @@ import os
 enum VoiceInputMode: Sendable {
     case live
     case batchOnDevice
+    /// On-device transcription using Parakeet TDT CoreML models.
+    case parakeetOnDevice
 }
 
 /// Thread-safe accumulator for PCM data written from the audio tap thread.
@@ -137,17 +140,20 @@ final class VoiceInput {
             return false
         }
 
-        guard #available(macOS 26.0, *) else {
-            Log.voice.error("On-device speech transcription requires macOS 26+")
-            onFailure?("On-device transcription requires macOS 26 or newer.")
-            return false
-        }
+        // Parakeet mode only needs mic permission, not Apple Speech permission.
+        if mode != .parakeetOnDevice {
+            guard #available(macOS 26.0, *) else {
+                Log.voice.error("On-device speech transcription requires macOS 26+")
+                onFailure?("On-device transcription requires macOS 26 or newer.")
+                return false
+            }
 
-        let speechPermitted = await ensureSpeechRecognitionPermission()
-        guard speechPermitted else {
-            Log.voice.warning("Speech recognition permission not granted")
-            onFailure?("Speech recognition permission not granted.")
-            return false
+            let speechPermitted = await ensureSpeechRecognitionPermission()
+            guard speechPermitted else {
+                Log.voice.warning("Speech recognition permission not granted")
+                onFailure?("Speech recognition permission not granted.")
+                return false
+            }
         }
 
         self.recordingMode = mode
@@ -158,6 +164,8 @@ final class VoiceInput {
         case .live:
             return await beginLiveRecording()
         case .batchOnDevice:
+            return beginBatchRecording()
+        case .parakeetOnDevice:
             return beginBatchRecording()
         }
     }
@@ -180,6 +188,8 @@ final class VoiceInput {
 
         case .batchOnDevice:
             stopBatchRecording()
+        case .parakeetOnDevice:
+            stopParakeetRecording()
         }
     }
 
@@ -394,6 +404,90 @@ final class VoiceInput {
             } catch {
                 Log.voice.error("Batch transcription error: \(error.localizedDescription, privacy: .public)")
                 failureCallback?("Dictation transcription failed.")
+            }
+        }
+    }
+
+    // MARK: - Parakeet on-device transcription
+
+    private func stopParakeetRecording() {
+        let engine = audioEngine
+        let hadTap = tapInstalled
+
+        engine?.stop()
+        if hadTap {
+            engine?.inputNode.removeTap(onBus: 0)
+        }
+
+        tapInstalled = false
+        audioEngine = nil
+        isRecording = false
+        recordingMode = .live
+        IslandWindowManager.shared.suppressDeactivationCollapse = false
+
+        let callback = onComplete
+        let failureCallback = onFailure
+        onComplete = nil
+        onFailure = nil
+        liveSessionAny = nil
+
+        let pcmData = pcmAccumulator.takeAll()
+        guard !pcmData.isEmpty else {
+            failureCallback?("No audio captured.")
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            let modelManager = ParakeetModelManager.shared
+            guard modelManager.isReady else {
+                Log.voice.error("Parakeet models not loaded, falling back to Apple transcription")
+                // Fall back to Apple's SFSpeechRecognizer if Parakeet isn't ready.
+                do {
+                    let wavURL = try self.writeWAVFile(pcmData: pcmData)
+                    defer { try? FileManager.default.removeItem(at: wavURL) }
+
+                    guard #available(macOS 26.0, *) else {
+                        throw TranscriptionError.unsupportedOS
+                    }
+
+                    let transcribedText = try await self.transcribeWAVOnDevice(wavURL)
+                    let trimmed = transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.transcript = trimmed
+
+                    if trimmed.isEmpty {
+                        failureCallback?("No speech detected.")
+                    } else {
+                        callback?(trimmed)
+                    }
+                } catch {
+                    Log.voice.error("Fallback transcription error: \(error.localizedDescription, privacy: .public)")
+                    failureCallback?("Dictation transcription failed.")
+                }
+                return
+            }
+
+            do {
+                let transcriber = ParakeetTranscriber()
+                let rawText = try await transcriber.transcribe(
+                    pcmData: pcmData,
+                    modelManager: modelManager
+                )
+
+                // Apply ASR post-processing pipeline.
+                let processed = ASRPostProcessor.process(rawText)
+                let trimmed = processed.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.transcript = trimmed
+
+                if trimmed.isEmpty {
+                    failureCallback?("No speech detected.")
+                } else {
+                    callback?(trimmed)
+                }
+            } catch {
+                Log.voice.error("Parakeet transcription error: \(error.localizedDescription, privacy: .public)")
+                failureCallback?("Parakeet transcription failed: \(error.localizedDescription)")
             }
         }
     }

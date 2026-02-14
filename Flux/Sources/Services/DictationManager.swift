@@ -203,8 +203,9 @@ final class DictationManager {
                 }
             }
 
+            let selectedEngine = self.selectedDictationEngine()
             let started = await input.startRecording(
-                mode: .batchOnDevice,
+                mode: selectedEngine,
                 onComplete: { [weak self] transcript in
                     self?.handleTranscript(transcript, attemptId: attemptId)
                 },
@@ -306,6 +307,9 @@ final class DictationManager {
         let cleanFillers = UserDefaults.standard.object(forKey: "dictationAutoCleanFillers") as? Bool ?? true
         let cleanedText = cleanFillers ? FillerWordCleaner.clean(rawTranscript) : rawTranscript
 
+        // Apply Parakeet ASR post-processing (fragment repair, number conversion, etc.)
+        let postProcessed = ASRPostProcessor.process(cleanedText)
+
         // ── Edit mode: transform the selected text using the voice command ──
         if isEditMode, let selectedText = editModeSelectedText {
             Task { @MainActor [weak self] in
@@ -313,7 +317,7 @@ final class DictationManager {
 
                 let replaceResult = await MagicReplaceManager.shared.performReplace(
                     selectedText: selectedText,
-                    command: cleanedText,
+                    command: postProcessed,
                     accessibilityReader: reader
                 )
 
@@ -353,7 +357,7 @@ final class DictationManager {
             guard let self, self.isAttemptActive(attemptId) else { return }
 
             // Apply custom dictionary corrections.
-            let correctedText = DictionaryCorrector.apply(cleanedText, using: CustomDictionaryStore.shared.entries)
+            let correctedText = DictionaryCorrector.apply(postProcessed, using: CustomDictionaryStore.shared.entries)
 
             var enhancedText: String?
             var enhancementMethod: DictationEntry.EnhancementMethod = .none
@@ -685,5 +689,18 @@ final class DictationManager {
     private nonisolated static func isHotkeyHeldGlobally() -> Bool {
         let flags = CGEventSource.flagsState(.combinedSessionState)
         return flags.contains(.maskCommand) && flags.contains(.maskAlternate)
+    }
+
+    // MARK: - Engine Selection
+
+    /// Read the user's preferred dictation engine from UserDefaults.
+    private func selectedDictationEngine() -> VoiceInputMode {
+        let engine = UserDefaults.standard.string(forKey: "dictationEngine") ?? "apple"
+        switch engine {
+        case "parakeet":
+            return .parakeetOnDevice
+        default:
+            return .batchOnDevice
+        }
     }
 }
