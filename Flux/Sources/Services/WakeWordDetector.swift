@@ -66,6 +66,9 @@ final class WakeWordDetector {
     private var lastActivationTime: Date?
     private static let cooldownInterval: TimeInterval = 2.0
 
+    private var consecutiveErrors = 0
+    private static let maxConsecutiveErrors = 5
+
     // MARK: - Suspended state
 
     private var isSuspended = false
@@ -248,7 +251,16 @@ final class WakeWordDetector {
         guard state == .listening else { return }
 
         if let error {
-            Log.wakeWord.debug("Recognition error (will restart): \(error.localizedDescription)")
+            consecutiveErrors += 1
+            Log.wakeWord.debug("Recognition error (\(self.consecutiveErrors)/\(Self.maxConsecutiveErrors)): \(error.localizedDescription)")
+
+            if consecutiveErrors >= Self.maxConsecutiveErrors {
+                Log.wakeWord.error("Too many consecutive recognition errors — disabling wake word")
+                tearDownListening()
+                state = .idle
+                return
+            }
+
             // Restart listening on transient errors.
             tearDownListening()
             Task {
@@ -261,6 +273,7 @@ final class WakeWordDetector {
         }
 
         guard let result else { return }
+        consecutiveErrors = 0
 
         let transcript = result.bestTranscription.formattedString
         let normalizedTranscript = transcript.lowercased()
