@@ -470,7 +470,7 @@ final class VoiceInput {
 
             do {
                 let transcriber = ParakeetTranscriber()
-                let rawText = try await transcriber.transcribe(
+                let rawText = try transcriber.transcribe(
                     pcmData: pcmData,
                     modelManager: modelManager
                 )

@@ -13,7 +13,7 @@ import os
 ///
 /// This transcriber operates in batch mode: it processes a complete audio recording
 /// after capture is finished. Streaming (partial) transcription is planned for a future phase.
-actor ParakeetTranscriber {
+struct ParakeetTranscriber: Sendable {
 
     // MARK: - Error Types
 
@@ -54,7 +54,7 @@ actor ParakeetTranscriber {
     ///   - modelManager: The model manager holding loaded CoreML models.
     /// - Returns: The transcribed text.
     @MainActor
-    func transcribe(pcmData: Data, modelManager: ParakeetModelManager) async throws -> String {
+    func transcribe(pcmData: Data, modelManager: ParakeetModelManager) throws -> String {
         guard modelManager.isReady else {
             throw TranscriptionError.modelsNotLoaded
         }
@@ -82,7 +82,7 @@ actor ParakeetTranscriber {
         Log.voice.info("[ParakeetTranscriber] Feature extraction: \(melFeatures.count) frames in \(String(format: "%.1f", (featureTime - startTime) * 1000))ms")
 
         // Step 2: Run encoder on mel features.
-        let encoderOutput = try await runEncoder(
+        let encoderOutput = try runEncoder(
             melFeatures: melFeatures,
             encoderModel: modelManager.encoderModel!,
             preprocessorModel: modelManager.preprocessorModel
@@ -133,7 +133,7 @@ actor ParakeetTranscriber {
         }
 
         let input = try MLDictionaryFeatureProvider(
-            dictionary: ["audio" as NSString: inputArray]
+            dictionary: ["audio": MLFeatureValue(multiArray: inputArray)]
         )
         let output = try melEncoder.prediction(from: input)
 
@@ -143,7 +143,7 @@ actor ParakeetTranscriber {
         }
 
         // Convert MLMultiArray to [[Float]]. Shape is typically [1, numFrames, numMelBins].
-        let shape = melArray.shape.map(\.intValue)
+        let shape = melArray.shape.map { $0.intValue }
         let numFrames: Int
         let numMelBins: Int
 
@@ -180,7 +180,7 @@ actor ParakeetTranscriber {
         melFeatures: [[Float]],
         encoderModel: MLModel,
         preprocessorModel: MLModel?
-    ) async throws -> MLMultiArray {
+    ) throws -> MLMultiArray {
         let numFrames = melFeatures.count
         let numMelBins = melFeatures.first?.count ?? 80
 
@@ -202,7 +202,7 @@ actor ParakeetTranscriber {
         var encoderInput = inputArray
         if let preprocessor = preprocessorModel {
             let preprocInput = try MLDictionaryFeatureProvider(
-                dictionary: ["audio_signal" as NSString: inputArray]
+                dictionary: ["audio_signal": MLFeatureValue(multiArray: inputArray)]
             )
             let preprocOutput = try preprocessor.prediction(from: preprocInput)
 
@@ -213,7 +213,7 @@ actor ParakeetTranscriber {
 
         // Run encoder.
         let encInput = try MLDictionaryFeatureProvider(
-            dictionary: ["audio_features" as NSString: encoderInput]
+            dictionary: ["audio_features": MLFeatureValue(multiArray: encoderInput)]
         )
         let encOutput = try encoderModel.prediction(from: encInput)
 
@@ -249,7 +249,7 @@ actor ParakeetTranscriber {
         var outputTokens: [Int] = []
 
         // Determine encoder output dimensions.
-        let shape = encoderOutput.shape.map(\.intValue)
+        let shape = encoderOutput.shape.map { $0.intValue }
         let numTimeSteps = shape.count >= 2 ? shape[1] : shape[0]
         let encoderDim = shape.count >= 3 ? shape[2] : (shape.count >= 2 ? shape[1] : shape[0])
 
@@ -281,8 +281,8 @@ actor ParakeetTranscriber {
                 // Run joint network.
                 let jointInput = try MLDictionaryFeatureProvider(
                     dictionary: [
-                        "encoder_output" as NSString: encoderFrame,
-                        "decoder_output" as NSString: decoderHidden
+                        "encoder_output": MLFeatureValue(multiArray: encoderFrame),
+                        "decoder_output": MLFeatureValue(multiArray: decoderHidden)
                     ]
                 )
                 let jointOutput = try jointModel.prediction(from: jointInput)
@@ -323,7 +323,7 @@ actor ParakeetTranscriber {
         let tokenArray = try MLMultiArray(shape: [1, 1], dataType: .int32)
         tokenArray[0] = NSNumber(value: Int32(tokenId))
         return try MLDictionaryFeatureProvider(
-            dictionary: ["input_ids" as NSString: tokenArray]
+            dictionary: ["input_ids": MLFeatureValue(multiArray: tokenArray)]
         )
     }
 
