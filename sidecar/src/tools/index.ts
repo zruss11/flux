@@ -7,7 +7,7 @@ export const baseTools: ToolDefinition[] = [
   {
     name: 'capture_screen',
     description:
-      'Capture a screenshot of the main display or the frontmost window. Returns a base64-encoded image (JPEG/PNG depending on app implementation).',
+      'Capture a screenshot of the main display or the frontmost window. When highlight_caret is true, a red rectangle is drawn around the currently focused UI element to show cursor position.',
     input_schema: {
       type: 'object',
       properties: {
@@ -15,6 +15,11 @@ export const baseTools: ToolDefinition[] = [
           type: 'string',
           enum: ['display', 'window'],
           description: 'Whether to capture the full display or just the frontmost window',
+        },
+        highlight_caret: {
+          type: 'boolean',
+          description:
+            'When true, draws a red rectangle around the currently focused UI element (text field, button, etc.) on the screenshot.',
         },
       },
       required: ['target'],
@@ -310,6 +315,42 @@ export const baseTools: ToolDefinition[] = [
           description: 'Maximum number of entries to return (default: 10, max: 10)',
         },
       },
+    },
+  },
+  {
+    name: 'check_github_status',
+    description:
+      'Check GitHub CI/CD status and notifications using the gh CLI. Returns recent CI failures and GitHub notifications. Requires the user to have authenticated with `gh auth login`.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        repo: {
+          type: 'string',
+          description:
+            'Optional owner/repo to filter results (e.g. "octocat/hello-world"). If omitted, returns results across all repos.',
+        },
+      },
+    },
+  },
+  {
+    name: 'manage_github_repos',
+    description:
+      'Manage the list of GitHub repos that Flux watches for CI failures and notifications. Use action "list" to see current repos, "add" to add a repo, or "remove" to remove one.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'add', 'remove'],
+          description: 'The action to perform: list, add, or remove.',
+        },
+        repo: {
+          type: 'string',
+          description:
+            'The owner/repo to add or remove (e.g. "octocat/hello-world"). Required for add/remove.',
+        },
+      },
+      required: ['action'],
     },
   },
 ];

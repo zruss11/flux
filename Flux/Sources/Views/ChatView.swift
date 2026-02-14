@@ -20,7 +20,20 @@ struct SkillsVisibleKey: PreferenceKey {
     }
 }
 
+// Preference key to tell IslandView whether there are pending image attachments
+struct HasPendingAttachmentsKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: Bool = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
 struct ChatView: View {
+    private struct ForkContext {
+        let sourceConversationId: UUID
+        let sourceTitle: String
+    }
+
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
@@ -30,12 +43,21 @@ struct ChatView: View {
     @State private var dollarTriggerActive = false
     @State private var selectedSkillDirNames: Set<String> = []
     @State private var skillSearchQuery = ""
+    @State private var showSlashCommands = false
+    @State private var slashTriggerActive = false
+    @State private var slashSearchQuery = ""
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
     @State private var showSpeechPermissionAlert = false
     @State private var worktreeEnabled = false
+    @State private var showBranchPicker = false
+    @State private var availableBranches: [String] = []
+    @State private var branchCheckoutErrorMessage: String?
     @State private var imageImportErrorMessage: String?
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
+    @State private var forkBannerVisible = false
+    @State private var forkBannerDismissTask: Task<Void, Never>?
+    @State private var pendingForkContexts: [UUID: ForkContext] = [:]
 
     private let maxAttachmentBytes = 10 * 1024 * 1024
 
@@ -72,9 +94,45 @@ struct ChatView: View {
                                     case .userMessage(let message):
                                         MessageBubble(message: message)
                                     case .assistantText(let message):
-                                        MessageBubble(message: message)
+                                        if message.role == .system {
+                                            ForkIndicatorView(content: message.content)
+                                        } else {
+                                            MessageBubble(message: message)
+                                        }
                                     case .toolCallGroup(_, let calls):
                                         ToolCallGroupView(calls: calls)
+                                    case .permissionRequest(let req):
+                                        PermissionApprovalCard(request: req) {
+                                            guard let convId = conversationStore.activeConversationId else { return }
+                                            conversationStore.resolvePermissionRequest(
+                                                in: convId,
+                                                requestId: req.id,
+                                                approved: true
+                                            )
+                                            agentBridge.sendPermissionResponse(requestId: req.id, behavior: "allow")
+                                        } onDeny: {
+                                            guard let convId = conversationStore.activeConversationId else { return }
+                                            conversationStore.resolvePermissionRequest(
+                                                in: convId,
+                                                requestId: req.id,
+                                                approved: false
+                                            )
+                                            agentBridge.sendPermissionResponse(requestId: req.id, behavior: "deny", message: "User denied this action")
+                                        }
+                                    case .askUserQuestion(let q):
+                                        AskUserQuestionCard(question: q) { answers in
+                                            guard let convId = conversationStore.activeConversationId else { return }
+                                            conversationStore.resolveAskUserQuestion(
+                                                in: convId,
+                                                requestId: q.id,
+                                                answers: answers
+                                            )
+                                            agentBridge.sendPermissionResponse(
+                                                requestId: q.id,
+                                                behavior: "allow",
+                                                answers: answers
+                                            )
+                                        }
                                     }
                                 }
                                 .id(segment.id)
@@ -83,6 +141,16 @@ struct ChatView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                }
+                .overlay(alignment: .top) {
+                    if forkBannerVisible {
+                        ForkSuccessBanner()
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .opacity
+                            ))
+                            .padding(.top, 8)
+                    }
                 }
                 .onChange(of: conversationStore.scrollRevision) { _, _ in
                     guard conversationStore.lastScrollConversationId == conversationStore.activeConversationId,
@@ -138,7 +206,7 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
 
-                    TextField("Message Flux...  $ for skills", text: $inputText)
+                    TextField("Message Flux…  $ skills  / commands", text: $inputText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
                         .foregroundStyle(.white)
@@ -147,6 +215,12 @@ struct ChatView: View {
                             sendMessage()
                         }
                         .onKeyPress(.escape) {
+                            if showSlashCommands {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                    showSlashCommands = false
+                                }
+                                return .handled
+                            }
                             if showSkills {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
                                     showSkills = false
@@ -185,13 +259,31 @@ struct ChatView: View {
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(Color.white.opacity(0.10))
                     .overlay(
                         RoundedRectangle(cornerRadius: 20)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
                     )
             )
             .padding(.horizontal, 10)
+
+            // Slash commands list appears below the input
+            if showSlashCommands {
+                SlashCommandsView(
+                    isPresented: $showSlashCommands,
+                    searchQuery: $slashSearchQuery,
+                    workspacePath: conversationStore.workspacePath
+                ) { cmd in
+                    insertSlashCommand(cmd)
+                    isInputFocused = true
+                }
+                .transition(
+                    .asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .top)),
+                        removal: .opacity
+                    )
+                )
+            }
 
             // Skills list appears below the input, expanding the window downward
             if showSkills {
@@ -225,14 +317,61 @@ struct ChatView: View {
                     .padding(.vertical, 6)
                     .background(
                         Capsule()
-                            .fill(Color.white.opacity(0.06))
+                            .fill(Color.white.opacity(0.10))
                             .overlay(
                                 Capsule()
-                                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
                             )
                     )
                 }
                 .buttonStyle(.plain)
+
+                // Git branch pill
+                if let branch = GitBranchMonitor.shared.currentBranch {
+                    Button {
+                        Task {
+                            await GitBranchMonitor.shared.fetchBranches()
+                            availableBranches = GitBranchMonitor.shared.branches
+                            showBranchPicker.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.7))
+                            Text(branch)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.7))
+                                .lineLimit(1)
+                        }
+                        .fixedSize()
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.10))
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showBranchPicker, arrowEdge: .bottom) {
+                        GitBranchPickerPopover(
+                            branches: availableBranches,
+                            currentBranch: branch
+                        ) { selected in
+                            showBranchPicker = false
+                            Task {
+                                let didCheckout = await GitBranchMonitor.shared.checkout(selected)
+                                if !didCheckout {
+                                    branchCheckoutErrorMessage = "Couldn't switch to \"\(selected)\". Resolve git conflicts or uncommitted changes, then try again."
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Button {
                     if conversationStore.activeWorktreeBranch != nil {
@@ -265,6 +404,36 @@ struct ChatView: View {
                     )
                 }
                 .buttonStyle(.plain)
+
+                // Fork conversation pill
+                if conversationStore.activeConversationId != nil,
+                   !(conversationStore.activeConversation?.messages.isEmpty ?? true) {
+                    Button {
+                        forkCurrentConversation()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "rectangle.on.rectangle")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.6))
+                            Text("Fork")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(1)
+                        }
+                        .fixedSize()
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.06))
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 SkillsPillButton(isPresented: $showSkills)
 
@@ -318,13 +487,48 @@ struct ChatView: View {
                     .preference(key: ChatContentHeightKey.self, value: geo.size.height)
             }
         )
-        .preference(key: SkillsVisibleKey.self, value: showSkills)
+        .preference(key: SkillsVisibleKey.self, value: showSkills || showSlashCommands)
+        .preference(key: HasPendingAttachmentsKey.self, value: !pendingImageAttachments.isEmpty)
         .onChange(of: inputText) { oldValue, newValue in
+            // --- Slash command trigger: `/` at the start of input ---
+            if newValue.hasPrefix("/") && !oldValue.hasPrefix("/") {
+                slashTriggerActive = true
+                if !showSlashCommands {
+                    // Dismiss skills if open
+                    if showSkills {
+                        showSkills = false
+                        dollarTriggerActive = false
+                    }
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+                        showSlashCommands = true
+                    }
+                }
+                slashSearchQuery = ""
+            }
+
+            // Update slash search query
+            if showSlashCommands, slashTriggerActive, newValue.hasPrefix("/") {
+                slashSearchQuery = String(newValue.dropFirst()).trimmingCharacters(in: .whitespaces)
+            }
+
+            // Dismiss slash commands if `/` prefix was removed
+            if showSlashCommands, slashTriggerActive, !newValue.hasPrefix("/") {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    showSlashCommands = false
+                }
+            }
+
+            // --- Dollar skill trigger ---
             // Detect a freshly typed `$` to open skills (or re-activate search if already open)
             if newValue.count - oldValue.count == 1,
                newValue.filter({ $0 == "$" }).count > oldValue.filter({ $0 == "$" }).count {
                 dollarTriggerActive = true
                 if !showSkills {
+                    // Dismiss slash commands if open
+                    if showSlashCommands {
+                        showSlashCommands = false
+                        slashTriggerActive = false
+                    }
                     withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
                         showSkills = true
                     }
@@ -351,10 +555,29 @@ struct ChatView: View {
                 skillSearchQuery = ""
             }
         }
+        .onChange(of: showSlashCommands) { _, presented in
+            if !presented {
+                slashTriggerActive = false
+                slashSearchQuery = ""
+            }
+        }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isInputFocused = true
             }
+            GitBranchMonitor.shared.monitor(workspacePath: conversationStore.workspacePath)
+            agentBridge.onForkConversationResult = { conversationId, success, _ in
+                guard let uuid = UUID(uuidString: conversationId) else { return }
+                Task { @MainActor in
+                    handleForkConversationResult(conversationId: uuid, success: success)
+                }
+            }
+        }
+        .onDisappear {
+            forkBannerDismissTask?.cancel()
+        }
+        .onChange(of: conversationStore.workspacePath) { _, newPath in
+            GitBranchMonitor.shared.monitor(workspacePath: newPath)
         }
         .onChange(of: voiceInput.transcript) { _, newValue in
             // While recording, show partial (live) transcription as the user speaks.
@@ -370,6 +593,10 @@ struct ChatView: View {
             if showSkills {
                 showSkills = false
                 dollarTriggerActive = false
+            }
+            if showSlashCommands {
+                showSlashCommands = false
+                slashTriggerActive = false
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .islandImageFilesSelected)) { notification in
@@ -416,6 +643,18 @@ struct ChatView: View {
         } message: {
             Text(imageImportErrorMessage ?? "Unable to add image.")
         }
+        .alert("Branch Switch Failed", isPresented: Binding(
+            get: { branchCheckoutErrorMessage != nil },
+            set: { shown in
+                if !shown { branchCheckoutErrorMessage = nil }
+            }
+        )) {
+            Button("OK", role: .cancel) {
+                branchCheckoutErrorMessage = nil
+            }
+        } message: {
+            Text(branchCheckoutErrorMessage ?? "Unable to switch branches.")
+        }
     }
 
     private func sendMessage() {
@@ -424,16 +663,25 @@ struct ChatView: View {
 
         // Slash commands
         let lowered = text.lowercased()
-        if pendingImageAttachments.isEmpty && (lowered == "/new" || lowered == "/clear") {
-            inputText = ""
-            selectedSkillDirNames.removeAll()
-            pendingImageAttachments.removeAll()
-            if showSkills {
-                showSkills = false
-                dollarTriggerActive = false
+        if pendingImageAttachments.isEmpty && lowered.hasPrefix("/") {
+            let cmdName = String(lowered.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Local-only commands
+            if cmdName == "new" || cmdName == "clear" {
+                inputText = ""
+                selectedSkillDirNames.removeAll()
+                pendingImageAttachments.removeAll()
+                if showSkills {
+                    showSkills = false
+                    dollarTriggerActive = false
+                }
+                if showSlashCommands {
+                    showSlashCommands = false
+                    slashTriggerActive = false
+                }
+                conversationStore.startNewConversation()
+                return
             }
-            conversationStore.startNewConversation()
-            return
         }
 
         if showSkills {
@@ -441,6 +689,12 @@ struct ChatView: View {
                 showSkills = false
             }
             dollarTriggerActive = false
+        }
+        if showSlashCommands {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                showSlashCommands = false
+            }
+            slashTriggerActive = false
         }
 
         var outboundText = transformSelectedSkillTokensForOutbound(text)
@@ -472,6 +726,55 @@ struct ChatView: View {
         pendingImageAttachments.removeAll()
     }
 
+    private func forkCurrentConversation() {
+        guard let sourceId = conversationStore.activeConversationId else { return }
+        forkBannerDismissTask?.cancel()
+        forkBannerVisible = false
+        let sourceTitle = conversationStore.summaries.first(where: { $0.id == sourceId })?.title ?? "Chat"
+        guard let newId = conversationStore.forkConversation(id: sourceId) else { return }
+        pendingForkContexts[newId] = ForkContext(
+            sourceConversationId: sourceId,
+            sourceTitle: sourceTitle
+        )
+
+        agentBridge.sendForkConversation(
+            sourceConversationId: sourceId.uuidString,
+            newConversationId: newId.uuidString
+        )
+    }
+
+    private func handleForkConversationResult(conversationId: UUID, success: Bool) {
+        guard let context = pendingForkContexts.removeValue(forKey: conversationId) else { return }
+
+        guard success else {
+            forkBannerDismissTask?.cancel()
+            forkBannerVisible = false
+            conversationStore.deleteConversation(id: conversationId)
+            if conversationStore.activeConversationId == conversationId {
+                conversationStore.openConversation(id: context.sourceConversationId)
+            }
+            return
+        }
+
+        conversationStore.addMessage(
+            to: conversationId,
+            role: .system,
+            content: "Forked from \"\(context.sourceTitle)\""
+        )
+
+        forkBannerDismissTask?.cancel()
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+            forkBannerVisible = true
+        }
+        forkBannerDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) {
+                forkBannerVisible = false
+            }
+        }
+    }
+
     private func insertSkillToken(_ directoryName: String) {
         let token = "$\(directoryName) "
 
@@ -499,6 +802,15 @@ struct ChatView: View {
         dollarTriggerActive = false
         skillSearchQuery = ""
         // Intentionally keep `showSkills` open so users can click multiple skills.
+    }
+
+    private func insertSlashCommand(_ cmd: SlashCommand) {
+        inputText = "/\(cmd.name) "
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+            showSlashCommands = false
+        }
+        slashTriggerActive = false
+        slashSearchQuery = ""
     }
 
     private func transformSelectedSkillTokensForOutbound(_ text: String) -> String {
@@ -589,7 +901,7 @@ struct MessageBubble: View {
             .padding(.vertical, 8)
             .background {
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(message.role == .user ? Color.blue.opacity(0.5) : Color.white.opacity(0.08))
+                    .fill(message.role == .user ? Color.blue.opacity(0.45) : Color.white.opacity(0.12))
             }
 
             if message.role == .assistant { Spacer(minLength: 60) }
@@ -663,5 +975,61 @@ private extension MessageImageAttachment {
 
     var chatPayload: ChatImagePayload {
         ChatImagePayload(fileName: fileName, mediaType: mediaType, data: base64Data)
+    }
+}
+
+// MARK: - Fork UI Components
+
+/// Animated toast banner that slides in from the top when a conversation is forked.
+private struct ForkSuccessBanner: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.green)
+            Text("Conversation forked successfully")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.12))
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.green.opacity(0.3), lineWidth: 1)
+                )
+        )
+        .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+    }
+}
+
+/// Inline indicator shown in the conversation history at the fork point.
+private struct ForkIndicatorView: View {
+    let content: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 1)
+
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                Text(content)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+            }
+            .fixedSize()
+
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 6)
     }
 }

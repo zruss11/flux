@@ -36,6 +36,9 @@ enum Log {
     /// Automation service (scheduled tasks)
     static let automation = Logger(subsystem: subsystem, category: "automation")
 
+    /// Active app monitoring (frontmost app changes)
+    static let appMonitor = Logger(subsystem: subsystem, category: "appMonitor")
+
     /// Context manager (screen context aggregation)
     static let context = Logger(subsystem: subsystem, category: "context")
 

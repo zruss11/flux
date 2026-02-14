@@ -18,6 +18,13 @@ final class AgentBridge: @unchecked Sendable {
     var onToolUseStart: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, inputSummary
     var onToolUseComplete: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, resultPreview
     var onRunStatus: ((String, Bool) -> Void)?  // conversationId, isWorking
+    /// Called when the sidecar sends `session_info` with a conversation/session pairing.
+    /// Currently used for debug logging; the session ID itself is tracked by the sidecar
+    /// and is essential for features like session forking (`forkOnNextRun`).
+    var onSessionInfo: ((String, String) -> Void)?  // conversationId, sessionId
+    var onForkConversationResult: ((String, Bool, String?) -> Void)?  // conversationId, success, reason
+    var onPermissionRequest: ((String, String, String, [String: String]) -> Void)?  // conversationId, requestId, toolName, input
+    var onAskUserQuestion: ((String, String, [[String: Any]]) -> Void)?  // conversationId, requestId, questions
     private var activeRunConversationIds: Set<String> = []
     private var activeToolUseIds: Set<String> = []
     private var activeStreamConversationIds: Set<String> = []
@@ -36,6 +43,14 @@ final class AgentBridge: @unchecked Sendable {
     private var lastSentTelegramBotToken: String?
     private var lastSentTelegramChatId: String?
     private var telegramConfigObserver: NSObjectProtocol?
+    private var lastActiveAppUpdate: ActiveAppUpdatePayload?
+
+    private struct ActiveAppUpdatePayload: Sendable {
+        let appName: String
+        let bundleId: String
+        let pid: Int32
+        let appInstruction: String?
+    }
 
     init(port: Int = 7847) {
         self.port = port
@@ -78,6 +93,14 @@ final class AgentBridge: @unchecked Sendable {
         // Send MCP auth config proactively; doesn't depend on receiving a message first.
         sendMcpAuthIfNeeded()
         sendTelegramConfigFromStores()
+        if let activeApp = lastActiveAppUpdate {
+            sendActiveAppUpdate(
+                appName: activeApp.appName,
+                bundleId: activeApp.bundleId,
+                pid: activeApp.pid,
+                appInstruction: activeApp.appInstruction
+            )
+        }
 
         receiveMessage()
     }
@@ -130,12 +153,61 @@ final class AgentBridge: @unchecked Sendable {
         send(message)
     }
 
+    func sendForkConversation(sourceConversationId: String, newConversationId: String) {
+        let message: [String: Any] = [
+            "type": "fork_conversation",
+            "sourceConversationId": sourceConversationId,
+            "newConversationId": newConversationId
+        ]
+        send(message)
+    }
+
+    func sendPermissionResponse(
+        requestId: String,
+        behavior: String,
+        message: String? = nil,
+        answers: [String: String]? = nil
+    ) {
+        var msg: [String: Any] = [
+            "type": "permission_response",
+            "requestId": requestId,
+            "behavior": behavior
+        ]
+        if let message {
+            msg["message"] = message
+        }
+        if let answers, !answers.isEmpty {
+            msg["answers"] = answers
+        }
+        send(msg)
+    }
+
     func sendApiKey(_ key: String) {
         guard !key.isEmpty else { return }
         let message: [String: Any] = [
             "type": "set_api_key",
             "apiKey": key
         ]
+        send(message)
+    }
+
+    /// Notify the sidecar of a frontmost-app change so it can adapt the system prompt.
+    func sendActiveAppUpdate(appName: String, bundleId: String, pid: Int32, appInstruction: String? = nil) {
+        lastActiveAppUpdate = ActiveAppUpdatePayload(
+            appName: appName,
+            bundleId: bundleId,
+            pid: pid,
+            appInstruction: appInstruction
+        )
+        var message: [String: Any] = [
+            "type": "active_app_update",
+            "appName": appName,
+            "bundleId": bundleId,
+            "pid": pid
+        ]
+        if let instruction = appInstruction, !instruction.isEmpty {
+            message["appInstruction"] = instruction
+        }
         send(message)
     }
 
@@ -279,6 +351,51 @@ final class AgentBridge: @unchecked Sendable {
                     self.onRunStatus?(conversationId, isWorking)
                 }
                 setRunStatus(for: conversationId, isWorking: isWorking)
+            }
+
+        case "session_info":
+            if let sessionId = json["sessionId"] as? String {
+                Task { @MainActor in
+                    guard let onSessionInfo = self.onSessionInfo else {
+                        Log.bridge.warning("Received session_info for conversationId=\(conversationId), sessionId=\(sessionId), but no onSessionInfo handler is set")
+                        return
+                    }
+                    Log.bridge.info("Received session_info for conversationId=\(conversationId), sessionId=\(sessionId)")
+                    onSessionInfo(conversationId, sessionId)
+                }
+            }
+        case "fork_conversation_result":
+            if let success = json["success"] as? Bool {
+                let reason = json["reason"] as? String
+                Task { @MainActor in
+                    self.onForkConversationResult?(conversationId, success, reason)
+                }
+            }
+
+        case "permission_request":
+            if let requestId = json["requestId"] as? String,
+               let toolName = json["toolName"] as? String {
+                let rawInput = json["input"] as? [String: Any] ?? [:]
+                // Flatten input to string values for display
+                var displayInput: [String: String] = [:]
+                for (key, value) in rawInput {
+                    if let s = value as? String {
+                        displayInput[key] = s
+                    } else {
+                        displayInput[key] = "\(value)"
+                    }
+                }
+                Task { @MainActor in
+                    self.onPermissionRequest?(conversationId, requestId, toolName, displayInput)
+                }
+            }
+
+        case "ask_user_question":
+            if let requestId = json["requestId"] as? String,
+               let questions = json["questions"] as? [[String: Any]] {
+                Task { @MainActor in
+                    self.onAskUserQuestion?(conversationId, requestId, questions)
+                }
             }
 
         default:

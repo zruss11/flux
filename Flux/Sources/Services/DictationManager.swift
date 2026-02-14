@@ -19,6 +19,9 @@ final class DictationManager {
     // MARK: - Public State
 
     private(set) var isDictating = false
+    /// When `true`, the current dictation session is capturing a voice command
+    /// to transform selected text rather than plain transcription.
+    private(set) var isEditMode = false
 
     let historyStore = DictationHistoryStore()
 
@@ -45,9 +48,18 @@ final class DictationManager {
     /// Work item used to debounce the key-down event before starting dictation.
     private var debounceWorkItem: DispatchWorkItem?
 
+    /// The text that was selected when edit mode was activated.
+    private var editModeSelectedText: String?
+
     private let minRecordingDuration: TimeInterval = 0.5
     private let maxContinuousRecordingDuration: TimeInterval = 45
     private let transcriptionStopTimeout: TimeInterval = 15
+
+    private struct EnhancementAppContext: Sendable {
+        let appName: String
+        let bundleId: String
+        let appInstruction: String?
+    }
 
     // MARK: - Init
 
@@ -168,6 +180,17 @@ final class DictationManager {
             self.recordingStartTime = Date()
             AudioFeedbackService.shared.play(.dictationStart)
 
+            // Auto-detect edit mode: if the user has text selected, treat the
+            // voice command as an editing instruction rather than plain dictation.
+            let selectedText = await self.accessibilityReader?.readSelectedText()
+            if let selected = selectedText, !selected.isEmpty {
+                self.isEditMode = true
+                self.editModeSelectedText = selected
+            } else {
+                self.isEditMode = false
+                self.editModeSelectedText = nil
+            }
+
             IslandWindowManager.shared.suppressDeactivationCollapse = true
 
             // Poll audio levels at ~60 Hz to drive the in-notch waveform.
@@ -283,8 +306,48 @@ final class DictationManager {
         let cleanFillers = UserDefaults.standard.object(forKey: "dictationAutoCleanFillers") as? Bool ?? true
         let cleanedText = cleanFillers ? FillerWordCleaner.clean(rawTranscript) : rawTranscript
 
+        // ── Edit mode: transform the selected text using the voice command ──
+        if isEditMode, let selectedText = editModeSelectedText {
+            Task { @MainActor [weak self] in
+                guard let self, let reader = self.accessibilityReader else { return }
+
+                let replaceResult = await MagicReplaceManager.shared.performReplace(
+                    selectedText: selectedText,
+                    command: cleanedText,
+                    accessibilityReader: reader
+                )
+
+                let finalText = replaceResult.transformedText ?? cleanedText
+
+                if !replaceResult.inserted {
+                    let fallbackInserted = reader.replaceSelectedText(finalText)
+                    if !fallbackInserted {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(finalText, forType: .string)
+                    }
+                }
+
+                let targetApp = reader.focusedFieldAppName()
+                let entry = DictationEntry(
+                    rawTranscript: rawTranscript,
+                    cleanedText: cleanedText,
+                    enhancedText: replaceResult.transformedText,
+                    finalText: finalText,
+                    duration: duration,
+                    timestamp: Date(),
+                    targetApp: targetApp,
+                    enhancementMethod: .magicReplace
+                )
+                self.historyStore.add(entry)
+
+                self.tearDownUI()
+            }
+            return
+        }
+
         // Enhancement mode.
         let enhancementModeRaw = UserDefaults.standard.string(forKey: "dictationEnhancementMode") ?? "none"
+        let appContext = currentEnhancementAppContext()
 
         Task { @MainActor [weak self] in
             guard let self, self.isAttemptActive(attemptId) else { return }
@@ -296,12 +359,16 @@ final class DictationManager {
             var enhancementMethod: DictationEntry.EnhancementMethod = .none
 
             if enhancementModeRaw == "foundationModels" {
-                enhancedText = await self.enhanceWithFoundationModels(correctedText)
+                enhancedText = await self.enhanceWithFoundationModels(correctedText, appContext: appContext)
                 if enhancedText != nil {
                     enhancementMethod = .foundationModels
                 }
+            } else if enhancementModeRaw == "claude" {
+                enhancedText = await self.enhanceWithClaude(correctedText, appContext: appContext)
+                if enhancedText != nil {
+                    enhancementMethod = .claude
+                }
             }
-            // "claude" enhancement is deferred to a future step.
 
             let finalText = enhancedText ?? correctedText
 
@@ -379,14 +446,152 @@ final class DictationManager {
         resetVisualState()
     }
 
+    // MARK: - UI Teardown
+
+    private func tearDownUI() {
+        barLevels = Array(repeating: 0, count: 16)
+        isProcessing = false
+        isEditMode = false
+        editModeSelectedText = nil
+        IslandWindowManager.shared.suppressDeactivationCollapse = false
+        audioLevelMeter.reset()
+        recordingStartTime = nil
+    }
+
     // MARK: - Foundation Models Enhancement
 
-    private func enhanceWithFoundationModels(_ text: String) async -> String? {
+    private func enhanceWithFoundationModels(_ text: String, appContext: EnhancementAppContext) async -> String? {
         guard FoundationModelsClient.shared.isAvailable else { return nil }
         return try? await FoundationModelsClient.shared.completeText(
-            system: "Clean up dictated text for grammar and punctuation. Preserve meaning and tone. Return only the cleaned text.",
+            system: enhancementSystemPrompt(appContext: appContext),
             user: text
         )
+    }
+
+    // MARK: - Claude Enhancement
+
+    private func enhanceWithClaude(_ text: String, appContext: EnhancementAppContext) async -> String? {
+        let apiKey = (UserDefaults.standard.string(forKey: "anthropicApiKey") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else { return nil }
+
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+
+        let payload = ClaudeEnhancementRequest(
+            model: "claude-3-5-haiku-latest",
+            maxTokens: 300,
+            temperature: 0.2,
+            system: enhancementSystemPrompt(appContext: appContext),
+            messages: [.init(
+                role: "user",
+                content: [.init(type: "text", text: text)]
+            )]
+        )
+
+        do {
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            request.httpBody = try encoder.encode(payload)
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            guard statusCode >= 200, statusCode < 300 else {
+                Log.voice.error("Claude dictation enhancement failed: HTTP \(statusCode)")
+                return nil
+            }
+
+            let decoder = JSONDecoder()
+            let parsed = try decoder.decode(ClaudeEnhancementResponse.self, from: data)
+            let textResponse = parsed.content
+                .first(where: { $0.type == "text" })?
+                .text?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let textResponse, !textResponse.isEmpty else { return nil }
+            return textResponse
+        } catch {
+            Log.voice.error("Claude dictation enhancement error: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private func currentEnhancementAppContext() -> EnhancementAppContext {
+        if let active = AppMonitor.shared.currentApp ?? AppMonitor.shared.recentApps.first {
+            return EnhancementAppContext(
+                appName: active.appName,
+                bundleId: active.bundleId,
+                appInstruction: AppInstructions.shared.instruction(forBundleId: active.bundleId)?.instruction
+            )
+        }
+
+        let frontmostApp = NSWorkspace.shared.frontmostApplication
+        let appName = frontmostApp?.localizedName ?? "Unknown App"
+        let bundleId = frontmostApp?.bundleIdentifier ?? "unknown"
+
+        return EnhancementAppContext(
+            appName: appName,
+            bundleId: bundleId,
+            appInstruction: AppInstructions.shared.instruction(forBundleId: bundleId)?.instruction
+        )
+    }
+
+    private func enhancementSystemPrompt(appContext: EnhancementAppContext) -> String {
+        var prompt = """
+        Clean up dictated text for grammar and punctuation.
+        Preserve original meaning.
+        Keep wording concise and natural for the target app context.
+        Return only the final rewritten text.
+        """
+
+        let appInstruction = appContext.appInstruction?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !appInstruction.isEmpty {
+            prompt += """
+
+            Target app:
+            - Name: \(appContext.appName)
+            - Bundle ID: \(appContext.bundleId)
+
+            Per-app dictation style instruction:
+            <app_instruction>
+            \(appInstruction)
+            </app_instruction>
+            """
+        }
+
+        return prompt
+    }
+
+    private struct ClaudeEnhancementRequest: Encodable {
+        struct Message: Encodable {
+            struct Content: Encodable {
+                let type: String
+                let text: String
+            }
+            let role: String
+            let content: [Content]
+        }
+
+        let model: String
+        let maxTokens: Int
+        let temperature: Double
+        let system: String
+        let messages: [Message]
+    }
+
+    private struct ClaudeEnhancementResponse: Decodable {
+        struct Content: Decodable {
+            let type: String
+            let text: String?
+        }
+
+        let content: [Content]
     }
 
     private func startModifierPolling() {

@@ -14,7 +14,7 @@ protocol WatcherProvider: Sendable {
 }
 
 /// Result of a single watcher check.
-struct WatcherCheckResult {
+struct WatcherCheckResult: Sendable {
     let alerts: [WatcherAlert]
     /// Optional state to persist between checks (e.g., last seen message ID).
     var nextState: [String: String]?
@@ -35,10 +35,11 @@ final class WatcherEngine {
 
     private var providers: [Watcher.WatcherType: WatcherProvider] = [:]
     private var timers: [String: Timer] = [:]
+    private var watcherRunTokens: [String: UUID] = [:]
     private var states: [String: [String: String]] = [:]
     private var seenDedupeKeys: [String: Set<String>] = [:]
     private var dedupeOrder: [String: [String]] = [:]
-    private var runningChecks: Set<String> = []
+    private var runningChecks: [String: UUID] = [:]
 
     /// Maximum number of dedup keys to retain per watcher.
     private let maxDedupHistory = 500
@@ -47,6 +48,7 @@ final class WatcherEngine {
 
     // MARK: - Provider Registration
 
+    /// Registers a provider implementation for a watcher type.
     func registerProvider(_ provider: WatcherProvider) {
         providers[provider.type] = provider
         Log.app.info("WatcherEngine: registered provider for type \(provider.type.rawValue)")
@@ -54,6 +56,7 @@ final class WatcherEngine {
 
     // MARK: - Watcher Lifecycle
 
+    /// Starts (or restarts) a watcher and schedules periodic checks.
     func startWatcher(_ watcher: Watcher, credentials: [String: String] = [:]) {
         stopWatcher(id: watcher.id)
 
@@ -66,16 +69,19 @@ final class WatcherEngine {
             return
         }
 
+        let runToken = UUID()
+        watcherRunTokens[normalized.id] = runToken
+
         // Run an initial check immediately.
-        Task { await runCheck(watcher: normalized, credentials: credentials) }
+        Task { await runCheck(watcher: normalized, credentials: credentials, runToken: runToken) }
 
         // Schedule recurring checks.
         let interval = TimeInterval(normalized.intervalSeconds)
         let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
-                guard !self.runningChecks.contains(normalized.id) else { return }
-                await self.runCheck(watcher: normalized, credentials: credentials)
+                guard self.runningChecks[normalized.id] == nil else { return }
+                await self.runCheck(watcher: normalized, credentials: credentials, runToken: runToken)
             }
         }
         timers[normalized.id] = timer
@@ -83,20 +89,24 @@ final class WatcherEngine {
         Log.app.info("WatcherEngine: started \(normalized.name) (every \(normalized.intervalSeconds)s)")
     }
 
+    /// Stops a watcher and clears all in-memory state for that watcher.
     func stopWatcher(id: String) {
         timers[id]?.invalidate()
         timers.removeValue(forKey: id)
-        runningChecks.remove(id)
+        watcherRunTokens.removeValue(forKey: id)
+        runningChecks.removeValue(forKey: id)
         states.removeValue(forKey: id)
         seenDedupeKeys.removeValue(forKey: id)
         dedupeOrder.removeValue(forKey: id)
     }
 
+    /// Stops all watchers and resets engine state.
     func stopAll() {
         for (_, timer) in timers {
             timer.invalidate()
         }
         timers.removeAll()
+        watcherRunTokens.removeAll()
         runningChecks.removeAll()
         states.removeAll()
         seenDedupeKeys.removeAll()
@@ -106,10 +116,20 @@ final class WatcherEngine {
 
     // MARK: - Check Execution
 
-    private func runCheck(watcher: Watcher, credentials: [String: String]) async {
-        guard !runningChecks.contains(watcher.id) else { return }
-        runningChecks.insert(watcher.id)
-        defer { runningChecks.remove(watcher.id) }
+    /// Executes one provider check, persists state, deduplicates, and emits alerts.
+    private func runCheck(watcher: Watcher, credentials: [String: String], runToken: UUID? = nil) async {
+        if let runToken, watcherRunTokens[watcher.id] != runToken {
+            return
+        }
+
+        guard runningChecks[watcher.id] == nil else { return }
+        let checkToken = UUID()
+        runningChecks[watcher.id] = checkToken
+        defer {
+            if runningChecks[watcher.id] == checkToken {
+                runningChecks.removeValue(forKey: watcher.id)
+            }
+        }
 
         guard let provider = providers[watcher.type] else { return }
 
@@ -122,9 +142,8 @@ final class WatcherEngine {
                 previousState: previousState
             )
 
-            // Suppress late results if the watcher was stopped during the check.
-            guard timers[watcher.id] != nil else {
-                Log.app.info("WatcherEngine: \(watcher.name) was stopped during check — discarding results")
+            if let runToken, watcherRunTokens[watcher.id] != runToken {
+                Log.app.info("WatcherEngine: dropping stale result for \(watcher.name)")
                 return
             }
 
@@ -156,10 +175,12 @@ final class WatcherEngine {
 
     // MARK: - Dedupe History
 
+    /// Returns true when the dedupe key has already been seen for this watcher.
     private func isDuplicate(dedupeKey: String, watcherId: String) -> Bool {
         seenDedupeKeys[watcherId]?.contains(dedupeKey) == true
     }
 
+    /// Stores a dedupe key and evicts oldest entries over the configured cap.
     private func remember(dedupeKey: String, watcherId: String) {
         var seen = seenDedupeKeys[watcherId] ?? Set<String>()
         var order = dedupeOrder[watcherId] ?? []
