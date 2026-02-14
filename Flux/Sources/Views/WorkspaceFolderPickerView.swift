@@ -77,16 +77,20 @@ struct WorkspaceFolderPickerView: View {
                 .onSubmit {
                     navigateToTypedPath()
                 }
+                .onExitCommand {
+                    pathText = currentDirectory.path  // Reset on Escape
+                }
 
             Button {
                 navigateToTypedPath()
             } label: {
-                Image(systemName: "arrow.right.circle.fill")
+                let isModified = pathText.trimmingCharacters(in: .whitespacesAndNewlines) != currentDirectory.path
+                Image(systemName: isModified ? "arrow.right.circle.fill" : "checkmark.circle.fill")
                     .font(.system(size: 14))
-                    .foregroundStyle(.blue.opacity(0.7))
+                    .foregroundStyle(isModified ? .blue.opacity(0.7) : .green.opacity(0.5))
             }
             .buttonStyle(.plain)
-            .help("Go to path")
+            .help(pathText.trimmingCharacters(in: .whitespacesAndNewlines) != currentDirectory.path ? "Go to path" : "Current directory")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -101,20 +105,27 @@ struct WorkspaceFolderPickerView: View {
     }
 
     private func navigateToTypedPath() {
+        errorMessage = nil  // Clear any previous errors
         let trimmed = pathText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let expanded = NSString(string: trimmed).expandingTildeInPath
         let url = URL(fileURLWithPath: expanded)
 
         var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-            navigateTo(url)
-        } else {
-            errorMessage = "Path not found or is not a directory:\n\(trimmed)"
-            // Reset text back to current directory
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+            errorMessage = "Path not found:\n\(trimmed)"
             pathText = currentDirectory.path
+            return
         }
+
+        guard isDir.boolValue else {
+            errorMessage = "Not a directory:\n\(trimmed)"
+            pathText = currentDirectory.path
+            return
         }
+
+        navigateTo(url)
+    }
 
     // MARK: - Quick Access Row
 
@@ -364,6 +375,7 @@ struct WorkspaceFolderPickerView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             currentDirectory = url
             selectedURL = nil
+            errorMessage = nil  // Clear any previous errors
         }
     }
 }
