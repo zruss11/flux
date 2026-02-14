@@ -302,9 +302,9 @@ final class DictationManager {
 
         let duration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
 
-        // Filler word cleaning (defaults to enabled).
-        let cleanFillers = UserDefaults.standard.object(forKey: "dictationAutoCleanFillers") as? Bool ?? true
-        let cleanedText = cleanFillers ? FillerWordCleaner.clean(rawTranscript) : rawTranscript
+        // Run the full post-processing pipeline (filler removal, fragment repair,
+        // intent correction, number conversion, dictionary corrections).
+        let cleanedText = TranscriptPostProcessor.process(rawTranscript)
 
         // ── Edit mode: transform the selected text using the voice command ──
         if isEditMode, let selectedText = editModeSelectedText {
@@ -352,8 +352,8 @@ final class DictationManager {
         Task { @MainActor [weak self] in
             guard let self, self.isAttemptActive(attemptId) else { return }
 
-            // Apply custom dictionary corrections.
-            let correctedText = DictionaryCorrector.apply(cleanedText, using: CustomDictionaryStore.shared.entries)
+            // Pipeline already applied all corrections including dictionary.
+            let correctedText = cleanedText
 
             var enhancedText: String?
             var enhancementMethod: DictationEntry.EnhancementMethod = .none
