@@ -53,6 +53,19 @@ interface ActiveAppUpdateMessage {
   appInstruction?: string;
 }
 
+interface ForkConversationMessage {
+  type: 'fork_conversation';
+  sourceConversationId: string;
+  newConversationId: string;
+}
+
+interface ForkConversationResultMessage {
+  type: 'fork_conversation_result';
+  conversationId: string;
+  success: boolean;
+  reason?: string;
+}
+
 interface PermissionResponseMessage {
   type: 'permission_response';
   requestId: string;
@@ -61,7 +74,7 @@ interface PermissionResponseMessage {
   answers?: Record<string, string>;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | PermissionResponseMessage;
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | ForkConversationMessage | PermissionResponseMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -105,6 +118,12 @@ interface RunStatusMessage {
   isWorking: boolean;
 }
 
+interface SessionInfoMessage {
+  type: 'session_info';
+  conversationId: string;
+  sessionId: string;
+}
+
 interface PermissionRequestMessage {
   type: 'permission_request';
   conversationId: string;
@@ -131,6 +150,8 @@ type OutgoingMessage =
   | ToolUseCompleteMessage
   | StreamChunkMessage
   | RunStatusMessage
+  | SessionInfoMessage
+  | ForkConversationResultMessage
   | PermissionRequestMessage
   | AskUserQuestionMessage;
 
@@ -160,6 +181,194 @@ interface SDKUserImageContentBlock {
 interface QueuedUserMessage {
   text: string;
   images: ChatImagePayload[];
+}
+
+interface AgentAssistantMessage {
+  type: 'assistant';
+  uuid?: string;
+  [key: string]: unknown;
+}
+
+interface AgentSystemMessage {
+  type: 'system';
+  subtype?: string;
+  session_id?: string;
+  status?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+interface AgentStreamEvent {
+  type?: string;
+  index?: number;
+  content_block?: {
+    type?: string;
+    id?: string;
+    name?: string;
+  };
+  delta?: {
+    type?: string;
+    partial_json?: string;
+    text?: string;
+  };
+  [key: string]: unknown;
+}
+
+interface AgentStreamEventMessage {
+  type: 'stream_event';
+  event?: AgentStreamEvent;
+  [key: string]: unknown;
+}
+
+interface AgentResultMessage {
+  type: 'result';
+  result?: unknown;
+  [key: string]: unknown;
+}
+
+type AgentMessage = AgentAssistantMessage | AgentSystemMessage | AgentStreamEventMessage | AgentResultMessage;
+
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null;
+}
+
+function isAgentMessage(value: unknown): value is AgentMessage {
+  if (!isRecord(value)) return false;
+
+  const message = value;
+  return (
+    message.type === 'assistant'
+    || message.type === 'system'
+    || message.type === 'stream_event'
+    || message.type === 'result'
+  );
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isChatImagePayload(value: unknown): value is ChatImagePayload {
+  return isRecord(value)
+    && isString(value.fileName)
+    && isString(value.mediaType)
+    && isString(value.data);
+}
+
+function isChatImageList(value: unknown): value is ChatImagePayload[] {
+  return Array.isArray(value) && value.every(isChatImagePayload);
+}
+
+function isIncomingMessage(value: unknown): value is IncomingMessage {
+  if (!isRecord(value)) return false;
+
+  if (value.type === 'chat') {
+    return isString(value.conversationId)
+      && isString(value.content)
+      && (value.images === undefined || isChatImageList(value.images));
+  }
+
+  if (value.type === 'tool_result') {
+    return isString(value.conversationId)
+      && isString(value.toolUseId)
+      && isString(value.toolName)
+      && isString(value.toolResult);
+  }
+
+  if (value.type === 'set_api_key') {
+    return isString(value.apiKey);
+  }
+
+  if (value.type === 'mcp_auth') {
+    return isString(value.serverId) && isString(value.token);
+  }
+
+  if (value.type === 'set_telegram_config') {
+    return isString(value.botToken) && isString(value.defaultChatId);
+  }
+
+  if (value.type === 'active_app_update') {
+    return isString(value.appName)
+      && isString(value.bundleId)
+      && isNumber(value.pid)
+      && (value.appInstruction === undefined || isString(value.appInstruction));
+  }
+
+  if (value.type === 'fork_conversation') {
+    return isString(value.sourceConversationId) && isString(value.newConversationId);
+  }
+
+  if (value.type === 'permission_response') {
+    return isString(value.requestId) && isString(value.behavior);
+  }
+
+  return false;
+}
+
+function parseIncomingMessage(payload: string): IncomingMessage | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+
+  return isIncomingMessage(raw) ? raw : null;
+}
+
+function isBridgeMessage(value: unknown): value is BridgeMessage {
+  if (!isRecord(value)) return false;
+
+  if (value.type === 'hello') {
+    return isString(value.conversationId) && isString(value.runId);
+  }
+
+  if (value.type === 'tool_request') {
+    return isString(value.conversationId)
+      && isString(value.runId)
+      && isString(value.toolUseId)
+      && isString(value.toolName)
+      && isRecord(value.input);
+  }
+
+  return false;
+}
+
+function parseBridgeMessage(payload: string): BridgeMessage | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+
+  return isBridgeMessage(raw) ? raw : null;
+}
+
+function parseEventTextDelta(value: AgentStreamEvent): string | null {
+  return isString(value.delta?.text) ? value.delta.text : null;
+}
+
+function parseEventInputJsonDelta(value: AgentStreamEvent): string | null {
+  return isString(value.delta?.partial_json) ? value.delta.partial_json : null;
+}
+
+function parseStreamBlockId(value: AgentStreamEvent): string | null {
+  return isRecord(value.content_block) && isString(value.content_block.id) ? value.content_block.id : null;
+}
+
+function parseStreamBlockName(value: AgentStreamEvent): string | null {
+  return isRecord(value.content_block) && isString(value.content_block.name) ? value.content_block.name : null;
+}
+
+function parseEventIndex(value: AgentStreamEvent): number | null {
+  return isNumber(value.index) ? value.index : null;
 }
 
 const log = createLogger('bridge');
@@ -304,6 +513,8 @@ interface ConversationSession {
   toolUseByIndex: Map<number, { id: string; name: string; inputChunks: string[] }>;
   /** Non-MCP tool calls started but not yet completed (toolUseId → toolName) */
   pendingToolCompletions: Map<string, string>;
+  /** When true, the next `query()` call will pass `forkSession: true` to create a new session branch. */
+  forkOnNextRun?: boolean;
 }
 
 class MessageStream {
@@ -371,12 +582,12 @@ export function startBridge(port: number): void {
     activeClient = ws;
 
     ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString()) as IncomingMessage;
-        handleMessage(ws, message);
-      } catch (error) {
-        log.error('Failed to parse message:', error);
+      const message = parseIncomingMessage(data.toString());
+      if (!message) {
+        log.warn('Received invalid message from Swift app');
+        return;
       }
+      handleMessage(ws, message);
     });
 
     ws.on('close', () => {
@@ -428,6 +639,9 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
     case 'active_app_update':
       handleActiveAppUpdate(message);
       break;
+    case 'fork_conversation':
+      handleForkConversation(message);
+      break;
     case 'permission_response':
       handlePermissionResponse(message);
       break;
@@ -453,6 +667,44 @@ function handleMcpAuth(message: McpAuthMessage): void {
   } else {
     mcpAuthTokens.set(message.serverId, token);
   }
+}
+
+function handleForkConversation(message: ForkConversationMessage): void {
+  const { sourceConversationId, newConversationId } = message;
+  const sourceSession = sessions.get(sourceConversationId);
+
+  if (!sourceSession?.sessionId) {
+    log.warn(`Cannot fork: no SDK session found for conversation ${sourceConversationId}`);
+    const reason = 'Unable to fork: the source conversation has no active session.';
+    sendToClient(activeClient, {
+      type: 'fork_conversation_result',
+      conversationId: newConversationId,
+      success: false,
+      reason,
+    });
+    return;
+  }
+
+  log.info(`Forking session ${sourceSession.sessionId} from ${sourceConversationId} → ${newConversationId}`);
+
+  const forkedSession: ConversationSession = {
+    conversationId: newConversationId,
+    stream: null,
+    sessionId: sourceSession.sessionId,
+    lastAssistantUuid: sourceSession.lastAssistantUuid,
+    isRunning: false,
+    pendingMessages: [],
+    toolUseByIndex: new Map(),
+    pendingToolCompletions: new Map(),
+    forkOnNextRun: true,
+  };
+
+  sessions.set(newConversationId, forkedSession);
+  sendToClient(activeClient, {
+    type: 'fork_conversation_result',
+    conversationId: newConversationId,
+    success: true,
+  });
 }
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
@@ -549,7 +801,11 @@ function startSessionRun(session: ConversationSession, messages: QueuedUserMessa
     session.stream.push(msg);
   }
   session.isRunning = true;
-  touchIdle(session);
+  // Skip idle timer for forked sessions until first run completes,
+  // ensuring the fork remains available when the user first interacts with it.
+  if (session.forkOnNextRun !== true) {
+    touchIdle(session);
+  }
 
   void runAgentSession(session).catch((error) => {
     log.error('Agent run error:', error);
@@ -568,6 +824,9 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
   sendToClient(activeClient, { type: 'run_status', conversationId, isWorking: true });
 
   const runId = crypto.randomUUID();
+  const shouldFork = session.forkOnNextRun === true;
+  session.forkOnNextRun = false;
+
   const canUseTool = (
     toolName: string,
     input: Record<string, unknown>,
@@ -620,9 +879,14 @@ async function runAgentSession(session: ConversationSession): Promise<void> {
         allowDangerouslySkipPermissions: false,
         canUseTool,
         includePartialMessages: true,
+        ...(shouldFork ? { forkSession: true } : {}),
       }),
     })) {
-      handleAgentMessage(session, message as any);
+      if (isAgentMessage(message)) {
+        handleAgentMessage(session, message);
+      } else {
+        log.warn(`Ignoring unsupported message type: ${session.conversationId}`, message);
+      }
     }
   } finally {
     clearIdle(session);
@@ -710,7 +974,7 @@ async function runAgentWarmup(trigger: string): Promise<void> {
   log.info(`Agent warmup completed in ${Date.now() - startedAt}ms`);
 }
 
-function handleAgentMessage(session: ConversationSession, message: any): void {
+function handleAgentMessage(session: ConversationSession, message: AgentMessage): void {
   const msgType = message.type === 'system' ? `system/${message.subtype}` : message.type;
   log.debug(`[agent] ${session.conversationId} message=${msgType}`);
 
@@ -720,6 +984,13 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
   if (message.type === 'system' && message.subtype === 'init') {
     session.sessionId = message.session_id;
+    if (message.session_id) {
+      sendToClient(activeClient, {
+        type: 'session_info',
+        conversationId: session.conversationId,
+        sessionId: message.session_id,
+      });
+    }
   }
 
   if (message.type === 'system' && message.subtype === 'task_notification') {
@@ -743,9 +1014,11 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
     // Tool use content block starting
     if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
-      const index = event.index as number;
-      const toolUseId = event.content_block.id as string;
-      const toolName = event.content_block.name as string;
+      const index = parseEventIndex(event);
+      const toolUseId = parseStreamBlockId(event);
+      const toolName = parseStreamBlockName(event);
+      if (index === null || toolUseId === null || toolName === null) return;
+
       session.toolUseByIndex.set(index, { id: toolUseId, name: toolName, inputChunks: [] });
 
       // MCP-bridged tools emit their own tool_use_start via the MCP bridge — skip them here
@@ -767,9 +1040,13 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
     // Accumulate input JSON for tool uses
     if (event?.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
-      const tracked = session.toolUseByIndex.get(event.index as number);
+      const index = parseEventIndex(event);
+      const partialJson = parseEventInputJsonDelta(event);
+      if (index === null || partialJson === null) return;
+
+      const tracked = session.toolUseByIndex.get(index);
       if (tracked) {
-        tracked.inputChunks.push(event.delta.partial_json);
+        tracked.inputChunks.push(partialJson);
         touchIdle(session);
       }
       return;
@@ -777,7 +1054,10 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
     // Content block finished — update tool input summary with parsed input
     if (event?.type === 'content_block_stop') {
-      const tracked = session.toolUseByIndex.get(event.index as number);
+      const index = parseEventIndex(event);
+      if (index === null) return;
+
+      const tracked = session.toolUseByIndex.get(index);
       if (tracked && !tracked.name.startsWith('mcp__') && tracked.inputChunks.length > 0) {
         try {
           const fullInput = JSON.parse(tracked.inputChunks.join(''));
@@ -790,17 +1070,24 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
         }
       }
       if (tracked) {
-        session.toolUseByIndex.delete(event.index as number);
+        session.toolUseByIndex.delete(index);
       }
       return;
     }
 
     // Text delta — stream to UI
-    if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+    if (
+      event?.type === 'content_block_delta'
+      && event.delta?.type === 'text_delta'
+      && event.delta.text
+    ) {
+      const content = parseEventTextDelta(event);
+      if (content === null) return;
+
       sendToClient(activeClient, {
         type: 'stream_chunk',
         conversationId: session.conversationId,
-        content: event.delta.text,
+        content,
       });
       touchIdle(session);
     }
@@ -1000,12 +1287,13 @@ function startMcpBridge(port: number): void {
 
   wss.on('connection', (ws) => {
     ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString()) as BridgeMessage;
-        handleMcpBridgeMessage(ws, message);
-      } catch (error) {
-        log.error('Failed to parse MCP bridge message:', error);
+      const message = parseBridgeMessage(data.toString());
+      if (!message) {
+        log.warn('Invalid MCP bridge message');
+        return;
       }
+
+      handleMcpBridgeMessage(ws, message);
     });
 
     ws.on('close', () => {

@@ -18,6 +18,11 @@ final class AgentBridge: @unchecked Sendable {
     var onToolUseStart: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, inputSummary
     var onToolUseComplete: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, resultPreview
     var onRunStatus: ((String, Bool) -> Void)?  // conversationId, isWorking
+    /// Called when the sidecar sends `session_info` with a conversation/session pairing.
+    /// Currently used for debug logging; the session ID itself is tracked by the sidecar
+    /// and is essential for features like session forking (`forkOnNextRun`).
+    var onSessionInfo: ((String, String) -> Void)?  // conversationId, sessionId
+    var onForkConversationResult: ((String, Bool, String?) -> Void)?  // conversationId, success, reason
     var onPermissionRequest: ((String, String, String, [String: String]) -> Void)?  // conversationId, requestId, toolName, input
     var onAskUserQuestion: ((String, String, [[String: Any]]) -> Void)?  // conversationId, requestId, questions
     private var activeRunConversationIds: Set<String> = []
@@ -144,6 +149,15 @@ final class AgentBridge: @unchecked Sendable {
             "toolUseId": toolUseId,
             "toolName": toolName,
             "toolResult": result
+        ]
+        send(message)
+    }
+
+    func sendForkConversation(sourceConversationId: String, newConversationId: String) {
+        let message: [String: Any] = [
+            "type": "fork_conversation",
+            "sourceConversationId": sourceConversationId,
+            "newConversationId": newConversationId
         ]
         send(message)
     }
@@ -337,6 +351,25 @@ final class AgentBridge: @unchecked Sendable {
                     self.onRunStatus?(conversationId, isWorking)
                 }
                 setRunStatus(for: conversationId, isWorking: isWorking)
+            }
+
+        case "session_info":
+            if let sessionId = json["sessionId"] as? String {
+                Task { @MainActor in
+                    guard let onSessionInfo = self.onSessionInfo else {
+                        Log.bridge.warning("Received session_info for conversationId=\(conversationId), sessionId=\(sessionId), but no onSessionInfo handler is set")
+                        return
+                    }
+                    Log.bridge.info("Received session_info for conversationId=\(conversationId), sessionId=\(sessionId)")
+                    onSessionInfo(conversationId, sessionId)
+                }
+            }
+        case "fork_conversation_result":
+            if let success = json["success"] as? Bool {
+                let reason = json["reason"] as? String
+                Task { @MainActor in
+                    self.onForkConversationResult?(conversationId, success, reason)
+                }
             }
 
         case "permission_request":

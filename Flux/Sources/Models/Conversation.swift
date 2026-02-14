@@ -439,6 +439,44 @@ final class ConversationStore {
         }
     }
 
+    /// Fork an existing conversation: duplicate its messages into a brand-new
+    /// conversation and return the new ID. The caller is responsible for
+    /// notifying the sidecar via `AgentBridge.sendForkConversation`.
+    @discardableResult
+    func forkConversation(id: UUID) -> UUID? {
+        // Load the source conversation if it isn't already in memory.
+        let source: Conversation
+        if let existing = conversations.first(where: { $0.id == id }) {
+            source = existing
+        } else if let loaded = loadConversation(id: id) {
+            source = loaded
+        } else {
+            return nil
+        }
+
+        let newConversation = Conversation(messages: source.messages)
+        conversations.append(newConversation)
+        activeConversationId = newConversation.id
+
+        // Build a title for the fork.
+        let sourceTitle = summaries.first(where: { $0.id == id })?.title ?? "Chat"
+        let forkTitle = "Fork of \(sourceTitle)"
+
+        let summary = ConversationSummary(
+            id: newConversation.id,
+            title: forkTitle,
+            createdAt: newConversation.createdAt,
+            lastMessageAt: source.messages.last?.timestamp ?? newConversation.createdAt,
+            messageCount: newConversation.messages.count,
+            folderId: nil
+        )
+        summaries.insert(summary, at: 0)
+        saveConversation(newConversation)
+        saveIndex()
+
+        return newConversation.id
+    }
+
     // MARK: - Folder Management
 
     @discardableResult

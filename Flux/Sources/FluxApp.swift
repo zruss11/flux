@@ -384,6 +384,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        agentBridge.onSessionInfo = { conversationId, sessionId in
+            guard let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                Log.bridge.debug("Sidecar session initialized for conversation \(uuid, privacy: .public): sessionId=\(sessionId, privacy: .public)")
+            }
+        }
+
+        agentBridge.onForkConversationResult = { [weak self] conversationId, success, reason in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                if success {
+                    Log.bridge.info("Fork succeeded for conversation \(uuid, privacy: .public)")
+                } else {
+                    Log.bridge.warning("Fork failed for conversation \(uuid, privacy: .public): \(reason ?? "unknown", privacy: .public)")
+                    self.conversationStore.deleteConversation(id: uuid)
+                }
+            }
+        }
+
         agentBridge.onPermissionRequest = { [weak self] conversationId, requestId, toolName, input in
             guard let self, let uuid = UUID(uuidString: conversationId) else { return }
             Task { @MainActor in
