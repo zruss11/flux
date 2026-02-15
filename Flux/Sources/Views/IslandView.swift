@@ -406,6 +406,11 @@ struct IslandView: View {
                 contentType = .chat
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .islandOpenSettingsRequested)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                contentType = .settings
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .islandOpenFolderPickerRequested)) { _ in
             withAnimation(.easeInOut(duration: 0.2)) {
                 contentType = .folderPicker
@@ -987,6 +992,8 @@ struct IslandSettingsView: View {
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
     @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
     @AppStorage("ciTickerDuration") private var ciTickerDuration: Double = 6.0
+    @AppStorage("showCIStatusChip") private var showCIStatusChip = true
+    @AppStorage("showWatcherAlertsChip") private var showWatcherAlertsChip = true
 
     @State private var editingField: EditingField?
     @FocusState private var fieldFocused: Bool
@@ -1274,6 +1281,32 @@ struct IslandSettingsView: View {
                     trailing: {
                         AnyView(
                             Toggle("", isOn: $inAppContextTrackingEnabled)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.mini)
+                        )
+                    }
+                )
+
+                settingsRow(
+                    icon: "checkmark.circle",
+                    label: "Show CI status chip",
+                    trailing: {
+                        AnyView(
+                            Toggle("", isOn: $showCIStatusChip)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.mini)
+                        )
+                    }
+                )
+
+                settingsRow(
+                    icon: "bell.badge",
+                    label: "Show alerts chip",
+                    trailing: {
+                        AnyView(
+                            Toggle("", isOn: $showWatcherAlertsChip)
                                 .toggleStyle(.switch)
                                 .labelsHidden()
                                 .controlSize(.mini)
