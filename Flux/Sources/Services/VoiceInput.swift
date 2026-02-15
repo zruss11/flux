@@ -318,6 +318,7 @@ final class VoiceInput {
             },
             onFailure: { [weak self] message in
                 Task { @MainActor in
+                    self?.cleanUp()
                     self?.onFailure?(message)
                 }
             }

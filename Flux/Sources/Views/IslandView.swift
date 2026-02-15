@@ -43,6 +43,7 @@ struct IslandView: View {
     /// Debug mode: force show live transcript dropdown with mock text
     @State private var debugShowLiveTranscript = false
     @State private var debugMockTranscript = "This is a sample live transcript that grows as you speak more text into the microphone during dictation mode."
+    @State private var debugTranscriptTimer: Timer?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -314,7 +315,7 @@ struct IslandView: View {
                     containerWidth: currentWidth + hoverWidthBoost,
                     cornerRadius: bottomRadius
                 )
-                .id(debugShowLiveTranscript ? debugMockTranscript : DictationManager.shared.liveTranscript)
+                .id("liveTranscript")
                 .transition(.opacity.combined(with: .move(edge: .top)))
                 .offset(y: currentHeight + hoverHeightBoost - 2 + (hasNotch ? 0 : windowManager.topOffset))
                 .allowsHitTesting(false)
@@ -511,7 +512,7 @@ struct IslandView: View {
                 if debugShowLiveTranscript {
                     // Simulate growing transcript
                     var counter = 0
-                    Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+                    debugTranscriptTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
                         counter += 1
                         let additions = [
                             "Hello",
@@ -529,6 +530,9 @@ struct IslandView: View {
                             timer.invalidate()
                         }
                     }
+                } else {
+                    debugTranscriptTimer?.invalidate()
+                    debugTranscriptTimer = nil
                 }
             } label: {
                 Image(systemName: debugShowLiveTranscript ? "text.bubble.fill" : "text.bubble")

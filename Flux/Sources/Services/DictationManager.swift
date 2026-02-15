@@ -210,7 +210,7 @@ final class DictationManager {
             }
 
             let provider = UserDefaults.standard.speechInputProvider
-            let mode: VoiceInputMode = provider == .deepgram ? .live : .batchOnDevice
+            let mode: VoiceInputMode = .live
             var startFailureReason: String?
 
             let started = await input.startRecording(
