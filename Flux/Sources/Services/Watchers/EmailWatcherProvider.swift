@@ -9,6 +9,7 @@ struct EmailWatcherProvider: WatcherProvider {
 
     private static let gmailBase = "https://gmail.googleapis.com/gmail/v1/users/me"
 
+
     /// Polls Gmail unread messages and converts new items into watcher alerts.
     func check(
         config: Watcher,
@@ -20,7 +21,10 @@ struct EmailWatcherProvider: WatcherProvider {
             return WatcherCheckResult(alerts: [])
         }
 
-        let pollStartEpochMs = Int(Date().timeIntervalSince1970 * 1000)
+
+        // Capture checkpoint at check START to avoid dropping emails that arrive during the run.
+        let checkStartEpochMs = Int(Date().timeIntervalSince1970 * 1000)
+
         let lastCheckMs = Int(previousState?["lastCheckEpochMs"] ?? "")
             ?? Int(Date().addingTimeInterval(-300).timeIntervalSince1970 * 1000)
         let afterSeconds = lastCheckMs / 1000
@@ -35,11 +39,12 @@ struct EmailWatcherProvider: WatcherProvider {
         let query = "is:unread after:\(afterSeconds) \(labelQuery)"
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         guard let listURL = URL(string: "\(Self.gmailBase)/messages?q=\(encodedQuery)&maxResults=\(maxResults)") else {
-            throw WatcherError.apiError("Gmail: could not construct list URL")
+            throw WatcherError.apiError("EmailWatcher: could not construct list URL")
         }
 
         // List unread messages
         var listReq = URLRequest(url: listURL)
+        listReq.timeoutInterval = 30
         listReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         let (listData, listResp) = try await URLSession.shared.data(for: listReq)
@@ -50,30 +55,34 @@ struct EmailWatcherProvider: WatcherProvider {
 
         let listJSON = try JSONSerialization.jsonObject(with: listData) as? [String: Any]
         guard let messageRefs = listJSON?["messages"] as? [[String: Any]], !messageRefs.isEmpty else {
-            return WatcherCheckResult(alerts: [], nextState: ["lastCheckEpochMs": "\(pollStartEpochMs)"])
+            return WatcherCheckResult(alerts: [], nextState: ["lastCheckEpochMs": "\(checkStartEpochMs)"])
         }
 
         // Fetch details for each message
         var alerts: [WatcherAlert] = []
         for ref in messageRefs.prefix(maxResults) {
             guard let messageId = ref["id"] as? String else { continue }
-            if let alert = try? await fetchMessageAlert(messageId: messageId, token: token, config: config) {
+            do {
+                let alert = try await fetchMessageAlert(messageId: messageId, token: token, config: config)
                 alerts.append(alert)
+            } catch {
+                Log.app.warning("EmailWatcher: failed to fetch message \(messageId): \(error.localizedDescription)")
             }
         }
 
         return WatcherCheckResult(
             alerts: alerts,
-            nextState: ["lastCheckEpochMs": "\(pollStartEpochMs)"]
+            nextState: ["lastCheckEpochMs": "\(checkStartEpochMs)"]
         )
     }
 
     /// Fetches Gmail message metadata and maps it into a watcher alert.
     private func fetchMessageAlert(messageId: String, token: String, config: Watcher) async throws -> WatcherAlert {
         guard let url = URL(string: "\(Self.gmailBase)/messages/\(messageId)?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date") else {
-            throw WatcherError.apiError("Gmail: could not construct message URL for \(messageId)")
+            throw WatcherError.apiError("EmailWatcher: could not construct message URL for \(messageId)")
         }
         var req = URLRequest(url: url)
+        req.timeoutInterval = 30
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -107,6 +116,7 @@ struct EmailWatcherProvider: WatcherProvider {
             dedupeKey: "email:\(messageId)"
         )
     }
+
 
     /// Parses RFC 2822-style email dates from Gmail message headers.
     private static func parseEmailDate(_ rawValue: String?) -> Date? {

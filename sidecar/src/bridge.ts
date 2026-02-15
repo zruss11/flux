@@ -53,7 +53,28 @@ interface ActiveAppUpdateMessage {
   appInstruction?: string;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage;
+interface ForkConversationMessage {
+  type: 'fork_conversation';
+  sourceConversationId: string;
+  newConversationId: string;
+}
+
+interface ForkConversationResultMessage {
+  type: 'fork_conversation_result';
+  conversationId: string;
+  success: boolean;
+  reason?: string;
+}
+
+interface PermissionResponseMessage {
+  type: 'permission_response';
+  requestId: string;
+  behavior: 'allow' | 'deny';
+  message?: string;
+  answers?: Record<string, string>;
+}
+
+type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | ForkConversationMessage | PermissionResponseMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -97,13 +118,42 @@ interface RunStatusMessage {
   isWorking: boolean;
 }
 
+interface SessionInfoMessage {
+  type: 'session_info';
+  conversationId: string;
+  sessionId: string;
+}
+
+interface PermissionRequestMessage {
+  type: 'permission_request';
+  conversationId: string;
+  requestId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+interface AskUserQuestionMessage {
+  type: 'ask_user_question';
+  conversationId: string;
+  requestId: string;
+  questions: Array<{
+    question: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>;
+}
+
 type OutgoingMessage =
   | AssistantMessage
   | ToolRequestMessage
   | ToolUseStartMessage
   | ToolUseCompleteMessage
   | StreamChunkMessage
-  | RunStatusMessage;
+  | RunStatusMessage
+  | SessionInfoMessage
+  | ForkConversationResultMessage
+  | PermissionRequestMessage
+  | AskUserQuestionMessage;
 
 interface SDKUserMessage {
   type: 'user';
@@ -131,6 +181,194 @@ interface SDKUserImageContentBlock {
 interface QueuedUserMessage {
   text: string;
   images: ChatImagePayload[];
+}
+
+interface AgentAssistantMessage {
+  type: 'assistant';
+  uuid?: string;
+  [key: string]: unknown;
+}
+
+interface AgentSystemMessage {
+  type: 'system';
+  subtype?: string;
+  session_id?: string;
+  status?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+interface AgentStreamEvent {
+  type?: string;
+  index?: number;
+  content_block?: {
+    type?: string;
+    id?: string;
+    name?: string;
+  };
+  delta?: {
+    type?: string;
+    partial_json?: string;
+    text?: string;
+  };
+  [key: string]: unknown;
+}
+
+interface AgentStreamEventMessage {
+  type: 'stream_event';
+  event?: AgentStreamEvent;
+  [key: string]: unknown;
+}
+
+interface AgentResultMessage {
+  type: 'result';
+  result?: unknown;
+  [key: string]: unknown;
+}
+
+type AgentMessage = AgentAssistantMessage | AgentSystemMessage | AgentStreamEventMessage | AgentResultMessage;
+
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null;
+}
+
+function isAgentMessage(value: unknown): value is AgentMessage {
+  if (!isRecord(value)) return false;
+
+  const message = value;
+  return (
+    message.type === 'assistant'
+    || message.type === 'system'
+    || message.type === 'stream_event'
+    || message.type === 'result'
+  );
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isChatImagePayload(value: unknown): value is ChatImagePayload {
+  return isRecord(value)
+    && isString(value.fileName)
+    && isString(value.mediaType)
+    && isString(value.data);
+}
+
+function isChatImageList(value: unknown): value is ChatImagePayload[] {
+  return Array.isArray(value) && value.every(isChatImagePayload);
+}
+
+function isIncomingMessage(value: unknown): value is IncomingMessage {
+  if (!isRecord(value)) return false;
+
+  if (value.type === 'chat') {
+    return isString(value.conversationId)
+      && isString(value.content)
+      && (value.images === undefined || isChatImageList(value.images));
+  }
+
+  if (value.type === 'tool_result') {
+    return isString(value.conversationId)
+      && isString(value.toolUseId)
+      && isString(value.toolName)
+      && isString(value.toolResult);
+  }
+
+  if (value.type === 'set_api_key') {
+    return isString(value.apiKey);
+  }
+
+  if (value.type === 'mcp_auth') {
+    return isString(value.serverId) && isString(value.token);
+  }
+
+  if (value.type === 'set_telegram_config') {
+    return isString(value.botToken) && isString(value.defaultChatId);
+  }
+
+  if (value.type === 'active_app_update') {
+    return isString(value.appName)
+      && isString(value.bundleId)
+      && isNumber(value.pid)
+      && (value.appInstruction === undefined || isString(value.appInstruction));
+  }
+
+  if (value.type === 'fork_conversation') {
+    return isString(value.sourceConversationId) && isString(value.newConversationId);
+  }
+
+  if (value.type === 'permission_response') {
+    return isString(value.requestId) && isString(value.behavior);
+  }
+
+  return false;
+}
+
+function parseIncomingMessage(payload: string): IncomingMessage | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+
+  return isIncomingMessage(raw) ? raw : null;
+}
+
+function isBridgeMessage(value: unknown): value is BridgeMessage {
+  if (!isRecord(value)) return false;
+
+  if (value.type === 'hello') {
+    return isString(value.conversationId) && isString(value.runId);
+  }
+
+  if (value.type === 'tool_request') {
+    return isString(value.conversationId)
+      && isString(value.runId)
+      && isString(value.toolUseId)
+      && isString(value.toolName)
+      && isRecord(value.input);
+  }
+
+  return false;
+}
+
+function parseBridgeMessage(payload: string): BridgeMessage | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+
+  return isBridgeMessage(raw) ? raw : null;
+}
+
+function parseEventTextDelta(value: AgentStreamEvent): string | null {
+  return isString(value.delta?.text) ? value.delta.text : null;
+}
+
+function parseEventInputJsonDelta(value: AgentStreamEvent): string | null {
+  return isString(value.delta?.partial_json) ? value.delta.partial_json : null;
+}
+
+function parseStreamBlockId(value: AgentStreamEvent): string | null {
+  return isRecord(value.content_block) && isString(value.content_block.id) ? value.content_block.id : null;
+}
+
+function parseStreamBlockName(value: AgentStreamEvent): string | null {
+  return isRecord(value.content_block) && isString(value.content_block.name) ? value.content_block.name : null;
+}
+
+function parseEventIndex(value: AgentStreamEvent): number | null {
+  return isNumber(value.index) ? value.index : null;
 }
 
 const log = createLogger('bridge');
@@ -175,6 +413,7 @@ const ALLOWED_TOOLS = [
   'SendMessage',
   'Skill',
   'NotebookEdit',
+  'AskUserQuestion',
   'mcp__flux__*',
 ];
 
@@ -184,6 +423,13 @@ const sessions = new Map<string, ConversationSession>();
 const telegramSessionMap = new Map<string, string>();
 const telegramConversationMeta = new Map<string, { chatId: string; threadId?: number }>();
 const mcpAuthTokens = new Map<string, string>();
+const pendingPermissions = new Map<string, {
+  resolve: (result: { behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }) => void;
+  conversationId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  timeout: NodeJS.Timeout;
+}>();
 
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
@@ -201,7 +447,58 @@ function sanitizeAppInstruction(instruction: string | undefined): string | undef
   if (trimmed.length === 0) return undefined;
   const maxLen = 2_000;
   const clipped = trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
-  return clipped.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  return clipped.replace(/\r\n|\r/g, '\n');
+}
+
+const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
+  /\brm\b/i,
+  /\brm\s+-rf\b/i,
+  /\brm\s+-fr\b/i,
+  /\bsudo\s+rm\b/i,
+  /\bgit\s+reset\s+--hard\b/i,
+  /\bgit\s+clean\s+-f(?:d|x|dx|fd|fdx)?\b/i,
+  /\bgit\s+checkout\s+--\b/i,
+  /\bgit\s+branch\s+-D\b/i,
+  /\bgit\s+push\s+--force(?!-with-lease)\b/i,
+  /\bgit\s+rebase\s+--abort\b/i,
+  /\bgit\s+rebase\s+--skip\b/i,
+  /\bgit\s+stash\s+(?:drop|clear)\b/i,
+];
+
+function collectCommandLikeInputValues(input: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  const keys = ['command', 'cmd', 'script', 'shell', 'bash', 'args'];
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      values.push(value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      const combined = value.filter((item): item is string => typeof item === 'string').join(' ');
+      if (combined.trim().length > 0) values.push(combined);
+    }
+  }
+  return values;
+}
+
+function requiresApproval(toolName: string, input: Record<string, unknown>): boolean {
+  const lowerToolName = toolName.toLowerCase();
+  const isCommandExecutionTool =
+    lowerToolName.includes('shell') ||
+    lowerToolName.includes('bash') ||
+    lowerToolName.includes('terminal') ||
+    lowerToolName.includes('applescript') ||
+    lowerToolName.includes('command');
+
+  const commandCandidates = collectCommandLikeInputValues(input);
+  if (!isCommandExecutionTool && commandCandidates.length === 0) {
+    return false;
+  }
+
+  return commandCandidates.some((command) =>
+    DANGEROUS_COMMAND_PATTERNS.some((pattern) => pattern.test(command)),
+  );
 }
 
 interface ConversationSession {
@@ -216,6 +513,8 @@ interface ConversationSession {
   toolUseByIndex: Map<number, { id: string; name: string; inputChunks: string[] }>;
   /** Non-MCP tool calls started but not yet completed (toolUseId → toolName) */
   pendingToolCompletions: Map<string, string>;
+  /** When true, the next `query()` call will pass `forkSession: true` to create a new session branch. */
+  forkOnNextRun?: boolean;
 }
 
 class MessageStream {
@@ -283,12 +582,12 @@ export function startBridge(port: number): void {
     activeClient = ws;
 
     ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString()) as IncomingMessage;
-        handleMessage(ws, message);
-      } catch (error) {
-        log.error('Failed to parse message:', error);
+      const message = parseIncomingMessage(data.toString());
+      if (!message) {
+        log.warn('Received invalid message from Swift app');
+        return;
       }
+      handleMessage(ws, message);
     });
 
     ws.on('close', () => {
@@ -297,8 +596,13 @@ export function startBridge(port: number): void {
         activeClient = null;
       }
 
-      // Fail any pending tool calls waiting on Swift.
+      // Fail any pending tool calls and permissions waiting on Swift.
       flushPendingToolCalls('Flux is offline. Open the app to reconnect.');
+      for (const [requestId, pending] of pendingPermissions.entries()) {
+        clearTimeout(pending.timeout);
+        pending.resolve({ behavior: 'deny', message: 'Flux is offline. Open the app to reconnect.' });
+        pendingPermissions.delete(requestId);
+      }
     });
 
     ws.on('error', (error) => {
@@ -335,6 +639,12 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
     case 'active_app_update':
       handleActiveAppUpdate(message);
       break;
+    case 'fork_conversation':
+      handleForkConversation(message);
+      break;
+    case 'permission_response':
+      handlePermissionResponse(message);
+      break;
     default:
       log.warn('Unknown message type:', (message as Record<string, unknown>).type);
   }
@@ -357,6 +667,44 @@ function handleMcpAuth(message: McpAuthMessage): void {
   } else {
     mcpAuthTokens.set(message.serverId, token);
   }
+}
+
+function handleForkConversation(message: ForkConversationMessage): void {
+  const { sourceConversationId, newConversationId } = message;
+  const sourceSession = sessions.get(sourceConversationId);
+
+  if (!sourceSession?.sessionId) {
+    log.warn(`Cannot fork: no SDK session found for conversation ${sourceConversationId}`);
+    const reason = 'Unable to fork: the source conversation has no active session.';
+    sendToClient(activeClient, {
+      type: 'fork_conversation_result',
+      conversationId: newConversationId,
+      success: false,
+      reason,
+    });
+    return;
+  }
+
+  log.info(`Forking session ${sourceSession.sessionId} from ${sourceConversationId} → ${newConversationId}`);
+
+  const forkedSession: ConversationSession = {
+    conversationId: newConversationId,
+    stream: null,
+    sessionId: sourceSession.sessionId,
+    lastAssistantUuid: sourceSession.lastAssistantUuid,
+    isRunning: false,
+    pendingMessages: [],
+    toolUseByIndex: new Map(),
+    pendingToolCompletions: new Map(),
+    forkOnNextRun: true,
+  };
+
+  sessions.set(newConversationId, forkedSession);
+  sendToClient(activeClient, {
+    type: 'fork_conversation_result',
+    conversationId: newConversationId,
+    success: true,
+  });
 }
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
@@ -453,7 +801,11 @@ function startSessionRun(session: ConversationSession, messages: QueuedUserMessa
     session.stream.push(msg);
   }
   session.isRunning = true;
-  touchIdle(session);
+  // Skip idle timer for forked sessions until first run completes,
+  // ensuring the fork remains available when the user first interacts with it.
+  if (session.forkOnNextRun !== true) {
+    touchIdle(session);
+  }
 
   void runAgentSession(session).catch((error) => {
     log.error('Agent run error:', error);
@@ -468,26 +820,80 @@ function startSessionRun(session: ConversationSession, messages: QueuedUserMessa
 async function runAgentSession(session: ConversationSession): Promise<void> {
   if (!session.stream) return;
 
-  sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: true });
+  const conversationId = session.conversationId;
+  sendToClient(activeClient, { type: 'run_status', conversationId, isWorking: true });
 
   const runId = crypto.randomUUID();
+  const shouldFork = session.forkOnNextRun === true;
+  session.forkOnNextRun = false;
+
+  const canUseTool = (
+    toolName: string,
+    input: Record<string, unknown>,
+  ): Promise<{ behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }> => {
+    if (toolName !== 'AskUserQuestion' && !requiresApproval(toolName, input)) {
+      return Promise.resolve({ behavior: 'allow', updatedInput: input });
+    }
+
+    const requestId = crypto.randomUUID();
+
+    if (toolName === 'AskUserQuestion') {
+      const questions = (input.questions ?? []) as Array<{
+        question: string;
+        options: Array<{ label: string; description?: string }>;
+        multiSelect?: boolean;
+      }>;
+      sendToClient(activeClient, {
+        type: 'ask_user_question',
+        conversationId,
+        requestId,
+        questions,
+      });
+    } else {
+      sendToClient(activeClient, {
+        type: 'permission_request',
+        conversationId,
+        requestId,
+        toolName,
+        input,
+      });
+    }
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingPermissions.delete(requestId);
+        resolve({ behavior: 'deny', message: 'Permission request timed out' });
+      }, 120_000);
+
+      pendingPermissions.set(requestId, { resolve, conversationId, toolName, input, timeout });
+    });
+  };
 
   try {
     for await (const message of query({
       prompt: session.stream,
-      options: buildQueryOptions(session.conversationId, runId, {
+      options: buildQueryOptions(conversationId, runId, {
         resume: session.sessionId,
         resumeSessionAt: session.lastAssistantUuid,
+        permissionMode: 'default',
+        allowDangerouslySkipPermissions: false,
+        canUseTool,
         includePartialMessages: true,
+        ...(shouldFork ? { forkSession: true } : {}),
       }),
     })) {
-      handleAgentMessage(session, message as any);
+      if (isAgentMessage(message)) {
+        handleAgentMessage(session, message);
+      } else {
+        log.warn(`Ignoring unsupported message type: ${session.conversationId}`, message);
+      }
     }
   } finally {
     clearIdle(session);
     session.isRunning = false;
     session.stream = null;
-    sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: false });
+    flushPendingPermissions(conversationId, 'Session ended');
+    sendToClient(activeClient, { type: 'run_status', conversationId, isWorking: false });
 
     if (session.pendingMessages.length > 0) {
       const next = [...session.pendingMessages];
@@ -568,7 +974,7 @@ async function runAgentWarmup(trigger: string): Promise<void> {
   log.info(`Agent warmup completed in ${Date.now() - startedAt}ms`);
 }
 
-function handleAgentMessage(session: ConversationSession, message: any): void {
+function handleAgentMessage(session: ConversationSession, message: AgentMessage): void {
   const msgType = message.type === 'system' ? `system/${message.subtype}` : message.type;
   log.debug(`[agent] ${session.conversationId} message=${msgType}`);
 
@@ -578,6 +984,13 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
   if (message.type === 'system' && message.subtype === 'init') {
     session.sessionId = message.session_id;
+    if (message.session_id) {
+      sendToClient(activeClient, {
+        type: 'session_info',
+        conversationId: session.conversationId,
+        sessionId: message.session_id,
+      });
+    }
   }
 
   if (message.type === 'system' && message.subtype === 'task_notification') {
@@ -601,9 +1014,11 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
     // Tool use content block starting
     if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
-      const index = event.index as number;
-      const toolUseId = event.content_block.id as string;
-      const toolName = event.content_block.name as string;
+      const index = parseEventIndex(event);
+      const toolUseId = parseStreamBlockId(event);
+      const toolName = parseStreamBlockName(event);
+      if (index === null || toolUseId === null || toolName === null) return;
+
       session.toolUseByIndex.set(index, { id: toolUseId, name: toolName, inputChunks: [] });
 
       // MCP-bridged tools emit their own tool_use_start via the MCP bridge — skip them here
@@ -625,9 +1040,13 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
     // Accumulate input JSON for tool uses
     if (event?.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
-      const tracked = session.toolUseByIndex.get(event.index as number);
+      const index = parseEventIndex(event);
+      const partialJson = parseEventInputJsonDelta(event);
+      if (index === null || partialJson === null) return;
+
+      const tracked = session.toolUseByIndex.get(index);
       if (tracked) {
-        tracked.inputChunks.push(event.delta.partial_json);
+        tracked.inputChunks.push(partialJson);
         touchIdle(session);
       }
       return;
@@ -635,7 +1054,10 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
 
     // Content block finished — update tool input summary with parsed input
     if (event?.type === 'content_block_stop') {
-      const tracked = session.toolUseByIndex.get(event.index as number);
+      const index = parseEventIndex(event);
+      if (index === null) return;
+
+      const tracked = session.toolUseByIndex.get(index);
       if (tracked && !tracked.name.startsWith('mcp__') && tracked.inputChunks.length > 0) {
         try {
           const fullInput = JSON.parse(tracked.inputChunks.join(''));
@@ -648,17 +1070,24 @@ function handleAgentMessage(session: ConversationSession, message: any): void {
         }
       }
       if (tracked) {
-        session.toolUseByIndex.delete(event.index as number);
+        session.toolUseByIndex.delete(index);
       }
       return;
     }
 
     // Text delta — stream to UI
-    if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+    if (
+      event?.type === 'content_block_delta'
+      && event.delta?.type === 'text_delta'
+      && event.delta.text
+    ) {
+      const content = parseEventTextDelta(event);
+      if (content === null) return;
+
       sendToClient(activeClient, {
         type: 'stream_chunk',
         conversationId: session.conversationId,
-        content: event.delta.text,
+        content,
       });
       touchIdle(session);
     }
@@ -700,8 +1129,7 @@ function flushPendingToolCompletions(session: ConversationSession): void {
   session.pendingToolCompletions.clear();
 }
 
-function buildFluxSystemPrompt(): string {
-  let prompt = `You are Flux, a macOS AI desktop copilot. Your role is to help users accomplish tasks on their Mac by reading their screen when necessary and taking actions on their behalf.
+const FLUX_SYSTEM_PROMPT = `You are Flux, a macOS AI desktop copilot. Your role is to help users accomplish tasks on their Mac by reading their screen when necessary and taking actions on their behalf.
 
 You have access to the following tools:
 
@@ -737,6 +1165,9 @@ Important guidelines:
 - Ask clarifying questions when the user's request is ambiguous or lacks necessary details
 - When you use memory skills to remember information about the user, apply them silently without announcing that you're doing so
 - For straightforward requests that don't require screen information, proceed directly with the appropriate action`;
+
+function buildFluxSystemPrompt(): string {
+  let prompt = FLUX_SYSTEM_PROMPT;
 
   // Inject live app context so the agent knows what the user is working in.
   // NOTE: This prompt is built once at session start. If the user switches apps
@@ -808,6 +1239,7 @@ function evictSession(conversationId: string, reason = 'Session expired due to i
   session.toolUseByIndex.clear();
   flushPendingToolCompletions(session);
   clearPendingToolCallsForConversation(conversationId, reason);
+  flushPendingPermissions(conversationId, reason);
 
   sessions.delete(conversationId);
   telegramConversationMeta.delete(conversationId);
@@ -857,12 +1289,13 @@ function startMcpBridge(port: number): void {
 
   wss.on('connection', (ws) => {
     ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString()) as BridgeMessage;
-        handleMcpBridgeMessage(ws, message);
-      } catch (error) {
-        log.error('Failed to parse MCP bridge message:', error);
+      const message = parseBridgeMessage(data.toString());
+      if (!message) {
+        log.warn('Invalid MCP bridge message');
+        return;
       }
+
+      handleMcpBridgeMessage(ws, message);
     });
 
     ws.on('close', () => {
@@ -1042,6 +1475,40 @@ function clearPendingToolCallsForConversation(conversationId: string, reason: st
   }
 }
 
+function handlePermissionResponse(message: PermissionResponseMessage): void {
+  const pending = pendingPermissions.get(message.requestId);
+  if (!pending) {
+    log.warn(`No pending permission for requestId=${message.requestId}`);
+    return;
+  }
+  clearTimeout(pending.timeout);
+  pendingPermissions.delete(message.requestId);
+
+  if (message.behavior === 'allow') {
+    if (pending.toolName === 'AskUserQuestion') {
+      const answers = message.answers ?? {};
+      const updatedInput: Record<string, unknown> = {
+        ...pending.input,
+        answers,
+      };
+      pending.resolve({ behavior: 'allow', updatedInput });
+      return;
+    }
+    pending.resolve({ behavior: 'allow', updatedInput: pending.input });
+  } else {
+    pending.resolve({ behavior: 'deny', message: message.message || 'User denied this action' });
+  }
+}
+
+function flushPendingPermissions(conversationId: string, reason: string): void {
+  for (const [requestId, pending] of pendingPermissions.entries()) {
+    if (pending.conversationId !== conversationId) continue;
+    clearTimeout(pending.timeout);
+    pending.resolve({ behavior: 'deny', message: reason });
+    pendingPermissions.delete(requestId);
+  }
+}
+
 function flushPendingToolCalls(reason: string): void {
   for (const [toolUseId, pending] of pendingToolCalls.entries()) {
     clearTimeout(pending.timeout);
@@ -1128,23 +1595,24 @@ function parseImageToolResult(raw: string): { mediaType: string; data: string } 
   return null;
 }
 
+const TOOL_INPUT_SUMMARY_KEYS = [
+  'path',
+  'file',
+  'target',
+  'command',
+  'script',
+  'query',
+  'url',
+  'text',
+  'content',
+  'id',
+  'name',
+  'scheduleExpression',
+  'schedule',
+];
+
 function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
-  const candidates = [
-    'path',
-    'file',
-    'target',
-    'command',
-    'script',
-    'query',
-    'url',
-    'text',
-    'content',
-    'id',
-    'name',
-    'scheduleExpression',
-    'schedule',
-  ];
-  for (const key of candidates) {
+  for (const key of TOOL_INPUT_SUMMARY_KEYS) {
     const val = input[key];
     if (typeof val === 'string' && val.length > 0) {
       return val.length > 80 ? val.substring(0, 77) + '...' : val;

@@ -1481,7 +1481,7 @@ struct IslandSettingsView: View {
                         AnyView(EmptyView())
                     })
                     .onTapGesture {
-                        relaunch()
+                        AppRelauncher.relaunch()
                     }
                 }
 
@@ -2724,16 +2724,6 @@ struct IslandSettingsView: View {
             CGRequestScreenCaptureAccess()
         }
         SkillPermission.screenRecording.openSystemSettings()
-    }
-
-    private func relaunch() {
-        let appURL = Bundle.main.bundleURL
-        let config = NSWorkspace.OpenConfiguration()
-        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in
-            Task { @MainActor in
-                NSApp.terminate(nil)
-            }
-        }
     }
 
     private func statusDot(isSet: Bool) -> some View {
