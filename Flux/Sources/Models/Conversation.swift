@@ -182,6 +182,10 @@ final class ConversationStore {
         !runningConversationIds.isEmpty
     }
 
+    var activeConversationHasPendingUserInput: Bool {
+        activeConversation?.hasPendingUserInput ?? false
+    }
+
     // MARK: - Lifecycle
 
     init() {
@@ -252,9 +256,12 @@ final class ConversationStore {
         content: String,
         imageAttachments: [MessageImageAttachment] = []
     ) {
+        // Flush any pending stream buffer before adding a new message.
+        flushStreamBuffer()
         guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
         let message = Message(role: role, content: content, imageAttachments: imageAttachments)
         conversations[index].messages.append(message)
+        conversations[index].invalidateDisplaySegments()
 
         // Update summary
         if let si = summaries.firstIndex(where: { $0.id == conversationId }) {
@@ -293,13 +300,52 @@ final class ConversationStore {
         guard let index = conversations.firstIndex(where: { $0.id == conversationId }),
               let lastIndex = conversations[index].messages.lastIndex(where: { $0.role == .assistant }) else { return }
         conversations[index].messages[lastIndex].content = content
+        conversations[index].invalidateDisplaySegments()
         debouncedSave(conversations[index])
     }
 
+    // MARK: - Streaming Chunk Buffer
+
+    /// Buffer that accumulates stream chunks between throttled flushes.
+    /// This prevents per-chunk @Observable mutations that would cause
+    /// SwiftUI to re-render/re-parse MarkdownUI on every single chunk,
+    /// which overwhelms the main thread on long conversations.
+    private var streamBuffer: String = ""
+    private var streamBufferConversationId: UUID?
+    private var streamFlushTimer: Timer?
+    /// Interval between UI-visible flushes during streaming (seconds).
+    private static let streamFlushInterval: TimeInterval = 0.05
+
     func appendToLastAssistantMessage(in conversationId: UUID, chunk: String) {
-        guard let index = conversations.firstIndex(where: { $0.id == conversationId }),
-              let lastIndex = conversations[index].messages.lastIndex(where: { $0.role == .assistant }) else { return }
-        conversations[index].messages[lastIndex].content.append(chunk)
+        streamBuffer.append(chunk)
+        streamBufferConversationId = conversationId
+
+        // If no flush is pending, schedule one.
+        guard streamFlushTimer == nil else { return }
+        streamFlushTimer = Timer.scheduledTimer(withTimeInterval: Self.streamFlushInterval, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.flushStreamBuffer()
+            }
+        }
+    }
+
+    /// Flush any buffered stream content to the @Observable state.
+    /// Called by the throttle timer and when streaming ends.
+    func flushStreamBuffer() {
+        streamFlushTimer?.invalidate()
+        streamFlushTimer = nil
+
+        guard !streamBuffer.isEmpty,
+              let conversationId = streamBufferConversationId,
+              let index = conversations.firstIndex(where: { $0.id == conversationId }),
+              let lastIndex = conversations[index].messages.lastIndex(where: { $0.role == .assistant }) else {
+            streamBuffer = ""
+            return
+        }
+
+        conversations[index].messages[lastIndex].content.append(streamBuffer)
+        conversations[index].invalidateDisplaySegments()
+        streamBuffer = ""
         debouncedSave(conversations[index])
         lastScrollConversationId = conversationId
         scrollRevision &+= 1
@@ -308,15 +354,20 @@ final class ConversationStore {
     // MARK: - Tool Call Tracking
 
     func addToolCall(to conversationId: UUID, info: ToolCallInfo) {
+        // Flush any pending stream buffer — a tool call means text streaming
+        // for the current assistant message has ended.
+        flushStreamBuffer()
         guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
 
         if let lastIndex = conversations[index].messages.indices.last,
            conversations[index].messages[lastIndex].role == .assistant {
             conversations[index].messages[lastIndex].toolCalls.append(info)
+            conversations[index].invalidateDisplaySegments()
         } else {
             var message = Message(role: .assistant, content: "")
             message.toolCalls.append(info)
             conversations[index].messages.append(message)
+            conversations[index].invalidateDisplaySegments()
         }
         lastScrollConversationId = conversationId
         scrollRevision &+= 1
@@ -329,6 +380,7 @@ final class ConversationStore {
             if let tcIndex = conversations[convIndex].messages[msgIndex].toolCalls.firstIndex(where: { $0.id == toolUseId }) {
                 conversations[convIndex].messages[msgIndex].toolCalls[tcIndex].status = .complete
                 conversations[convIndex].messages[msgIndex].toolCalls[tcIndex].resultPreview = resultPreview
+                conversations[convIndex].invalidateDisplaySegments()
                 saveConversation(conversations[convIndex])
                 lastScrollConversationId = conversationId
                 scrollRevision &+= 1
@@ -345,10 +397,12 @@ final class ConversationStore {
         if let lastIndex = conversations[index].messages.indices.last,
            conversations[index].messages[lastIndex].role == .assistant {
             conversations[index].messages[lastIndex].permissionRequests.append(request)
+            conversations[index].invalidateDisplaySegments()
         } else {
             var message = Message(role: .assistant, content: "")
             message.permissionRequests.append(request)
             conversations[index].messages.append(message)
+            conversations[index].invalidateDisplaySegments()
         }
         lastScrollConversationId = conversationId
         scrollRevision &+= 1
@@ -360,6 +414,7 @@ final class ConversationStore {
         for msgIndex in conversations[convIndex].messages.indices.reversed() {
             if let reqIndex = conversations[convIndex].messages[msgIndex].permissionRequests.firstIndex(where: { $0.id == requestId }) {
                 conversations[convIndex].messages[msgIndex].permissionRequests[reqIndex].status = approved ? .approved : .denied
+                conversations[convIndex].invalidateDisplaySegments()
                 saveConversation(conversations[convIndex])
                 return
             }
@@ -374,10 +429,12 @@ final class ConversationStore {
         if let lastIndex = conversations[index].messages.indices.last,
            conversations[index].messages[lastIndex].role == .assistant {
             conversations[index].messages[lastIndex].askUserQuestions.append(question)
+            conversations[index].invalidateDisplaySegments()
         } else {
             var message = Message(role: .assistant, content: "")
             message.askUserQuestions.append(question)
             conversations[index].messages.append(message)
+            conversations[index].invalidateDisplaySegments()
         }
         lastScrollConversationId = conversationId
         scrollRevision &+= 1
@@ -390,6 +447,7 @@ final class ConversationStore {
             if let reqIndex = conversations[convIndex].messages[msgIndex].askUserQuestions.firstIndex(where: { $0.id == requestId }) {
                 conversations[convIndex].messages[msgIndex].askUserQuestions[reqIndex].status = .answered
                 conversations[convIndex].messages[msgIndex].askUserQuestions[reqIndex].answers = answers
+                conversations[convIndex].invalidateDisplaySegments()
                 saveConversation(conversations[convIndex])
                 return
             }
@@ -526,6 +584,10 @@ final class ConversationStore {
     // MARK: - Run State
 
     func setConversationRunning(_ conversationId: UUID, isRunning: Bool) {
+        if !isRunning {
+            // Flush any remaining stream buffer when streaming ends.
+            flushStreamBuffer()
+        }
         if isRunning {
             runningConversationIds.insert(conversationId)
         } else {
@@ -647,15 +709,43 @@ struct Conversation: Identifiable, Codable {
     var messages: [Message]
     let createdAt: Date
 
+    /// Class-based box so the cache survives struct copies without triggering
+    /// copy-on-write of the whole Conversation value.
+    private final class SegmentCache {
+        var segments: [DisplaySegment]?
+    }
+    private var _segmentCache = SegmentCache()
+
     init(id: UUID = UUID(), messages: [Message] = [], createdAt: Date = Date()) {
         self.id = id
         self.messages = messages
         self.createdAt = createdAt
     }
 
+    // Exclude the cache from Codable.
+    private enum CodingKeys: String, CodingKey {
+        case id, messages, createdAt
+    }
+
+    var hasPendingUserInput: Bool {
+        messages.contains { message in
+            message.permissionRequests.contains { $0.status == .pending }
+            || message.askUserQuestions.contains { $0.status == .pending }
+        }
+    }
+
+    /// Clear the cached display segments so the next access rebuilds them.
+    mutating func invalidateDisplaySegments() {
+        _segmentCache.segments = nil
+    }
+
     /// Produces display segments for the chat view by grouping tool calls and
-    /// separating them from assistant text content.
+    /// separating them from assistant text content. Results are cached until
+    /// explicitly invalidated.
     var displaySegments: [DisplaySegment] {
+        if let cached = _segmentCache.segments {
+            return cached
+        }
         var segments: [DisplaySegment] = []
 
         for message in messages {
@@ -681,6 +771,7 @@ struct Conversation: Identifiable, Codable {
             }
         }
 
+        _segmentCache.segments = segments
         return segments
     }
 }

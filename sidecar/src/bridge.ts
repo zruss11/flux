@@ -158,7 +158,7 @@ type OutgoingMessage =
 interface SDKUserMessage {
   type: 'user';
   message: { role: 'user'; content: string | SDKUserContentBlock[] };
-  parent_tool_use_id: null;
+  parent_tool_use_id: string | null;
   session_id: string;
 }
 
@@ -226,7 +226,31 @@ interface AgentResultMessage {
   [key: string]: unknown;
 }
 
-type AgentMessage = AgentAssistantMessage | AgentSystemMessage | AgentStreamEventMessage | AgentResultMessage;
+interface AgentUserMessage {
+  type: 'user';
+  parent_tool_use_id?: string | null;
+  [key: string]: unknown;
+}
+
+interface AgentToolProgressMessage {
+  type: 'tool_progress';
+  tool_use_id?: string;
+  tool_name?: string;
+  [key: string]: unknown;
+}
+
+interface AgentToolUseSummaryMessage {
+  type: 'tool_use_summary';
+  summary?: string;
+  [key: string]: unknown;
+}
+
+interface AgentAuthStatusMessage {
+  type: 'auth_status';
+  [key: string]: unknown;
+}
+
+type AgentMessage = AgentAssistantMessage | AgentSystemMessage | AgentStreamEventMessage | AgentResultMessage | AgentUserMessage | AgentToolProgressMessage | AgentToolUseSummaryMessage | AgentAuthStatusMessage;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -243,6 +267,10 @@ function isAgentMessage(value: unknown): value is AgentMessage {
     || message.type === 'system'
     || message.type === 'stream_event'
     || message.type === 'result'
+    || message.type === 'user'
+    || message.type === 'tool_progress'
+    || message.type === 'tool_use_summary'
+    || message.type === 'auth_status'
   );
 }
 
@@ -983,6 +1011,13 @@ function handleAgentMessage(session: ConversationSession, message: AgentMessage)
   const msgType = message.type === 'system' ? `system/${message.subtype}` : message.type;
   log.debug(`[agent] ${session.conversationId} message=${msgType}`);
 
+  // SDK echoes user messages (including tool results with parent_tool_use_id) back
+  // through the stream. These are informational — no action needed.
+  if (message.type === 'user' || message.type === 'tool_progress' || message.type === 'tool_use_summary' || message.type === 'auth_status') {
+    touchIdle(session);
+    return;
+  }
+
   if (message.type === 'assistant' && message.uuid) {
     session.lastAssistantUuid = message.uuid;
   }
@@ -1102,6 +1137,10 @@ function handleAgentMessage(session: ConversationSession, message: AgentMessage)
   if (message.type === 'result') {
     flushPendingToolCompletions(session);
     session.toolUseByIndex.clear();
+
+    // Signal run completion immediately — the finally block may not run
+    // promptly if the async iterator doesn't close after the result message.
+    sendToClient(activeClient, { type: 'run_status', conversationId: session.conversationId, isWorking: false });
 
     const textResult = typeof message.result === 'string'
       ? message.result

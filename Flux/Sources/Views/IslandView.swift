@@ -66,7 +66,9 @@ struct IslandView: View {
     private let tickerMinimumRemainingDuration: TimeInterval = 0.6
 
     private var closedIndicatorSlotWidth: CGFloat {
-        showClosedActivityIndicators ? (closedActiveWidthBoost / 2) : 0
+        if showClosedActivityIndicators { return closedActiveWidthBoost / 2 }
+        if showClosedWaitingIndicator || showClosedReadyDot { return 10 }
+        return 0
     }
 
     private let closedDictationWidthBoost: CGFloat = 80
@@ -108,41 +110,54 @@ struct IslandView: View {
         return nil
     }
 
-    private var hasPendingToolCalls: Bool {
-        conversationStore.conversations.contains { conversation in
-            conversation.messages.contains { message in
-                message.toolCalls.contains { $0.status == .pending }
-            }
+    private enum ClosedAgentState: Equatable {
+        case none
+        case ready
+        case working
+        case waiting
+    }
+
+    private var closedAgentState: ClosedAgentState {
+        guard !isExpanded else { return .none }
+
+        let isWorking = agentBridge.isAgentWorking
+            || conversationStore.hasRunningConversations
+
+        if isWorking && conversationStore.activeConversationHasPendingUserInput {
+            return .waiting
+        } else if isWorking {
+            return .working
+        } else if agentBridge.isConnected && conversationStore.activeConversation != nil {
+            return .ready
+        } else {
+            return .none
         }
     }
 
-    private var activeConversationAwaitingAssistant: Bool {
-        guard let conversation = conversationStore.activeConversation else { return false }
-        guard let lastUser = conversation.messages.last(where: { $0.role == .user }) else { return false }
-        guard let lastAssistant = conversation.messages.last(where: { $0.role == .assistant }) else { return true }
-        return lastUser.timestamp > lastAssistant.timestamp
-    }
-
     private var rawShowClosedActivityIndicators: Bool {
-        !isExpanded && (
-            agentBridge.isAgentWorking
-                || conversationStore.hasRunningConversations
-                || hasPendingToolCalls
-                || activeConversationAwaitingAssistant
-        )
+        closedAgentState == .working
     }
 
     private var showClosedActivityIndicators: Bool {
         rawShowClosedActivityIndicators || (!isExpanded && closedIndicatorsLatched)
     }
 
+    private var showClosedWaitingIndicator: Bool {
+        closedAgentState == .waiting
+    }
+
+    private var showClosedReadyDot: Bool {
+        closedAgentState == .ready
+    }
+
     private var isClosedIndicatorAnimating: Bool {
         !isExpanded && (agentBridge.isAgentWorking || conversationStore.hasRunningConversations)
+            && !conversationStore.activeConversationHasPendingUserInput
     }
 
     private var closedWidth: CGFloat {
         notchSize.width
-            + (showClosedActivityIndicators ? closedActiveWidthBoost : 0)
+            + closedIndicatorSlotWidth * 2
             + (isDictatingClosed ? closedDictationWidthBoost : 0)
             + closedRightSlotWidth
     }
@@ -259,11 +274,12 @@ struct IslandView: View {
                 .animation(isExpanded ? openAnimation : closeAnimation, value: isExpanded)
                 .animation(.spring(response: 0.38, dampingFraction: 0.8), value: isHovering)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: DictationManager.shared.isDictating)
-                .animation(.spring(response: 0.5, dampingFraction: 0.8), value: messageCount)
+
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
                 .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: hasPendingAttachments)
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: closedAgentState)
                 .padding(.top, hasNotch ? 0 : windowManager.topOffset)
 
             let notificationBaseOffset = currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset)
@@ -372,7 +388,11 @@ struct IslandView: View {
             }
         }
         .onPreferenceChange(ChatContentHeightKey.self) { height in
-            measuredChatHeight = height
+            // Gate updates by a threshold to prevent micro-fluctuation
+            // cascades during streaming that cause layout thrash.
+            if abs(height - measuredChatHeight) > 2 {
+                measuredChatHeight = height
+            }
         }
         .onPreferenceChange(SkillsVisibleKey.self) { visible in
             skillsVisible = visible
@@ -457,6 +477,8 @@ struct IslandView: View {
 
     private var closedHeaderContent: some View {
         let showActivity = showClosedActivityIndicators
+        let showWaiting = showClosedWaitingIndicator
+        let showReady = showClosedReadyDot
 
         return HStack(spacing: 0) {
             ZStack {
@@ -477,13 +499,28 @@ struct IslandView: View {
                 if showActivity {
                     ClosedSparklesIndicator(isActive: isClosedIndicatorAnimating)
                         .frame(width: 22, height: 22)
+                } else if showWaiting {
+                    ClosedWaitingIndicator()
+                        .frame(width: 8, height: 8)
+                } else if showReady {
+                    ClosedReadyDot()
+                        .frame(width: 7, height: 7)
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
 
             Text("Flux")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(showActivity ? 0.92 : (isHovering ? 0.8 : 0.0)))
+                .foregroundStyle(.white.opacity(
+                    showActivity ? 0.92
+                    : showWaiting ? 0.92
+                    : showReady ? 0.5
+                    : (isHovering ? 0.8 : 0.0)
+                ))
+                .shadow(
+                    color: showWaiting ? .white.opacity(0.4) : .clear,
+                    radius: showWaiting ? 8 : 0
+                )
                 .frame(width: notchSize.width, height: closedHeight)
 
             ZStack {
@@ -517,6 +554,8 @@ struct IslandView: View {
         .clipped()
         .animation(.easeInOut(duration: 0.2), value: isHovering)
         .animation(.easeInOut(duration: 0.2), value: showActivity)
+        .animation(.easeInOut(duration: 0.2), value: showWaiting)
+        .animation(.easeInOut(duration: 0.2), value: showReady)
         .animation(.easeInOut(duration: 0.25), value: isDictatingClosed)
     }
 
@@ -686,94 +725,104 @@ struct IslandView: View {
             Divider()
                 .overlay(Color.white.opacity(0.15))
 
-            Group {
-                switch contentType {
-                case .chat:
-                    ChatView(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture)
-                case .settings:
-                    IslandSettingsView(conversationStore: conversationStore, agentBridge: agentBridge)
-                case .history:
-                    ChatHistoryView(
-                        conversationStore: conversationStore,
-                        onOpenChat: { id in
-                            conversationStore.openConversation(id: id)
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                contentType = .chat
+            ZStack {
+                // ChatView stays mounted permanently to avoid expensive
+                // teardown/rebuild cycles during navigation, which was
+                // causing main-thread hangs with running conversations.
+                ChatView(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture)
+                    .opacity(contentType == .chat ? 1 : 0)
+                    .allowsHitTesting(contentType == .chat)
+
+                // Other content types are conditionally mounted on top.
+                if contentType != .chat {
+                    Group {
+                        switch contentType {
+                        case .chat:
+                            EmptyView() // handled above
+                        case .settings:
+                            IslandSettingsView(conversationStore: conversationStore, agentBridge: agentBridge)
+                        case .history:
+                            ChatHistoryView(
+                                conversationStore: conversationStore,
+                                onOpenChat: { id in
+                                    conversationStore.openConversation(id: id)
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .chat
+                                    }
+                                },
+                                onNewChat: {
+                                    conversationStore.startNewConversation()
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .chat
+                                    }
+                                },
+                                onOpenFolder: { folder in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .folderDetail(folder)
+                                    }
+                                }
+                            )
+                        case .skills:
+                            SkillsMarketplaceView()
+                        case .dictationHistory:
+                            DictationHistoryView(historyStore: DictationManager.shared.historyStore)
+                        case .folderDetail(let folder):
+                            FolderDetailView(
+                                conversationStore: conversationStore,
+                                folder: folder,
+                                onOpenChat: { id in
+                                    conversationStore.openConversation(id: id)
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .chat
+                                    }
+                                }
+                            )
+                        case .folderPicker:
+                            WorkspaceFolderPickerView(
+                                conversationStore: conversationStore,
+                                onSelect: { url in
+                                    conversationStore.workspacePath = url.path
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .chat
+                                    }
+                                },
+                                onCancel: {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .chat
+                                    }
+                                }
+                            )
+                        case .imagePicker:
+                            ImageFilePickerView(
+                                onSelect: { urls in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .chat
+                                    }
+                                    DispatchQueue.main.async {
+                                        NotificationCenter.default.post(
+                                            name: .islandImageFilesSelected,
+                                            object: nil,
+                                            userInfo: [NotificationPayloadKey.imageURLs: urls]
+                                        )
+                                    }
+                                },
+                                onCancel: {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .chat
+                                    }
+                                }
+                            )
+                        case .tour:
+                            TourView {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    contentType = .chat
+                                }
                             }
-                        },
-                        onNewChat: {
-                            conversationStore.startNewConversation()
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                contentType = .chat
-                            }
-                        },
-                        onOpenFolder: { folder in
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                contentType = .folderDetail(folder)
-                            }
-                        }
-                    )
-                case .skills:
-                    SkillsMarketplaceView()
-                case .dictationHistory:
-                    DictationHistoryView(historyStore: DictationManager.shared.historyStore)
-                case .folderDetail(let folder):
-                    FolderDetailView(
-                        conversationStore: conversationStore,
-                        folder: folder,
-                        onOpenChat: { id in
-                            conversationStore.openConversation(id: id)
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                contentType = .chat
-                            }
-                        }
-                    )
-                case .folderPicker:
-                    WorkspaceFolderPickerView(
-                        conversationStore: conversationStore,
-                        onSelect: { url in
-                            conversationStore.workspacePath = url.path
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                contentType = .chat
-                            }
-                        },
-                        onCancel: {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                contentType = .chat
-                            }
-                        }
-                    )
-                case .imagePicker:
-                    ImageFilePickerView(
-                        onSelect: { urls in
-                            // Switch back to chat first so ChatView is mounted
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                contentType = .chat
-                            }
-                            // Post on next run loop so ChatView's .onReceive is active
-                            DispatchQueue.main.async {
-                                NotificationCenter.default.post(
-                                    name: .islandImageFilesSelected,
-                                    object: nil,
-                                    userInfo: [NotificationPayloadKey.imageURLs: urls]
-                                )
-                            }
-                        },
-                        onCancel: {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                contentType = .chat
-                            }
-                        }
-                    )
-                case .tour:
-                    TourView {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            contentType = .chat
                         }
                     }
+                    .transition(.opacity.animation(.easeInOut(duration: 0.2)))
                 }
             }
-            .transition(.opacity.animation(.easeInOut(duration: 0.2)))
         }
     }
 }
@@ -893,6 +942,29 @@ private struct SparkDot: View {
                     : .easeOut(duration: 0.1),
                 value: twinkle
             )
+    }
+}
+
+private struct ClosedWaitingIndicator: View {
+    @State private var pulse = false
+
+    var body: some View {
+        Circle()
+            .fill(.white.opacity(pulse ? 0.9 : 0.3))
+            .shadow(color: .white.opacity(pulse ? 0.8 : 0.2), radius: pulse ? 6 : 2)
+            .onAppear { pulse = true }
+            .animation(
+                .easeInOut(duration: 1.4).repeatForever(autoreverses: true),
+                value: pulse
+            )
+    }
+}
+
+private struct ClosedReadyDot: View {
+    var body: some View {
+        Circle()
+            .fill(Color.green)
+            .shadow(color: .green.opacity(0.6), radius: 4)
     }
 }
 

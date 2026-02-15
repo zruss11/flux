@@ -433,6 +433,13 @@ final class AgentBridge: @unchecked Sendable {
                 self.activeRunConversationIds.insert(conversationId)
             } else {
                 self.activeRunConversationIds.remove(conversationId)
+                // Clear stale tool use and stream tracking for this conversation
+                self.activeToolUseIds = self.activeToolUseIds.filter {
+                    !$0.hasPrefix("\(conversationId):")
+                }
+                self.streamIdleWorkItems[conversationId]?.cancel()
+                self.streamIdleWorkItems.removeValue(forKey: conversationId)
+                self.activeStreamConversationIds.remove(conversationId)
             }
             self.refreshWorkingFlag()
         }
