@@ -510,44 +510,7 @@ struct IslandView: View {
             .frame(width: closedRightSlotWidth, height: closedHeight)
             .offset(x: 6)
 
-            // Debug button for testing live transcript dropdown (only in DEBUG builds)
-            #if DEBUG
-            Button {
-                debugShowLiveTranscript.toggle()
-                if debugShowLiveTranscript {
-                    // Simulate growing transcript
-                    var counter = 0
-                    debugTranscriptTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-                        counter += 1
-                        let additions = [
-                            "Hello",
-                            " this is a test",
-                            " of the live transcript feature.",
-                            " As you speak,",
-                            " the text box grows",
-                            " to show more content",
-                            " in real-time.",
-                            " It's like magic!"
-                        ]
-                        if counter <= additions.count {
-                            debugMockTranscript += additions[counter - 1]
-                        } else {
-                            timer.invalidate()
-                        }
-                    }
-                } else {
-                    debugTranscriptTimer?.invalidate()
-                    debugTranscriptTimer = nil
-                }
-            } label: {
-                Image(systemName: debugShowLiveTranscript ? "text.bubble.fill" : "text.bubble")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .frame(width: 18, height: 18)
-            }
-            .buttonStyle(.plain)
-            .offset(x: -8)
-            #endif
+
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)
