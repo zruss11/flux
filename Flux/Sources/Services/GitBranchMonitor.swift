@@ -37,10 +37,16 @@ final class GitBranchMonitor {
             branches = []
             return
         }
-        Task { await refresh() }
+        Task {
+            await refresh()
+            await fetchBranches()
+        }
         let t = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            Task { @MainActor in await self.refresh() }
+            Task { @MainActor in
+                await self.refresh()
+                await self.fetchBranches()
+            }
         }
         timer = t
         RunLoop.main.add(t, forMode: .common)

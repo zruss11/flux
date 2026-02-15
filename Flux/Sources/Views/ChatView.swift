@@ -57,7 +57,7 @@ struct ChatView: View {
     @State private var sttFailureMessage: String?
     @State private var worktreeEnabled = false
     @State private var showBranchPicker = false
-    @State private var availableBranches: [String] = []
+
     @State private var branchCheckoutErrorMessage: String?
     @State private var imageImportErrorMessage: String?
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
@@ -377,7 +377,6 @@ struct ChatView: View {
                     Button {
                         Task {
                             await GitBranchMonitor.shared.fetchBranches()
-                            availableBranches = GitBranchMonitor.shared.branches
                             showBranchPicker.toggle()
                         }
                     } label: {
@@ -404,7 +403,7 @@ struct ChatView: View {
                     .buttonStyle(.plain)
                     .popover(isPresented: $showBranchPicker, arrowEdge: .bottom) {
                         GitBranchPickerPopover(
-                            branches: availableBranches,
+                            branches: GitBranchMonitor.shared.branches,
                             currentBranch: branch
                         ) { selected in
                             showBranchPicker = false
