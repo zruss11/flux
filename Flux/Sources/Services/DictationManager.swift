@@ -209,13 +209,9 @@ final class DictationManager {
                 }
             }
 
-            let provider = UserDefaults.standard.speechInputProvider
-            let mode: VoiceInputMode = .live
-            var startFailureReason: String?
-
+            let selectedEngine = self.selectedDictationEngine()
             let started = await input.startRecording(
-                mode: mode,
-                provider: provider,
+                mode: selectedEngine,
                 onComplete: { [weak self] transcript in
                     self?.handleTranscript(transcript, attemptId: attemptId)
                 },
@@ -316,10 +312,9 @@ final class DictationManager {
 
         let duration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
 
-        // Filler word cleaning (defaults to enabled).
-        let cleanFillers = UserDefaults.standard.object(forKey: "dictationAutoCleanFillers") as? Bool ?? true
-        let cleanedText = cleanFillers ? FillerWordCleaner.clean(rawTranscript) : rawTranscript
-
+        // Run the full post-processing pipeline (filler removal, fragment repair,
+        // intent correction, number conversion, dictionary corrections).
+        let cleanedText = TranscriptPostProcessor.process(rawTranscript)
         // ── Edit mode: transform the selected text using the voice command ──
         if isEditMode, let selectedText = editModeSelectedText {
             Task { @MainActor [weak self] in
@@ -366,8 +361,8 @@ final class DictationManager {
         Task { @MainActor [weak self] in
             guard let self, self.isAttemptActive(attemptId) else { return }
 
-            // Apply custom dictionary corrections.
-            let correctedText = DictionaryCorrector.apply(cleanedText, using: CustomDictionaryStore.shared.entries)
+            // Pipeline already applied all corrections including dictionary.
+            let correctedText = cleanedText
 
             var enhancedText: String?
             var enhancementMethod: DictationEntry.EnhancementMethod = .none
@@ -699,5 +694,18 @@ final class DictationManager {
     private nonisolated static func isHotkeyHeldGlobally() -> Bool {
         let flags = CGEventSource.flagsState(.combinedSessionState)
         return flags.contains(.maskCommand) && flags.contains(.maskAlternate)
+    }
+
+    // MARK: - Engine Selection
+
+    /// Read the user's preferred dictation engine from UserDefaults.
+    private func selectedDictationEngine() -> VoiceInputMode {
+        let engine = UserDefaults.standard.string(forKey: "dictationEngine") ?? "apple"
+        switch engine {
+        case "parakeet":
+            return .parakeetOnDevice
+        default:
+            return .live
+        }
     }
 }

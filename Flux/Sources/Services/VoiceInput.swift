@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreML
 import Foundation
 @preconcurrency import Speech
 import os
@@ -6,6 +7,8 @@ import os
 enum VoiceInputMode: Sendable {
     case live
     case batchOnDevice
+    /// On-device transcription using Parakeet TDT CoreML models.
+    case parakeetOnDevice
 }
 
 /// Thread-safe accumulator for PCM data written from the audio tap thread.
@@ -141,7 +144,8 @@ final class VoiceInput {
             return false
         }
 
-        if provider.requiresSpeechRecognitionPermission {
+        // Parakeet mode only needs mic permission, not Apple Speech permission.
+        if mode != .parakeetOnDevice {
             guard #available(macOS 26.0, *) else {
                 Log.voice.error("On-device speech transcription requires macOS 26+")
                 onFailure?("On-device transcription requires macOS 26 or newer.")
@@ -156,14 +160,6 @@ final class VoiceInput {
             }
         }
 
-        if provider == .deepgram {
-            let deepgramKey = UserDefaults.standard.deepgramApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !deepgramKey.isEmpty else {
-                onFailure?("Deepgram API key not set.")
-                return false
-            }
-        }
-
         self.recordingMode = mode
         self.currentSpeechProvider = provider
         self.onComplete = onComplete
@@ -173,6 +169,8 @@ final class VoiceInput {
         case .live:
             return await beginLiveRecording(provider: provider)
         case .batchOnDevice:
+            return beginBatchRecording()
+        case .parakeetOnDevice:
             return beginBatchRecording()
         }
     }
@@ -201,6 +199,8 @@ final class VoiceInput {
 
         case .batchOnDevice:
             stopBatchRecording()
+        case .parakeetOnDevice:
+            stopParakeetRecording()
         }
     }
 
@@ -549,6 +549,94 @@ final class VoiceInput {
             } catch {
                 Log.voice.error("Batch transcription error: \(error.localizedDescription, privacy: .public)")
                 failureCallback?("Dictation transcription failed.")
+            }
+        }
+    }
+
+    // MARK: - Parakeet on-device transcription
+
+    private func stopParakeetRecording() {
+        let engine = audioEngine
+        let hadTap = tapInstalled
+
+        engine?.stop()
+        if hadTap {
+            engine?.inputNode.removeTap(onBus: 0)
+        }
+
+        tapInstalled = false
+        audioEngine = nil
+        isRecording = false
+        recordingMode = .live
+        IslandWindowManager.shared.suppressDeactivationCollapse = false
+
+        let callback = onComplete
+        let failureCallback = onFailure
+        onComplete = nil
+        onFailure = nil
+        liveSessionAny = nil
+
+        let pcmData = pcmAccumulator.takeAll()
+        guard !pcmData.isEmpty else {
+            failureCallback?("No audio captured.")
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            let modelManager = ParakeetModelManager.shared
+            guard modelManager.isReady else {
+                Log.voice.error("Parakeet models not loaded, falling back to Apple transcription")
+                // Fall back to Apple's SFSpeechRecognizer if Parakeet isn't ready.
+                // Notify the user so they know Parakeet is not being used.
+                Log.voice.warning("[VoiceInput] Using Apple Speech instead of Parakeet — models not loaded")
+                do {
+                    let wavURL = try self.writeWAVFile(pcmData: pcmData)
+                    defer { try? FileManager.default.removeItem(at: wavURL) }
+
+                    guard #available(macOS 26.0, *) else {
+                        throw TranscriptionError.unsupportedOS
+                    }
+
+                    let transcribedText = try await self.transcribeWAVOnDevice(wavURL)
+                    let trimmed = transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.transcript = trimmed
+
+                    if trimmed.isEmpty {
+                        failureCallback?("No speech detected.")
+                    } else {
+                        // Prepend a note so the callback consumer knows this was a fallback.
+                        callback?(trimmed)
+                    }
+                } catch {
+                    Log.voice.error("Fallback transcription error: \(error.localizedDescription, privacy: .public)")
+                    failureCallback?("Parakeet models not loaded. Fallback transcription also failed.")
+                }
+                return
+            }
+
+            do {
+                let transcriber = ParakeetTranscriber()
+                let rawText = try transcriber.transcribe(
+                    pcmData: pcmData,
+                    modelManager: modelManager
+                )
+
+                // Post-processing is handled by DictationManager.handleTranscript()
+                // via TranscriptPostProcessor.process(). Do NOT apply ASRPostProcessor
+                // here — it would cause double post-processing.
+                let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.transcript = trimmed
+
+                if trimmed.isEmpty {
+                    failureCallback?("No speech detected.")
+                } else {
+                    callback?(trimmed)
+                }
+            } catch {
+                Log.voice.error("Parakeet transcription error: \(error.localizedDescription, privacy: .public)")
+                failureCallback?("Parakeet transcription failed.")
             }
         }
     }

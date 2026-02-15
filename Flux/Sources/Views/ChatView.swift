@@ -197,9 +197,8 @@ struct ChatView: View {
                                 }
                                 let started = await voiceInput.startRecording(
                                     mode: .live,
-                                    provider: speechInputProvider,
                                     onComplete: { transcript in
-                                        inputText = DictionaryCorrector.apply(transcript, using: CustomDictionaryStore.shared.entries)
+                                        inputText = TranscriptPostProcessor.process(transcript)
                                         sendMessage()
                                     },
                                     onFailure: { reason in
@@ -208,11 +207,8 @@ struct ChatView: View {
                                         }
                                     }
                                 )
-                                if !started {
-                                    if speechInputProvider.requiresSpeechRecognitionPermission &&
-                                       SFSpeechRecognizer.authorizationStatus() != .authorized {
-                                        showSpeechPermissionAlert = true
-                                    }
+                                if !started && SFSpeechRecognizer.authorizationStatus() != .authorized {
+                                    showSpeechPermissionAlert = true
                                 }
                             }
                         }
