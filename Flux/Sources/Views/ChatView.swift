@@ -457,6 +457,7 @@ struct ChatView: View {
                             showWatcherAlertsChip = false
                         }
                     )
+                }
 
                 // Fork conversation pill
                 if conversationStore.activeConversationId != nil,
