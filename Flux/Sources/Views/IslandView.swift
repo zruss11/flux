@@ -39,6 +39,9 @@ struct IslandView: View {
     @State private var hasPendingAttachments = false
     @State private var closedIndicatorsLatched = false
     @State private var clearClosedIndicatorsWorkItem: DispatchWorkItem?
+    @State private var userHeightOverride: CGFloat? = nil
+    @State private var dragOffset: CGFloat = 0
+    @State private var isDragHandleHovering = false
     
     /// Debug mode: force show live transcript dropdown with mock text
     @State private var debugShowLiveTranscript = false
@@ -180,7 +183,8 @@ struct IslandView: View {
         conversationStore.activeConversation?.messages.count ?? 0
     }
 
-    private var expandedHeight: CGFloat {
+    /// The auto-computed height before any user drag override.
+    private var autoExpandedHeight: CGFloat {
         if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .imagePicker || contentType == .dictationHistory || contentType == .tour {
             return maxExpandedHeight
         }
@@ -202,6 +206,13 @@ struct IslandView: View {
         // already includes it. Allow a larger cap so the full list can display.
         let cap: CGFloat = skillsVisible ? 700 : maxExpandedHeight
         return min(max(desired, minExpandedHeight + 80), cap)
+    }
+
+    /// Final expanded height: auto height + any user drag override.
+    private var expandedHeight: CGFloat {
+        let base = userHeightOverride ?? autoExpandedHeight
+        let screenCap = (windowManager.preferredScreen()?.visibleFrame.height ?? 800) - 100
+        return min(max(base + dragOffset, minExpandedHeight + 80), screenCap)
     }
 
     private var currentWidth: CGFloat { isExpanded ? expandedWidth : closedWidth }
@@ -364,6 +375,9 @@ struct IslandView: View {
             } else {
                 // Content vanishes quickly, then the shell retracts
                 showExpandedContent = false
+                // Reset manual height override so next expand starts auto-sized
+                userHeightOverride = nil
+                dragOffset = 0
             }
         }
         .onChange(of: rawShowClosedActivityIndicators) { _, isActive in
@@ -468,6 +482,11 @@ struct IslandView: View {
                     .frame(height: max(24, closedHeight))
 
                 expandedBody
+
+                // Drag handle — always mounted to preserve sibling view identity
+                dragHandleView
+                    .opacity(showExpandedContent ? 1 : 0)
+                    .allowsHitTesting(showExpandedContent)
             }
             .opacity(showExpandedContent ? 1 : 0)
             .scaleEffect(
@@ -476,6 +495,46 @@ struct IslandView: View {
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: - Drag Handle
+
+    private var dragHandleView: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(.white.opacity(isDragHandleHovering || dragOffset != 0 ? 0.5 : 0.25))
+                .frame(width: 40, height: 4)
+                .padding(.vertical, 6)
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isDragHandleHovering = hovering
+            if hovering {
+                NSCursor.resizeUpDown.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                .onChanged { value in
+                    let baseHeight = userHeightOverride ?? autoExpandedHeight
+                    let screenCap = (windowManager.preferredScreen()?.visibleFrame.height ?? 800) - 100
+                    let proposed = baseHeight + value.translation.height
+                    dragOffset = min(max(proposed, minExpandedHeight + 80), screenCap) - baseHeight
+                    // Update hit rect immediately during drag
+                    windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
+                }
+                .onEnded { value in
+                    // Commit the drag as a permanent height override
+                    let finalHeight = expandedHeight
+                    dragOffset = 0
+                    userHeightOverride = finalHeight
+                    windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
+                }
+        )
+        .animation(.easeInOut(duration: 0.15), value: isDragHandleHovering)
     }
 
     // MARK: - Closed Header (inside the notch)
