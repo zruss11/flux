@@ -39,6 +39,10 @@ struct IslandView: View {
     @State private var hasPendingAttachments = false
     @State private var closedIndicatorsLatched = false
     @State private var clearClosedIndicatorsWorkItem: DispatchWorkItem?
+    
+    /// Debug mode: force show live transcript dropdown with mock text
+    @State private var debugShowLiveTranscript = false
+    @State private var debugMockTranscript = "This is a sample live transcript that grows as you speak more text into the microphone during dictation mode."
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -300,11 +304,27 @@ struct IslandView: View {
                 .offset(y: currentHeight + hoverHeightBoost - 2 + (hasNotch ? 0 : windowManager.topOffset))
                 .allowsHitTesting(false)
             }
+
+            // Live transcript dropdown — shows real-time dictation text.
+            let showLiveTranscript = (!isExpanded && DictationManager.shared.isDictating && !DictationManager.shared.liveTranscript.isEmpty)
+                || (debugShowLiveTranscript && !isExpanded)
+            if showLiveTranscript {
+                LiveTranscriptDropdownView(
+                    transcript: debugShowLiveTranscript ? debugMockTranscript : DictationManager.shared.liveTranscript,
+                    containerWidth: currentWidth + hoverWidthBoost,
+                    cornerRadius: bottomRadius
+                )
+                .id(debugShowLiveTranscript ? debugMockTranscript : DictationManager.shared.liveTranscript)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                .offset(y: currentHeight + hoverHeightBoost - 2 + (hasNotch ? 0 : windowManager.topOffset))
+                .allowsHitTesting(false)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingClipboardNotification)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingDictationNotification)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingTickerNotification)
+        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: DictationManager.shared.liveTranscript)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 clearClosedIndicatorsWorkItem?.cancel()
@@ -483,6 +503,42 @@ struct IslandView: View {
             }
             .frame(width: closedRightSlotWidth, height: closedHeight)
             .offset(x: 6)
+
+            // Debug button for testing live transcript dropdown (only in DEBUG builds)
+            #if DEBUG
+            Button {
+                debugShowLiveTranscript.toggle()
+                if debugShowLiveTranscript {
+                    // Simulate growing transcript
+                    var counter = 0
+                    Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+                        counter += 1
+                        let additions = [
+                            "Hello",
+                            " this is a test",
+                            " of the live transcript feature.",
+                            " As you speak,",
+                            " the text box grows",
+                            " to show more content",
+                            " in real-time.",
+                            " It's like magic!"
+                        ]
+                        if counter <= additions.count {
+                            debugMockTranscript += additions[counter - 1]
+                        } else {
+                            timer.invalidate()
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: debugShowLiveTranscript ? "text.bubble.fill" : "text.bubble")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .offset(x: -8)
+            #endif
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)

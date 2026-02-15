@@ -23,6 +23,12 @@ final class DictationManager {
     /// to transform selected text rather than plain transcription.
     private(set) var isEditMode = false
 
+    /// Live transcript text updated in real-time during dictation.
+    /// Returns empty string when not dictating.
+    var liveTranscript: String {
+        voiceInput?.transcript ?? ""
+    }
+
     let historyStore = DictationHistoryStore()
 
     // MARK: - Private Properties
