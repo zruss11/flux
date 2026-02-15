@@ -434,6 +434,8 @@ const pendingPermissions = new Map<string, {
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
 let mcpBridgeUrl = '';
+let mainWss: WebSocketServer | null = null;
+let mcpBridgeWss: WebSocketServer | null = null;
 let agentWarmupPromise: Promise<void> | null = null;
 let agentWarmupAttempts = 0;
 let agentWarmupComplete = false;
@@ -573,6 +575,7 @@ const telegramBot = createTelegramBot({
 
 export function startBridge(port: number): void {
   const wss = new WebSocketServer({ port });
+  mainWss = wss;
   startMcpBridge(port + 1);
 
   log.info(`WebSocket server listening on port ${port}`);
@@ -1288,6 +1291,7 @@ function resolveMcpServerConfig(conversationId: string, runId: string): { comman
 function startMcpBridge(port: number): void {
   mcpBridgeUrl = `ws://127.0.0.1:${port}`;
   const wss = new WebSocketServer({ port, host: '127.0.0.1' });
+  mcpBridgeWss = wss;
 
   wss.on('connection', (ws) => {
     ws.on('message', (data) => {
@@ -1628,4 +1632,39 @@ function summarizeToolInput(toolName: string, input: Record<string, unknown>): s
   }
 
   return toolName;
+}
+
+export async function shutdownBridge(): Promise<void> {
+  log.info('Shutting down bridge: evicting all sessions...');
+
+  // Evict every tracked session — this ends streams, flushes pending
+  // tool calls / permissions, and lets the SDK tear down MCP children.
+  const ids = Array.from(sessions.keys());
+  for (const id of ids) {
+    evictSession(id, 'Sidecar shutting down.');
+  }
+
+  // Close both WebSocket servers so no new connections are accepted
+  // and existing sockets are terminated.
+  const closeServer = (wss: WebSocketServer | null, label: string): Promise<void> =>
+    new Promise((resolve) => {
+      if (!wss) { resolve(); return; }
+      // Terminate all connected clients first.
+      for (const client of wss.clients) {
+        try { client.terminate(); } catch { /* ignore */ }
+      }
+      wss.close((err) => {
+        if (err) log.warn(`Error closing ${label} server: ${err.message}`);
+        resolve();
+      });
+    });
+
+  await Promise.all([
+    closeServer(mainWss, 'main'),
+    closeServer(mcpBridgeWss, 'MCP bridge'),
+  ]);
+
+  mainWss = null;
+  mcpBridgeWss = null;
+  log.info('Bridge shutdown complete.');
 }

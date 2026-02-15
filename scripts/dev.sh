@@ -17,8 +17,14 @@ cleanup() {
     kill "${app_pid}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${sidecar_pid}" ]]; then
-    kill "${sidecar_pid}" >/dev/null 2>&1 || true
+    # Kill the entire process group so SDK-spawned MCP child processes also die.
+    kill -- -"${sidecar_pid}" >/dev/null 2>&1 || kill "${sidecar_pid}" >/dev/null 2>&1 || true
+    # Brief grace period for children to exit before hard cleanup.
+    sleep 0.3
   fi
+  # Sweep any orphaned sidecar-related node processes that escaped the group kill.
+  pkill -f 'tsx.*sidecar/src/index' >/dev/null 2>&1 || true
+  pkill -f 'node.*flux-stdio' >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
