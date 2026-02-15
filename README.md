@@ -38,7 +38,6 @@ Background monitors that poll external sources (email, repos, etc.) and route al
 
 ### ⚙️ Developer Experience
 - **Editable Workspace Path** — Click the breadcrumb path to type or paste any directory
-- **Conductor Scripts** — Standardized `scripts/conductor-setup.sh` and `scripts/conductor-run.sh` for local development
 - **Onboarding Flow** — Full-size content window with live permission state, themed visuals, and one-click restart
 
 ## Requirements

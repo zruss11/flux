@@ -299,9 +299,10 @@ private func shortRepoName(_ repo: String) -> String {
 
 private func watcherIconName(_ type: String) -> String {
     switch type {
-    case "email":   return "envelope.fill"
-    case "github":  return "chevron.left.forwardslash.chevron.right"
-    default:        return "bell.fill"
+    case "email":          return "envelope.fill"
+    case "github":         return "chevron.left.forwardslash.chevron.right"
+    case "notificationDB": return "bell.fill"
+    default:               return "bell.fill"
     }
 }
 

@@ -53,12 +53,14 @@ struct Watcher: Identifiable, Codable, Hashable, Sendable {
         case email
         case github
         case custom
+        case notificationDB
 
         var displayName: String {
             switch self {
             case .email: "Email"
             case .github: "GitHub"
             case .custom: "Custom"
+            case .notificationDB: "Notifications"
             }
         }
 
@@ -67,14 +69,16 @@ struct Watcher: Identifiable, Codable, Hashable, Sendable {
             case .email: "envelope.fill"
             case .github: "chevron.left.forwardslash.chevron.right"
             case .custom: "gearshape.fill"
+            case .notificationDB: "bell.fill"
             }
         }
 
         var defaultIntervalSeconds: Int {
             switch self {
-            case .email: 300     // 5 min
-            case .github: 120   // 2 min
-            case .custom: 300   // 5 min
+            case .email: 300           // 5 min
+            case .github: 120          // 2 min
+            case .custom: 300          // 5 min
+            case .notificationDB: 30   // 30 sec
             }
         }
     }

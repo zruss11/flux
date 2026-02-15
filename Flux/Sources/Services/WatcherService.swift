@@ -51,11 +51,13 @@ final class WatcherService {
         engine.registerProvider(EmailWatcherProvider())
         engine.registerProvider(GitHubWatcherProvider())
         engine.registerProvider(CustomWatcherProvider())
+        engine.registerProvider(NotificationDBWatcherProvider())
     }
 
     /// Start all enabled watchers. Call once after app launch.
     func startAll() {
         ensureDefaultGitHubWatcher()
+        ensureDefaultNotificationDBWatcher()
 
         for watcher in watchers where watcher.enabled {
             let normalized = sanitizeWatcher(watcher)
@@ -82,6 +84,21 @@ final class WatcherService {
                 "watchCicd": "true",
                 "repos": repos,
             ]
+        )
+    }
+
+    /// If no notification DB watcher exists yet, create one automatically.
+    /// Reads Apple's usernoted database for reliable notification awareness.
+    private func ensureDefaultNotificationDBWatcher() {
+        let hasNotifDB = watchers.contains { $0.type == .notificationDB }
+        guard !hasNotifDB else { return }
+
+        Log.app.info("WatcherService: Auto-creating default Notification DB watcher")
+        createWatcher(
+            name: "Notifications",
+            type: .notificationDB,
+            intervalSeconds: 30,
+            notificationMode: .chat
         )
     }
 
