@@ -444,7 +444,7 @@ struct ChatView: View {
                     )
                 }
 
-                if showWatcherAlertsChip {
+                if showWatcherAlertsChip, !activeWatcherAlerts.isEmpty {
                     WatcherAlertsChip(
                         activeAlerts: activeWatcherAlerts,
                         onDismissAll: {

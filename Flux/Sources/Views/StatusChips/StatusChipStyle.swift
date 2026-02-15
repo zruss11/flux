@@ -1,5 +1,16 @@
 import SwiftUI
 
+enum StatusChipStyle {
+    static let defaultFillOpacity: Double = 0.06
+    static let defaultStrokeOpacity: Double = 0.1
+
+    static let warningFillOpacity: Double = 0.10
+    static let warningStrokeOpacity: Double = 0.2
+
+    static let criticalFillOpacity: Double = 0.12
+    static let criticalStrokeOpacity: Double = 0.28
+}
+
 struct StatusChipCapsule<Content: View>: View {
     var fillOpacity: Double
     var strokeOpacity: Double

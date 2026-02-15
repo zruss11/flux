@@ -86,7 +86,7 @@ struct CIStatusChip: View {
             Button {
                 showPopover.toggle()
             } label: {
-                StatusChipCapsule(fillOpacity: 0.06, strokeOpacity: 0.1) {
+                StatusChipCapsule(fillOpacity: StatusChipStyle.defaultFillOpacity, strokeOpacity: StatusChipStyle.defaultStrokeOpacity) {
                     HStack(spacing: 4) {
                         Image(systemName: visualState.iconName)
                             .font(.system(size: 10, weight: .medium))
@@ -186,11 +186,7 @@ struct CIStatusChip: View {
     }
 
     private func updateRunSpinState(visualState: CIChipVisualState?) {
-        guard visualState == .running, !reduceMotion else {
-            runIconSpinning = false
-            return
-        }
-        runIconSpinning = true
+        runIconSpinning = visualState == .running && !reduceMotion
     }
 
     private func shortRepoName(_ repo: String) -> String {

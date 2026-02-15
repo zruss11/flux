@@ -42,10 +42,9 @@ struct WatcherAlertsChip: View {
     }
 
     private var recentAlerts: [WatcherAlert] {
-        activeAlerts
+        Array(activeAlerts
             .sorted { $0.timestamp > $1.timestamp }
-            .prefix(5)
-            .map { $0 }
+            .prefix(5))
     }
 
     var body: some View {
@@ -151,17 +150,17 @@ struct WatcherAlertsChip: View {
 
     private var fillOpacity: Double {
         switch presentation.level {
-        case .idle: return 0.06
-        case .warning: return 0.10
-        case .critical: return 0.12
+        case .idle: return StatusChipStyle.defaultFillOpacity
+        case .warning: return StatusChipStyle.warningFillOpacity
+        case .critical: return StatusChipStyle.criticalFillOpacity
         }
     }
 
     private var strokeOpacity: Double {
         switch presentation.level {
-        case .idle: return 0.1
-        case .warning: return 0.2
-        case .critical: return 0.28
+        case .idle: return StatusChipStyle.defaultStrokeOpacity
+        case .warning: return StatusChipStyle.warningStrokeOpacity
+        case .critical: return StatusChipStyle.criticalStrokeOpacity
         }
     }
 
