@@ -450,25 +450,29 @@ function sanitizeAppInstruction(instruction: string | undefined): string | undef
   return clipped.replace(/\r\n|\r/g, '\n');
 }
 
-const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
-  /\brm\b/i,
-  /\brm\s+-rf\b/i,
-  /\brm\s+-fr\b/i,
-  /\bsudo\s+rm\b/i,
-  /\bgit\s+reset\s+--hard\b/i,
-  /\bgit\s+clean\s+-f(?:d|x|dx|fd|fdx)?\b/i,
-  /\bgit\s+checkout\s+--\b/i,
-  /\bgit\s+branch\s+-D\b/i,
-  /\bgit\s+push\s+--force(?!-with-lease)\b/i,
-  /\bgit\s+rebase\s+--abort\b/i,
-  /\bgit\s+rebase\s+--skip\b/i,
-  /\bgit\s+stash\s+(?:drop|clear)\b/i,
-];
+// Optimization: Combine multiple dangerous command patterns into a single regex
+// to avoid O(N*M) matching (where N=inputs, M=patterns).
+const DANGEROUS_COMMAND_PATTERN = new RegExp(
+  [
+    String.raw`\brm\b`,
+    String.raw`\bsudo\s+rm\b`,
+    String.raw`\bgit\s+reset\s+--hard\b`,
+    String.raw`\bgit\s+clean\s+-f(?:d|x|dx|fd|fdx)?\b`,
+    String.raw`\bgit\s+checkout\s+--\b`,
+    String.raw`\bgit\s+branch\s+-D\b`,
+    String.raw`\bgit\s+push\s+--force(?!-with-lease)\b`,
+    String.raw`\bgit\s+rebase\s+--abort\b`,
+    String.raw`\bgit\s+rebase\s+--skip\b`,
+    String.raw`\bgit\s+stash\s+(?:drop|clear)\b`,
+  ].join('|'),
+  'i'
+);
 
-function collectCommandLikeInputValues(input: Record<string, unknown>): string[] {
+const COMMAND_LIKE_KEYS = ['command', 'cmd', 'script', 'shell', 'bash', 'args'];
+
+export function collectCommandLikeInputValues(input: Record<string, unknown>): string[] {
   const values: string[] = [];
-  const keys = ['command', 'cmd', 'script', 'shell', 'bash', 'args'];
-  for (const key of keys) {
+  for (const key of COMMAND_LIKE_KEYS) {
     const value = input[key];
     if (typeof value === 'string' && value.trim().length > 0) {
       values.push(value);
@@ -482,7 +486,7 @@ function collectCommandLikeInputValues(input: Record<string, unknown>): string[]
   return values;
 }
 
-function requiresApproval(toolName: string, input: Record<string, unknown>): boolean {
+export function requiresApproval(toolName: string, input: Record<string, unknown>): boolean {
   const lowerToolName = toolName.toLowerCase();
   const isCommandExecutionTool =
     lowerToolName.includes('shell') ||
@@ -496,9 +500,7 @@ function requiresApproval(toolName: string, input: Record<string, unknown>): boo
     return false;
   }
 
-  return commandCandidates.some((command) =>
-    DANGEROUS_COMMAND_PATTERNS.some((pattern) => pattern.test(command)),
-  );
+  return commandCandidates.some((command) => DANGEROUS_COMMAND_PATTERN.test(command));
 }
 
 interface ConversationSession {
