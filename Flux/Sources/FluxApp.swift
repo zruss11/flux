@@ -24,7 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let contextManager = ContextManager()
     private let accessibilityReader = AccessibilityReader()
     private let screenCapture = ScreenCapture()
-    private let toolRunner = ToolRunner()
+
     private let automationService = AutomationService.shared
     private let dictationManager = DictationManager.shared
     private let clipboardMonitor = ClipboardMonitor.shared
@@ -545,35 +545,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case "read_selected_text":
             return await accessibilityReader.readSelectedText() ?? "No text selected"
 
-        case "execute_applescript":
-            let script = input["script"] as? String ?? ""
-            return await toolRunner.executeAppleScript(script)
-
-        case "run_shell_command":
-            let command = input["command"] as? String ?? ""
-            return await toolRunner.executeShellScript(command, workingDirectory: conversationStore.workspacePath)
-
         case "set_worktree":
             let rawBranchName = (input["branchName"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let branchName = (rawBranchName?.isEmpty == true) ? nil : rawBranchName
             conversationStore.activeWorktreeBranch = branchName
             return encodeJSON(SetWorktreeResponse(ok: true, branchName: branchName))
-
-        case "send_slack_message":
-            let text = input["text"] as? String ?? ""
-            let channelOverride = (input["channelId"] as? String) ?? (input["channel"] as? String)
-            return await sendSlackMessage(text: text, channelIdOverride: channelOverride)
-
-        case "send_discord_message":
-            let content = input["content"] as? String ?? ""
-            let channelIdOverride = input["channelId"] as? String
-            return await sendDiscordMessage(content: content, channelIdOverride: channelIdOverride)
-
-        case "send_telegram_message":
-            let text = input["text"] as? String ?? ""
-            let chatIdOverride = input["chatId"] as? String
-            return await sendTelegramMessage(text: text, chatIdOverride: chatIdOverride)
 
         case "create_automation":
             let name = input["name"] as? String
@@ -964,152 +941,4 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func sendSlackMessage(text: String, channelIdOverride: String?) async -> String {
-        let token = (KeychainService.getString(forKey: SecretKeys.slackBotToken) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let channel = (channelIdOverride ?? UserDefaults.standard.string(forKey: "slackChannelId") ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !token.isEmpty else {
-            return "Slack bot token not set. Open Island Settings and set Slack Bot + Slack Channel ID."
-        }
-        guard !channel.isEmpty else {
-            return "Slack channel ID not set. Open Island Settings and set Slack Channel ID."
-        }
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "Slack message text is empty."
-        }
-
-        var req = URLRequest(url: URL(string: "https://slack.com/api/chat.postMessage")!)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "channel": channel,
-            "text": text
-        ]
-
-        do {
-            req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
-
-            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let ok = json?["ok"] as? Bool
-            let error = json?["error"] as? String
-            let ts = json?["ts"] as? String
-
-            if status != 200 || ok != true {
-                let rawText = String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let raw = rawText.count > 500 ? String(rawText.prefix(500)) + "…" : rawText
-                let detail = error ?? "HTTP \(status)"
-                return "Slack send failed: \(detail)\(raw.isEmpty ? "" : " - \(raw)")"
-            }
-
-            return "Slack message sent (ts=\(ts ?? "unknown"))."
-        } catch {
-            return "Slack send failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func sendDiscordMessage(content: String, channelIdOverride: String?) async -> String {
-        let token = (KeychainService.getString(forKey: SecretKeys.discordBotToken) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let channelId = (channelIdOverride ?? UserDefaults.standard.string(forKey: "discordChannelId") ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !token.isEmpty else {
-            return "Discord bot token not set. Open Island Settings and set Discord Bot + Discord Channel ID."
-        }
-        guard !channelId.isEmpty else {
-            return "Discord channel ID not set. Open Island Settings and set Discord Channel ID."
-        }
-        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "Discord message content is empty."
-        }
-
-        guard let url = URL(string: "https://discord.com/api/v10/channels/\(channelId)/messages") else {
-            return "Discord send failed: invalid channel ID."
-        }
-
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("Bot \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "content": content
-        ]
-
-        do {
-            req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
-
-            if status < 200 || status >= 300 {
-                let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return "Discord send failed: HTTP \(status)\(text.isEmpty ? "" : " - \(text)")"
-            }
-
-            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let messageId = json?["id"] as? String
-            return "Discord message sent (id=\(messageId ?? "unknown"))."
-        } catch {
-            return "Discord send failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func sendTelegramMessage(text: String, chatIdOverride: String?) async -> String {
-        let token = (KeychainService.getString(forKey: SecretKeys.telegramBotToken) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let chatId = (chatIdOverride ?? UserDefaults.standard.string(forKey: "telegramChatId") ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !token.isEmpty else {
-            return "Telegram bot token not set. Open Island Settings and set Telegram Bot + Telegram Chat ID."
-        }
-        guard !chatId.isEmpty else {
-            return "Telegram chat ID not set. Open Island Settings and set Telegram Chat ID."
-        }
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "Telegram message text is empty."
-        }
-
-        guard let url = URL(string: "https://api.telegram.org/bot\(token)/sendMessage") else {
-            return "Telegram send failed: invalid bot token."
-        }
-
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "chat_id": chatId,
-            "text": text
-        ]
-
-        do {
-            req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
-
-            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let ok = json?["ok"] as? Bool
-            let result = json?["result"] as? [String: Any]
-            let messageId = result?["message_id"] as? Int
-
-            if status != 200 || ok != true {
-                let rawText = String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let raw = rawText.count > 500 ? String(rawText.prefix(500)) + "…" : rawText
-                return "Telegram send failed: HTTP \(status)\(raw.isEmpty ? "" : " - \(raw)")"
-            }
-
-            return "Telegram message sent (id=\(messageId.map(String.init) ?? "unknown"))."
-        } catch {
-            return "Telegram send failed: \(error.localizedDescription)"
-        }
-    }
 }
