@@ -57,6 +57,9 @@ final class DictationManager {
     /// The text that was selected when edit mode was activated.
     private var editModeSelectedText: String?
 
+    /// The target app's focused element, captured before the island overlay shows.
+    private var capturedTarget: AccessibilityReader.CapturedFocusedElement?
+
     private let minRecordingDuration: TimeInterval = 0.5
     private let maxContinuousRecordingDuration: TimeInterval = 45
     private let transcriptionStopTimeout: TimeInterval = 15
@@ -168,6 +171,11 @@ final class DictationManager {
         voiceInput = input
 
         Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] begin")
+
+        // Capture the target app's focused element NOW, synchronously,
+        // before ANY async work (Task, sounds, island overlay) that could
+        // change which app is frontmost.
+        capturedTarget = accessibilityReader?.captureFocusedElement()
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -290,7 +298,8 @@ final class DictationManager {
         scheduleStopWatchdog(for: attemptId)
 
         Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] stopping recorder")
-        // Stop recording; transcript/failure arrives via callbacks.
+        // Stop recording; for live mode the callback fires synchronously
+        // from stopRecording(). Watchdog is a fallback for other modes.
         AudioFeedbackService.shared.play(.dictationStop)
         voiceInput?.stopRecording()
     }
@@ -298,12 +307,14 @@ final class DictationManager {
     // MARK: - Transcript Processing
 
     private func handleTranscript(_ rawTranscript: String, attemptId: UUID) {
+        Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] handleTranscript called, text length=\(rawTranscript.count, privacy: .public)")
         guard isAttemptActive(attemptId) else {
             Log.voice.debug("[dictation \(attemptId.uuidString, privacy: .public)] ignoring stale transcript callback")
             return
         }
 
         cancelStopWatchdog()
+        Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] watchdog cancelled")
 
         let trimmed = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -385,16 +396,26 @@ final class DictationManager {
             // Determine the target application before inserting.
             let targetApp = self.accessibilityReader?.focusedFieldAppName()
 
-            // Insert text into the focused field, or fall back to the pasteboard.
-            let inserted = self.accessibilityReader?.insertTextAtFocusedField(finalText) ?? false
-            if !inserted {
-                ClipboardMonitor.shared.beginSelfCopy()
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(finalText, forType: .string)
-                ClipboardMonitor.shared.endSelfCopy()
-                Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] inserted via clipboard fallback")
+            // Insert text into the captured target field (captured before the
+            // island overlay stole focus).
+            let inserted: Bool
+            if let captured = self.capturedTarget, let reader = self.accessibilityReader {
+                Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] inserting via captured target (PID=\(captured.appPID.map(String.init) ?? "nil", privacy: .public))")
+                inserted = reader.insertText(finalText, in: captured)
+                Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] captured target insertion result: \(inserted, privacy: .public)")
             } else {
-                Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] inserted into focused field")
+                Log.voice.warning("[dictation \(attemptId.uuidString, privacy: .public)] no captured target — capturedTarget=\(self.capturedTarget == nil ? "nil" : "set", privacy: .public), reader=\(self.accessibilityReader == nil ? "nil" : "set", privacy: .public)")
+                // Fallback: try current focused field
+                inserted = self.accessibilityReader?.insertTextAtFocusedField(finalText) ?? false
+                if !inserted {
+                    ClipboardMonitor.shared.beginSelfCopy()
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(finalText, forType: .string)
+                    ClipboardMonitor.shared.endSelfCopy()
+                    Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] clipboard-only fallback")
+                } else {
+                    Log.voice.info("[dictation \(attemptId.uuidString, privacy: .public)] inserted into focused field")
+                }
             }
 
             AudioFeedbackService.shared.play(.dictationSuccess)
@@ -463,6 +484,7 @@ final class DictationManager {
         isProcessing = false
         isEditMode = false
         editModeSelectedText = nil
+        capturedTarget = nil
         IslandWindowManager.shared.suppressDeactivationCollapse = false
         audioLevelMeter.reset()
         recordingStartTime = nil
@@ -656,6 +678,7 @@ final class DictationManager {
         let workItem = DispatchWorkItem { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                Log.voice.error("[dictation \(attemptId.uuidString, privacy: .public)] WATCHDOG FIRED — transcript callback never arrived")
                 self.handleRecordingFailure(
                     "Timed out waiting for transcription result.",
                     attemptId: attemptId,
@@ -687,6 +710,7 @@ final class DictationManager {
         levelPollTimer = nil
         barLevels = Array(repeating: 0, count: 16)
         isProcessing = false
+        capturedTarget = nil
         IslandWindowManager.shared.suppressDeactivationCollapse = false
         audioLevelMeter.reset()
         recordingStartTime = nil
@@ -701,11 +725,17 @@ final class DictationManager {
 
     /// Read the user's preferred dictation engine from UserDefaults.
     private func selectedDictationEngine() -> VoiceInputMode {
-        let engine = UserDefaults.standard.string(forKey: "dictationEngine") ?? "parakeet"
+        let engine = UserDefaults.standard.string(forKey: "dictationEngine") ?? "apple"
         switch engine {
         case "parakeet":
+            guard ParakeetModelManager.shared.isReady else {
+                Log.voice.warning("[DictationManager] Parakeet selected but models not loaded — falling back to Apple Speech (.live)")
+                return .live
+            }
+            Log.voice.info("[DictationManager] Using Parakeet on-device engine")
             return .parakeetOnDevice
         default:
+            Log.voice.info("[DictationManager] Using Apple Speech engine (.live), dictationEngine='\(engine, privacy: .public)'")
             return .live
         }
     }

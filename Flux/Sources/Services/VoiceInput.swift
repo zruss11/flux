@@ -431,12 +431,24 @@ final class VoiceInput {
 
     @available(macOS 26.0, *)
     private func stopLiveRecording(session: LiveSpeechSession) {
-        // Keep the audio engine running so SpeechAnalyzer can drain remaining buffers.
         let engine = audioEngine
         let hadTap = tapInstalled
 
+        // Capture the live transcript BEFORE tearing anything down.
+        // This text is already visible in the island UI, so it's reliable.
+        let liveTranscript = self.transcript
+
+        // ── Synchronous cleanup: stop mic immediately ──
+        if hadTap {
+            engine?.inputNode.removeTap(onBus: 0)
+        }
+        engine?.stop()
+        tapInstalled = false
+        audioEngine = nil
+
         isRecording = false
-        IslandWindowManager.shared.suppressDeactivationCollapse = false
+        // NOTE: Do NOT set IslandWindowManager.shared.suppressDeactivationCollapse = false here.
+        // DictationManager.tearDownUI() sets it AFTER text insertion via accessibility.
 
         let callback = onComplete
         let failureCallback = onFailure
@@ -445,24 +457,25 @@ final class VoiceInput {
         liveSessionAny = nil
         recordingMode = .live
 
-        Task { @MainActor in
-            let finalText = await session.stop()
+        Log.voice.info("[VoiceInput] stopLiveRecording: live transcript='\(liveTranscript, privacy: .public)'")
 
-            engine?.stop()
-            if hadTap {
-                engine?.inputNode.removeTap(onBus: 0)
-            }
-            self.tapInstalled = false
-            self.audioEngine = nil
-
-            self.transcript = finalText
-            if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // Deliver the callback on the next run loop iteration.
+        // This ensures Cmd+Option key-up events have been fully processed
+        // before handleTranscript attempts to simulate Cmd+V for pasting.
+        // The audio engine is already stopped above (mic off immediately).
+        DispatchQueue.main.async {
+            if liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 failureCallback?("No speech detected.")
             } else {
-                callback?(finalText)
+                callback?(liveTranscript)
             }
         }
+
+        // Drain the session asynchronously (fire-and-forget) so the
+        // SpeechAnalyzer cleans up its internal state.
+        Task { @MainActor in _ = await session.stop() }
     }
+
 
     private func stopDeepgramRecording(session: DeepgramStreamingSession) {
         let engine = audioEngine
@@ -589,32 +602,8 @@ final class VoiceInput {
 
             let modelManager = ParakeetModelManager.shared
             guard modelManager.isReady else {
-                Log.voice.error("Parakeet models not loaded, falling back to Apple transcription")
-                // Fall back to Apple's SFSpeechRecognizer if Parakeet isn't ready.
-                // Notify the user so they know Parakeet is not being used.
-                Log.voice.warning("[VoiceInput] Using Apple Speech instead of Parakeet — models not loaded")
-                do {
-                    let wavURL = try self.writeWAVFile(pcmData: pcmData)
-                    defer { try? FileManager.default.removeItem(at: wavURL) }
-
-                    guard #available(macOS 26.0, *) else {
-                        throw TranscriptionError.unsupportedOS
-                    }
-
-                    let transcribedText = try await self.transcribeWAVOnDevice(wavURL)
-                    let trimmed = transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    self.transcript = trimmed
-
-                    if trimmed.isEmpty {
-                        failureCallback?("No speech detected.")
-                    } else {
-                        // Prepend a note so the callback consumer knows this was a fallback.
-                        callback?(trimmed)
-                    }
-                } catch {
-                    Log.voice.error("Fallback transcription error: \(error.localizedDescription, privacy: .public)")
-                    failureCallback?("Parakeet models not loaded. Fallback transcription also failed.")
-                }
+                Log.voice.error("Parakeet models not loaded — failing with user guidance")
+                failureCallback?("Parakeet models not downloaded. Go to Settings → Voice & Transcription to download models or switch to Apple Speech.")
                 return
             }
 

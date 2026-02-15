@@ -183,7 +183,30 @@ final class AccessibilityReader {
         if let pid = captured.appPID,
            let app = NSRunningApplication(processIdentifier: pid) {
             app.activate()
+
+            // Poll until the target app is confirmed frontmost (up to 500ms).
+            let deadline = DispatchTime.now() + .milliseconds(500)
+            var activated = false
+            while DispatchTime.now() < deadline {
+                if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+                    activated = true
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+
+            if !activated {
+                app.activate()
+                Thread.sleep(forTimeInterval: 0.15)
+            }
         }
+
+        // Re-focus the captured element so paste targets the correct text field.
+        AXUIElementSetAttributeValue(
+            axElement,
+            kAXFocusedUIElementAttribute as CFString,
+            axElement
+        )
 
         let savedPasteboard = NSPasteboard.general.string(forType: .string)
         NSPasteboard.general.clearContents()
@@ -203,6 +226,76 @@ final class AccessibilityReader {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(original, forType: .string)
             }
+        }
+
+        return true
+    }
+
+    /// Inserts text into the app that was focused when dictation started.
+    /// Re-activates the target app, verifies it is frontmost, re-focuses the
+    /// captured AX element, then pastes via clipboard (Cmd+V).
+    ///
+    /// Follows the Almond ClipboardManager pattern: activate → poll → focus → paste.
+    func insertText(_ text: String, in captured: CapturedFocusedElement) -> Bool {
+        // Step 1: Re-activate the target app so it receives the paste.
+        if let pid = captured.appPID,
+           let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate()
+
+            // Step 2: Poll until the target app is confirmed frontmost (up to 500ms).
+            // Thread.sleep is used intentionally here — we are on @MainActor but need
+            // to block briefly so that the CGEvent paste below targets the correct app.
+            let deadline = DispatchTime.now() + .milliseconds(500)
+            var activated = false
+            while DispatchTime.now() < deadline {
+                if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+                    activated = true
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.02)   // 20 ms granularity
+            }
+
+            if !activated {
+                // Last resort: try activating once more
+                app.activate()
+                Thread.sleep(forTimeInterval: 0.15)
+            }
+        }
+
+        // Step 3: Re-focus the captured AX element so the correct text field
+        // is active when the paste keystroke arrives.
+        let focusResult = AXUIElementSetAttributeValue(
+            captured.element,
+            kAXFocusedUIElementAttribute as CFString,
+            captured.element
+        )
+        if focusResult != .success {
+            // Not all elements support being re-focused — this is best-effort.
+            // A small extra delay lets the app settle after activation.
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        // Step 4: Copy text to pasteboard and simulate Cmd+V.
+        ClipboardMonitor.shared.beginSelfCopy()
+        let savedPasteboard = NSPasteboard.general.string(forType: .string)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+
+        let source = CGEventSource(stateID: .hidSystemState)
+        let vKeyCode: CGKeyCode = 9
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true)
+        keyDown?.flags = .maskCommand
+        keyDown?.post(tap: .cghidEventTap)
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false)
+        keyUp?.flags = .maskCommand
+        keyUp?.post(tap: .cghidEventTap)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            if let original = savedPasteboard {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(original, forType: .string)
+            }
+            ClipboardMonitor.shared.endSelfCopy()
         }
 
         return true

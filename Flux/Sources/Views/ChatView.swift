@@ -37,7 +37,7 @@ struct ChatView: View {
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
-    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.parakeet.rawValue
+    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.apple.rawValue
     @State private var inputText = ""
     @State private var voiceInput = VoiceInput()
     @State private var showSkills = false
@@ -70,7 +70,7 @@ struct ChatView: View {
     private let shareScreenFileName = "__flux_screenshot.jpg"
 
     private var speechInputProvider: SpeechInputProvider {
-        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .parakeet
+        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .apple
     }
 
     private var canSendMessage: Bool {

@@ -51,7 +51,7 @@ extension UserDefaults {
     var speechInputProvider: SpeechInputProvider {
         get {
             let raw = string(forKey: SpeechInputSettings.providerStorageKey)
-            return SpeechInputProvider(rawValue: raw ?? "") ?? .parakeet
+            return SpeechInputProvider(rawValue: raw ?? "") ?? .apple
         }
         set {
             setValue(newValue.rawValue, forKey: SpeechInputSettings.providerStorageKey)
