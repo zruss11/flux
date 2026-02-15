@@ -134,15 +134,15 @@ final class DeepgramStreamingSession: @unchecked Sendable {
     private func startReceiveLoop() {
         guard let socketTask = task else { return }
 
-        socketTask.receive { [weak self] result in
-            guard let self else { return }
-
-            switch result {
-            case .failure(let error):
-                self.handleSocketError(error)
-            case .success(let message):
-                self.handleMessage(message)
-                self.startReceiveLoop()
+        Task { [weak self] in
+            while true {
+                do {
+                    let message = try await socketTask.receive()
+                    self?.handleMessage(message)
+                } catch {
+                    self?.handleSocketError(error)
+                    return
+                }
             }
         }
     }

@@ -197,6 +197,7 @@ struct ChatView: View {
                                 }
                                 let started = await voiceInput.startRecording(
                                     mode: .live,
+                                    provider: speechInputProvider,
                                     onComplete: { transcript in
                                         inputText = TranscriptPostProcessor.process(transcript)
                                         sendMessage()
@@ -207,7 +208,7 @@ struct ChatView: View {
                                         }
                                     }
                                 )
-                                if !started && SFSpeechRecognizer.authorizationStatus() != .authorized {
+                                if !started && speechInputProvider != .deepgram && SFSpeechRecognizer.authorizationStatus() != .authorized {
                                     showSpeechPermissionAlert = true
                                 }
                             }

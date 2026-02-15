@@ -145,7 +145,7 @@ final class VoiceInput {
         }
 
         // Parakeet mode only needs mic permission, not Apple Speech permission.
-        if mode != .parakeetOnDevice {
+        if mode != .parakeetOnDevice && provider != .deepgram {
             guard #available(macOS 26.0, *) else {
                 Log.voice.error("On-device speech transcription requires macOS 26+")
                 onFailure?("On-device transcription requires macOS 26 or newer.")
@@ -295,6 +295,7 @@ final class VoiceInput {
 
         let deepgramApiKey = UserDefaults.standard.deepgramApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !deepgramApiKey.isEmpty else {
+            cleanUp()
             failureCallback?("Deepgram API key not set.")
             return false
         }
@@ -476,6 +477,7 @@ final class VoiceInput {
         onFailure = nil
         deepgramSession = nil
         recordingMode = .live
+        currentSpeechProvider = .apple
 
         Task { @MainActor in
             let finalText = await session.stop()
