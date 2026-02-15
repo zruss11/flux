@@ -1,7 +1,26 @@
 import Foundation
 import os
 
-struct DictionaryCorrector {
+/// Thread-safe cache for compiled regex patterns.
+private final class RegexCache: @unchecked Sendable {
+    private var cache: (key: [[String]], regex: NSRegularExpression, replacements: [String: String])?
+    private let lock = NSLock()
+    
+    func get(forKey key: [[String]]) -> (regex: NSRegularExpression, replacements: [String: String])? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let cached = cache, cached.key == key else { return nil }
+        return (cached.regex, cached.replacements)
+    }
+    
+    func set(key: [[String]], regex: NSRegularExpression, replacements: [String: String]) {
+        lock.lock()
+        defer { lock.unlock() }
+        cache = (key, regex, replacements)
+    }
+}
+
+struct DictionaryCorrector: Sendable {
 
     /// Cached compiled regex and replacement map to avoid expensive recompilation.
     /// Uses only the semantic content (text + aliases) as the cache key, so metadata
@@ -9,10 +28,11 @@ struct DictionaryCorrector {
     ///
     /// This is a single static cache designed for the app's one global dictionary.
     /// If multiple dictionary sets were used concurrently, they would thrash this cache.
-    @MainActor
-    private static var cache: (key: [[String]], regex: NSRegularExpression, replacements: [String: String])?
+    private static let cache = RegexCache()
 
-    @MainActor
+    /// Applies dictionary corrections to the given text.
+    /// This method is nonisolated and can be called from any thread.
+    nonisolated
     static func apply(_ text: String, using entries: [DictionaryEntry]) -> String {
         guard !text.isEmpty, !entries.isEmpty else { return text }
 
@@ -23,7 +43,7 @@ struct DictionaryCorrector {
         let cacheKey = entries.map { [$0.text] + $0.aliases }
 
         // Check if cache is valid (semantic content matches)
-        if let cached = cache, cached.key == cacheKey {
+        if let cached = cache.get(forKey: cacheKey) {
             regex = cached.regex
             replacementsMap = cached.replacements
         } else {
@@ -71,10 +91,9 @@ struct DictionaryCorrector {
             do {
                 regex = try NSRegularExpression(pattern: fullPattern, options: .caseInsensitive)
                 replacementsMap = map
-                cache = (cacheKey, regex, map)
+                cache.set(key: cacheKey, regex: regex, replacements: map)
             } catch {
                 Log.app.error("Failed to compile regex for dictionary: \(error)")
-                cache = nil
                 return text
             }
         }

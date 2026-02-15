@@ -35,21 +35,26 @@ final class ScreenCapture {
             config.height = Int(display.height)
             config.pixelFormat = kCVPixelFormatType_32BGRA
 
-            var image = try await SCScreenshotManager.captureImage(
+            let image = try await SCScreenshotManager.captureImage(
                 contentFilter: filter,
                 configuration: config
             )
 
-            if let caretRect {
-                let displayBounds = CGRect(
-                    x: 0, y: 0,
-                    width: CGFloat(display.width),
-                    height: CGFloat(display.height)
-                )
-                image = annotateImage(image, caretRect: caretRect, displayBounds: displayBounds)
-            }
-
-            return cgImageToBase64JPEG(image, maxDimension: 1600, quality: 0.7)
+                    // Perform heavy image processing off the main actor.
+            let displayWidth = display.width
+            let displayHeight = display.height
+            return await Task.detached(priority: .userInitiated) { [image] in
+                var processedImage = image
+                if let caretRect = caretRect {
+                    let displayBounds = CGRect(
+                        x: 0, y: 0,
+                        width: CGFloat(displayWidth),
+                        height: CGFloat(displayHeight)
+                    )
+                    processedImage = Self.annotateImage(image, caretRect: caretRect, displayBounds: displayBounds)
+                }
+                return Self.cgImageToBase64JPEG(processedImage, maxDimension: 1600, quality: 0.7)
+            }.value
         } catch {
             Log.screen.error("Screen capture error: \(error)")
             return nil
@@ -80,23 +85,27 @@ final class ScreenCapture {
             config.height = Int(window.frame.height * 2)
             config.pixelFormat = kCVPixelFormatType_32BGRA
 
-            var image = try await SCScreenshotManager.captureImage(
+            let image = try await SCScreenshotManager.captureImage(
                 contentFilter: filter,
                 configuration: config
             )
 
-            if let caretRect {
-                image = annotateImage(image, caretRect: caretRect, displayBounds: window.frame)
-            }
-
-            return cgImageToBase64JPEG(image, maxDimension: 1600, quality: 0.7)
+            // Perform heavy image processing off the main actor.
+            let windowFrame = window.frame
+            return await Task.detached(priority: .userInitiated) { [image] in
+                var processedImage = image
+                if let caretRect = caretRect {
+                    processedImage = Self.annotateImage(image, caretRect: caretRect, displayBounds: windowFrame)
+                }
+                return Self.cgImageToBase64JPEG(processedImage, maxDimension: 1600, quality: 0.7)
+            }.value
         } catch {
             Log.screen.error("Window capture error: \(error)")
             return nil
         }
     }
 
-    private func cgImageToBase64JPEG(_ cgImage: CGImage, maxDimension: Int, quality: Double) -> String? {
+    private static nonisolated func cgImageToBase64JPEG(_ cgImage: CGImage, maxDimension: Int, quality: Double) -> String? {
         autoreleasepool {
             let scaled = downscaledImage(cgImage, maxDimension: maxDimension) ?? cgImage
             let bitmapRep = NSBitmapImageRep(cgImage: scaled)
@@ -108,7 +117,7 @@ final class ScreenCapture {
         }
     }
 
-    private func downscaledImage(_ cgImage: CGImage, maxDimension: Int) -> CGImage? {
+    private static nonisolated func downscaledImage(_ cgImage: CGImage, maxDimension: Int) -> CGImage? {
         let width = cgImage.width
         let height = cgImage.height
         let longest = max(width, height)
@@ -135,7 +144,7 @@ final class ScreenCapture {
         return ctx.makeImage()
     }
 
-    private func annotateImage(
+    private static nonisolated func annotateImage(
         _ image: CGImage,
         caretRect: CGRect,
         displayBounds: CGRect

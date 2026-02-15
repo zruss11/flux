@@ -269,6 +269,137 @@ export const baseTools: ToolDefinition[] = [
       required: ['action'],
     },
   },
+  {
+    name: 'calendar_search_events',
+    description:
+      'Search for events in macOS Calendar.app within a date range. Returns event details including id, title, start/end dates, location, notes, and calendar name.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        startDate: {
+          type: 'string',
+          description: 'Start of the date range in ISO 8601 format (e.g. "2026-02-15T00:00:00-05:00").',
+        },
+        endDate: {
+          type: 'string',
+          description: 'End of the date range in ISO 8601 format (e.g. "2026-02-15T23:59:59-05:00").',
+        },
+        query: {
+          type: 'string',
+          description: 'Optional text to filter events by title (case-sensitive substring match).',
+        },
+        calendarName: {
+          type: 'string',
+          description: 'Optional calendar name to search within. If omitted, searches all calendars.',
+        },
+      },
+      required: ['startDate', 'endDate'],
+    },
+  },
+  {
+    name: 'calendar_add_event',
+    description:
+      'Create a new event in macOS Calendar.app. Returns the new event ID on success.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Event title/summary.',
+        },
+        startDate: {
+          type: 'string',
+          description: 'Event start in ISO 8601 format (e.g. "2026-02-16T14:00:00-05:00").',
+        },
+        endDate: {
+          type: 'string',
+          description: 'Event end in ISO 8601 format (e.g. "2026-02-16T15:00:00-05:00").',
+        },
+        notes: {
+          type: 'string',
+          description: 'Optional event notes/description.',
+        },
+        location: {
+          type: 'string',
+          description: 'Optional event location.',
+        },
+        calendarName: {
+          type: 'string',
+          description: 'Optional calendar name to add the event to. Uses default calendar if omitted.',
+        },
+        isAllDay: {
+          type: 'boolean',
+          description: 'Whether this is an all-day event (default: false).',
+        },
+      },
+      required: ['title', 'startDate', 'endDate'],
+    },
+  },
+  {
+    name: 'calendar_edit_event',
+    description:
+      'Edit an existing event in macOS Calendar.app by its event ID. Only the fields you provide will be updated.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        eventId: {
+          type: 'string',
+          description: 'The unique ID of the event to edit (returned by calendar_search_events or calendar_add_event).',
+        },
+        title: {
+          type: 'string',
+          description: 'New event title.',
+        },
+        startDate: {
+          type: 'string',
+          description: 'New start date/time in ISO 8601 format.',
+        },
+        endDate: {
+          type: 'string',
+          description: 'New end date/time in ISO 8601 format.',
+        },
+        notes: {
+          type: 'string',
+          description: 'New event notes/description.',
+        },
+        location: {
+          type: 'string',
+          description: 'New event location.',
+        },
+      },
+      required: ['eventId'],
+    },
+  },
+  {
+    name: 'calendar_delete_event',
+    description:
+      'Delete an event from macOS Calendar.app by its event ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        eventId: {
+          type: 'string',
+          description: 'The unique ID of the event to delete.',
+        },
+      },
+      required: ['eventId'],
+    },
+  },
+  {
+    name: 'calendar_navigate_to_date',
+    description:
+      'Open macOS Calendar.app and navigate to a specific date, showing the day view.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        date: {
+          type: 'string',
+          description: 'The date to navigate to in ISO 8601 format (e.g. "2026-03-01").',
+        },
+      },
+      required: ['date'],
+    },
+  },
 ];
 
 const mcp = new McpManager();

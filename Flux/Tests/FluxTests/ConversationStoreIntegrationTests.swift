@@ -26,6 +26,9 @@ final class ConversationStoreIntegrationTests: XCTestCase {
         store.addMessage(to: conversation.id, role: .user, content: "Hello Flux")
         store.addMessage(to: conversation.id, role: .assistant, content: "Hi there")
 
+        // Wait for async saves to complete (file I/O is now async)
+        Thread.sleep(forTimeInterval: 0.5)
+
         let storeReloaded = ConversationStore()
         storeReloaded.openConversation(id: conversation.id)
 

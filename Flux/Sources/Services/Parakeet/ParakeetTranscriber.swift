@@ -57,6 +57,15 @@ struct ParakeetTranscriber: Sendable {
     ///   - pcmData: Raw PCM audio (16kHz, mono, Int16, little-endian).
     ///   - modelManager: The model manager holding loaded CoreML models.
     /// - Returns: The transcribed text.
+    ///
+    /// **Performance Note:** This method performs heavy CoreML inference and may
+    /// block the calling thread. Callers should invoke it from a background queue:
+    ///
+    /// ```swift
+    /// let text = await Task.detached(priority: .userInitiated) {
+    ///     try transcriber.transcribe(pcmData: data, modelManager: manager)
+    /// }.value
+    /// ```
     @MainActor
     func transcribe(pcmData: Data, modelManager: ParakeetModelManager) throws -> String {
         guard modelManager.isReady else {

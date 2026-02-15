@@ -41,7 +41,8 @@ struct TranscriptPostProcessor {
     // MARK: - Pipeline
 
     /// Runs the full post-processing pipeline on a raw transcript.
-    @MainActor
+    /// This is nonisolated since text processing can run on any thread.
+    nonisolated
     static func process(_ text: String) -> String {
         guard UserDefaults.standard.bool(forKey: enabledKey) else { return text }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return text }
@@ -70,7 +71,7 @@ struct TranscriptPostProcessor {
 
         // Stage 5: Dictionary corrections
         if UserDefaults.standard.bool(forKey: dictionaryCorrectionKey) {
-            result = DictionaryCorrector.apply(result, using: CustomDictionaryStore.shared.entries)
+            result = DictionaryCorrector.apply(result, using: CustomDictionaryStore.shared.getEntries())
         }
 
         return result

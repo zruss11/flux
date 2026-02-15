@@ -688,6 +688,62 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let repo = (input["repo"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return manageGitHubRepos(action: action, repo: repo)
 
+        // MARK: - Calendar Tools
+
+        case "calendar_search_events":
+            let startDate = input["startDate"] as? String ?? ""
+            let endDate = input["endDate"] as? String ?? ""
+            let query = input["query"] as? String
+            let calendarName = input["calendarName"] as? String
+            return await CalendarService.shared.searchEvents(
+                startDate: startDate,
+                endDate: endDate,
+                query: query,
+                calendarName: calendarName
+            )
+
+        case "calendar_add_event":
+            let title = input["title"] as? String ?? ""
+            let startDate = input["startDate"] as? String ?? ""
+            let endDate = input["endDate"] as? String ?? ""
+            let notes = input["notes"] as? String
+            let location = input["location"] as? String
+            let calendarName = input["calendarName"] as? String
+            let isAllDay = input["isAllDay"] as? Bool ?? false
+            return await CalendarService.shared.addEvent(
+                title: title,
+                startDate: startDate,
+                endDate: endDate,
+                notes: notes,
+                location: location,
+                calendarName: calendarName,
+                isAllDay: isAllDay
+            )
+
+        case "calendar_edit_event":
+            let eventId = input["eventId"] as? String ?? ""
+            let title = input["title"] as? String
+            let startDate = input["startDate"] as? String
+            let endDate = input["endDate"] as? String
+            let notes = input["notes"] as? String
+            let location = input["location"] as? String
+            return await CalendarService.shared.editEvent(
+                eventId: eventId,
+                title: title,
+                startDate: startDate,
+                endDate: endDate,
+                notes: notes,
+                location: location
+            )
+
+        case "calendar_delete_event":
+            let eventId = input["eventId"] as? String ?? ""
+            return await CalendarService.shared.deleteEvent(eventId: eventId)
+
+        case "calendar_navigate_to_date":
+            let date = input["date"] as? String ?? ""
+            return await CalendarService.shared.navigateToDate(date: date)
+
         default:
             return "Unknown tool: \(toolName)"
         }

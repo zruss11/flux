@@ -143,7 +143,7 @@ enum DisplaySegment: Identifiable {
 final class ConversationStore {
     /// Test-only override for history persistence location.
     /// Kept in all build configurations so release test runs can compile.
-    static var overrideHistoryDirectory: URL?
+    nonisolated(unsafe) static var overrideHistoryDirectory: URL?
     var conversations: [Conversation] = []
     var activeConversationId: UUID?
     var folders: [ChatFolder] = []
@@ -158,19 +158,19 @@ final class ConversationStore {
 
     // MARK: - Persistence Paths
 
-    private static var historyDirectory: URL {
-        if let overrideHistoryDirectory {
-            return overrideHistoryDirectory
+    private static nonisolated var historyDirectory: URL {
+        if let override = overrideHistoryDirectory {
+            return override
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
         return home.appendingPathComponent(".flux/history", isDirectory: true)
     }
 
-    private static var conversationsDirectory: URL {
+    private static nonisolated var conversationsDirectory: URL {
         historyDirectory.appendingPathComponent("conversations", isDirectory: true)
     }
 
-    private static var indexURL: URL {
+    private static nonisolated var indexURL: URL {
         historyDirectory.appendingPathComponent("index.json")
     }
 
@@ -227,7 +227,8 @@ final class ConversationStore {
             return conversation
         }
 
-        if let loaded = loadConversation(id: id) {
+        // Load from disk synchronously (fast path), but actual file I/O is async.
+        if let loaded = loadConversationSync(id: id) {
             conversations.append(loaded)
             let changed = ensureSummaryExists(for: loaded, title: title)
             if activate {
@@ -462,7 +463,7 @@ final class ConversationStore {
             activeConversationId = existing.id
             return
         }
-        if let loaded = loadConversation(id: id) {
+        if let loaded = loadConversationSync(id: id) {
             conversations.append(loaded)
             activeConversationId = loaded.id
         }
@@ -506,7 +507,7 @@ final class ConversationStore {
         let source: Conversation
         if let existing = conversations.first(where: { $0.id == id }) {
             source = existing
-        } else if let loaded = loadConversation(id: id) {
+        } else if let loaded = loadConversationSync(id: id) {
             source = loaded
         } else {
             return nil
@@ -612,7 +613,7 @@ final class ConversationStore {
 
     // MARK: - Persistence
 
-    private func ensureDirectories() {
+    private static nonisolated func ensureDirectories() {
         let fm = FileManager.default
         try? fm.createDirectory(at: Self.conversationsDirectory, withIntermediateDirectories: true)
     }
@@ -645,13 +646,16 @@ final class ConversationStore {
     }
 
     private func saveConversation(_ conversation: Conversation) {
-        ensureDirectories()
-        let url = Self.conversationsDirectory.appendingPathComponent("\(conversation.id.uuidString).json")
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = .prettyPrinted
-        if let data = try? encoder.encode(conversation) {
-            try? data.write(to: url, options: .atomic)
+        // Perform file I/O off the main actor to avoid blocking UI.
+        Task.detached(priority: .background) { [conversation] in
+            Self.ensureDirectories()
+            let url = Self.conversationsDirectory.appendingPathComponent("\(conversation.id.uuidString).json")
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = .prettyPrinted
+            if let data = try? encoder.encode(conversation) {
+                try? data.write(to: url, options: .atomic)
+            }
         }
     }
 
@@ -662,12 +666,16 @@ final class ConversationStore {
         saveTimer?.invalidate()
         let convCopy = conversation
         saveTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            self?.saveConversation(convCopy)
-            self?.saveIndex()
+            Task { @MainActor in
+                self?.saveConversation(convCopy)
+                self?.saveIndex()
+            }
         }
     }
 
-    private func loadConversation(id: UUID) -> Conversation? {
+    /// Synchronous version for backwards compatibility.
+    /// Performs file I/O synchronously to ensure immediate persistence.
+    private func loadConversationSync(id: UUID) -> Conversation? {
         let url = Self.conversationsDirectory.appendingPathComponent("\(id.uuidString).json")
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
@@ -675,13 +683,35 @@ final class ConversationStore {
         return try? decoder.decode(Conversation.self, from: data)
     }
 
-    private struct HistoryIndex: Codable {
-        var summaries: [ConversationSummary]
-        var folders: [ChatFolder]
+    /// Asynchronous version for when you want non-blocking I/O.
+    private func loadConversation(id: UUID) async -> Conversation? {
+        await Task.detached(priority: .userInitiated) {
+            let url = Self.conversationsDirectory.appendingPathComponent("\(id.uuidString).json")
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(Conversation.self, from: data)
+        }.value
     }
 
-    private func saveIndex() {
-        ensureDirectories()
+    // MARK: - Test Helpers
+
+    /// Forces an immediate synchronous save of a conversation for testing.
+    /// This ensures data is persisted before test assertions.
+    func saveConversationSync(_ conversation: Conversation) {
+        Self.ensureDirectories()
+        let url = Self.conversationsDirectory.appendingPathComponent("\(conversation.id.uuidString).json")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .prettyPrinted
+        if let data = try? encoder.encode(conversation) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Forces an immediate synchronous save of the index for testing.
+    func saveIndexSync() {
+        Self.ensureDirectories()
         let index = HistoryIndex(summaries: summaries, folders: folders)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -691,14 +721,35 @@ final class ConversationStore {
         }
     }
 
+    private struct HistoryIndex: Codable {
+        var summaries: [ConversationSummary]
+        var folders: [ChatFolder]
+    }
+
+    private func saveIndex() {
+        // Capture local copies to avoid capturing self in detached task.
+        let summariesCopy = summaries
+        let foldersCopy = folders
+        Task.detached(priority: .background) {
+            Self.ensureDirectories()
+            let index = HistoryIndex(summaries: summariesCopy, folders: foldersCopy)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = .prettyPrinted
+            if let data = try? encoder.encode(index) {
+                try? data.write(to: Self.indexURL, options: .atomic)
+            }
+        }
+    }
+
     private func loadIndex() {
+        // Load index synchronously during initialization - needed for immediate data access
         guard let data = try? Data(contentsOf: Self.indexURL) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        if let index = try? decoder.decode(HistoryIndex.self, from: data) {
-            summaries = index.summaries
-            folders = index.folders
-        }
+        guard let index = try? decoder.decode(HistoryIndex.self, from: data) else { return }
+        summaries = index.summaries
+        folders = index.folders
     }
 }
 
@@ -711,7 +762,8 @@ struct Conversation: Identifiable, Codable {
 
     /// Class-based box so the cache survives struct copies without triggering
     /// copy-on-write of the whole Conversation value.
-    private final class SegmentCache {
+    /// Marked as unchecked Sendable since it's only accessed from @MainActor.
+    private final class SegmentCache: @unchecked Sendable {
         var segments: [DisplaySegment]?
     }
     private var _segmentCache = SegmentCache()

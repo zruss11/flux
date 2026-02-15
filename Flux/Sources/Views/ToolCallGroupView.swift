@@ -91,6 +91,11 @@ struct ToolCallRow: View {
         case "delete_automation": return "Delete automation"
         case "run_automation_now": return "Run automation now"
         case "memory": return "Memory"
+        case "calendar_search_events": return "Search Events"
+        case "calendar_add_event": return "Add Event"
+        case "calendar_edit_event": return "Edit Event"
+        case "calendar_delete_event": return "Delete Event"
+        case "calendar_navigate_to_date": return "Navigate to Date"
         default:
             // Convert snake_case to Title Case, handle MCP-style names (e.g. linear__list_issues)
             return call.toolName

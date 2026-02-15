@@ -1195,6 +1195,13 @@ You have access to the following tools:
 **Delegation Tool**:
 - TeamCreate: For complex tasks requiring research, planning, or multi-step workflows, spin up a small agent team to delegate work
 
+**Calendar Tools** (interact with macOS Calendar.app via AppleScript):
+- mcp__flux__calendar_search_events: Search for calendar events within a date range. Returns event IDs, titles, times, locations, and notes
+- mcp__flux__calendar_add_event: Create a new calendar event with title, start/end times, location, notes, and optional calendar name
+- mcp__flux__calendar_edit_event: Edit an existing calendar event by its event ID
+- mcp__flux__calendar_delete_event: Delete a calendar event by its event ID
+- mcp__flux__calendar_navigate_to_date: Open Calendar.app and navigate to a specific date
+
 Important guidelines:
 - Do NOT use screen context tools unless the user's request specifically requires information about what's currently on their screen or visible in their windows
 - If the user has attached a screenshot or image to their message, use that image instead of capturing a new screenshot
