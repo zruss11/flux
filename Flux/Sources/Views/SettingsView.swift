@@ -5,10 +5,10 @@ struct SettingsView: View {
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationEngine") private var dictationEngine = "apple"
-    @AppStorage("asrEnableFragmentRepair") private var enableFragmentRepair = true
-    @AppStorage("asrEnableIntentCorrection") private var enableIntentCorrection = true
-    @AppStorage("asrEnableRepeatRemoval") private var enableRepeatRemoval = true
-    @AppStorage("asrEnableNumberConversion") private var enableNumberConversion = true
+    @AppStorage(ASRPostProcessor.DefaultsKey.enableFragmentRepair) private var enableFragmentRepair = true
+    @AppStorage(ASRPostProcessor.DefaultsKey.enableIntentCorrection) private var enableIntentCorrection = true
+    @AppStorage(ASRPostProcessor.DefaultsKey.enableRepeatRemoval) private var enableRepeatRemoval = true
+    @AppStorage(ASRPostProcessor.DefaultsKey.enableNumberConversion) private var enableNumberConversion = true
 
     @State private var automationService = AutomationService.shared
     @State private var showAutomationsManager = false

@@ -23,6 +23,16 @@ import os
 /// repeated word collapse, punctuation cleanup).
 struct ASRPostProcessor {
 
+    // MARK: - UserDefaults Keys
+
+    /// Centralised UserDefaults key strings shared with SettingsView.
+    enum DefaultsKey {
+        static let enableFragmentRepair = "asrEnableFragmentRepair"
+        static let enableIntentCorrection = "asrEnableIntentCorrection"
+        static let enableRepeatRemoval = "asrEnableRepeatRemoval"
+        static let enableNumberConversion = "asrEnableNumberConversion"
+    }
+
     // MARK: - Configuration
 
     struct Config: Sendable {
@@ -35,10 +45,10 @@ struct ASRPostProcessor {
         static func fromDefaults() -> Config {
             let defaults = UserDefaults.standard
             return Config(
-                enableFragmentRepair: defaults.object(forKey: "asrEnableFragmentRepair") as? Bool ?? true,
-                enableIntentCorrection: defaults.object(forKey: "asrEnableIntentCorrection") as? Bool ?? true,
-                enableRepeatRemoval: defaults.object(forKey: "asrEnableRepeatRemoval") as? Bool ?? true,
-                enableNumberConversion: defaults.object(forKey: "asrEnableNumberConversion") as? Bool ?? true
+                enableFragmentRepair: defaults.object(forKey: DefaultsKey.enableFragmentRepair) as? Bool ?? true,
+                enableIntentCorrection: defaults.object(forKey: DefaultsKey.enableIntentCorrection) as? Bool ?? true,
+                enableRepeatRemoval: defaults.object(forKey: DefaultsKey.enableRepeatRemoval) as? Bool ?? true,
+                enableNumberConversion: defaults.object(forKey: DefaultsKey.enableNumberConversion) as? Bool ?? true
             )
         }
 
@@ -288,11 +298,16 @@ struct ASRPostProcessor {
         return hasNumber ? total : nil
     }
 
-    /// Format a number with comma separators for readability.
-    private static func formatNumber(_ number: Int) -> String {
+    /// Cached number formatter for digit output.
+    private static let numberFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         formatter.groupingSeparator = ","
-        return formatter.string(from: NSNumber(value: number)) ?? String(number)
+        return formatter
+    }()
+
+    /// Format a number with comma separators for readability.
+    private static func formatNumber(_ number: Int) -> String {
+        return numberFormatter.string(from: NSNumber(value: number)) ?? String(number)
     }
 }

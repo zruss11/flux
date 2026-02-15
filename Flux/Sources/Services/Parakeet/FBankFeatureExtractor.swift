@@ -39,7 +39,7 @@ final class FBankFeatureExtractor: Sendable {
     private let hannWindow: [Float]
 
     /// Cached FFT setup — created once and reused across all frames.
-    private let fftSetup: OpaquePointer
+    private nonisolated(unsafe) let fftSetup: OpaquePointer
     private let log2n: vDSP_Length
 
     // MARK: - Init
