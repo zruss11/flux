@@ -1,37 +1,89 @@
 #!/usr/bin/env bash
-# Usage: bin/get-pr-comments PR_NUMBER
-# Lists all unresolved PR review threads with their thread IDs and summaries.
 set -euo pipefail
 
-PR_NUMBER="${1:?Usage: bin/get-pr-comments PR_NUMBER}"
-REPO="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+if [[ "${1:-}" == "" ]]; then
+  echo "usage: bin/get-pr-comments PR_NUMBER" >&2
+  exit 2
+fi
 
-# Use GraphQL to get review threads with resolution status
-gh api graphql -f query='
-query($owner: String!, $repo: String!, $pr: Int!) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $pr) {
-      reviewThreads(first: 100) {
+pr_number="$1"
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "error: gh CLI not found" >&2
+  exit 1
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "error: jq not found (required)" >&2
+  exit 1
+fi
+
+name_with_owner="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
+owner="${name_with_owner%/*}"
+name="${name_with_owner#*/}"
+
+query='
+query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      url
+      title
+      headRefName
+      baseRefName
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           id
           isResolved
           isOutdated
           path
           line
-          comments(first: 1) {
+          startLine
+          comments(first: 50) {
             nodes {
+              id
+              author { login }
               body
+              createdAt
             }
           }
         }
       }
     }
   }
-}' -f owner="${REPO%%/*}" -f repo="${REPO##*/}" -F pr="$PR_NUMBER" \
-  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | {
-    thread_id: .id,
-    path: .path,
-    line: .line,
-    outdated: .isOutdated,
-    body: (.comments.nodes[0].body | split("\n")[0:3] | join(" | "))
-  }'
+}
+'
+
+threads='[]'
+cursor="null"
+
+while :; do
+  if [[ "$cursor" == "null" ]]; then
+    resp="$(gh api graphql -f query="$query" -F owner="$owner" -F name="$name" -F number="$pr_number")"
+  else
+    resp="$(gh api graphql -f query="$query" -F owner="$owner" -F name="$name" -F number="$pr_number" -F cursor="$cursor")"
+  fi
+
+  pr_json="$(jq -c '.data.repository.pullRequest | {number,url,title,headRefName,baseRefName}' <<<"$resp")"
+  page="$(jq -c '.data.repository.pullRequest.reviewThreads' <<<"$resp")"
+  nodes="$(jq -c '.nodes' <<<"$page")"
+  # Concatenate arrays while keeping everything as real JSON (not strings).
+  threads="$(jq -cs '.[0] + .[1]' <(printf '%s\n' "$threads") <(printf '%s\n' "$nodes"))"
+
+  has_next="$(jq -r '.pageInfo.hasNextPage' <<<"$page")"
+  if [[ "$has_next" != "true" ]]; then
+    break
+  fi
+
+  cursor="$(jq -r '.pageInfo.endCursor' <<<"$page")"
+  if [[ "$cursor" == "null" || "$cursor" == "" ]]; then
+    break
+  fi
+done
+
+# Emit a single JSON object so downstream tooling can `jq` it easily.
+jq -n \
+  --argjson pr "$pr_json" \
+  --argjson threads "$threads" \
+  '{ pr: $pr, threads: $threads }'

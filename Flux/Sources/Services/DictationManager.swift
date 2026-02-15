@@ -203,8 +203,10 @@ final class DictationManager {
                 }
             }
 
+            let preferredMode = STTProvider.selected.preferredVoiceInputMode
+
             let started = await input.startRecording(
-                mode: .batchOnDevice,
+                mode: preferredMode,
                 onComplete: { [weak self] transcript in
                     self?.handleTranscript(transcript, attemptId: attemptId)
                 },

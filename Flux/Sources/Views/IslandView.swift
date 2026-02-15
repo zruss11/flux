@@ -923,6 +923,8 @@ struct IslandSettingsView: View {
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
     @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
+    @AppStorage(STTSettings.providerKey) private var sttProviderRaw = STTProvider.appleOnDevice.rawValue
+    @State private var deepgramAPIKey = STTSettings.deepgramKey
     @AppStorage(SessionContextManager.inAppContextTrackingEnabledKey) private var inAppContextTrackingEnabled = true
     @AppStorage("ciTickerDuration") private var ciTickerDuration: Double = 6.0
 
@@ -965,6 +967,7 @@ struct IslandSettingsView: View {
 
     private enum EditingField: Hashable {
         case apiKey
+        case deepgramAPIKey
         case linearToken
     }
 
@@ -1122,6 +1125,66 @@ struct IslandSettingsView: View {
                     }
                 )
 
+
+                settingsRow(
+                    icon: "mic.badge.plus",
+                    label: "STT Provider",
+                    trailing: {
+                        AnyView(
+                            Menu {
+                                ForEach(STTProvider.allCases) { provider in
+                                    Button(provider.displayName) {
+                                        sttProviderRaw = provider.rawValue
+                                    }
+                                }
+                            } label: {
+                                Text((STTProvider(rawValue: sttProviderRaw) ?? .appleOnDevice).displayName)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.75))
+                            }
+                            .menuStyle(.borderlessButton)
+                        )
+                    }
+                )
+
+                if editingField == .deepgramAPIKey {
+                    editableRow(icon: "key.horizontal.fill", label: "Deepgram API Key") {
+                        SecureField("...", text: $deepgramAPIKey)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onChange(of: deepgramAPIKey) { _, newValue in
+                                STTSettings.setDeepgramKey(newValue)
+                            }
+                            .onSubmit { editingField = nil }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        editingField = nil
+                    }
+                } else {
+                    settingsRow(
+                        icon: "key.horizontal.fill",
+                        label: "Deepgram API Key",
+                        trailing: {
+                            AnyView(
+                                Text(deepgramAPIKey.isEmpty ? "Not set" : "••••\(deepgramAPIKey.suffix(4))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(deepgramAPIKey.isEmpty ? .red.opacity(0.8) : .green.opacity(0.8))
+                            )
+                        }
+                    )
+                    .onTapGesture {
+                        editingField = .deepgramAPIKey
+                    }
+                }
+
+                divider
                 settingsRow(
                     icon: "desktopcomputer",
                     label: "Capture in-app context",

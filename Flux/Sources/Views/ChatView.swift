@@ -193,7 +193,9 @@ struct ChatView: View {
                                     inputText = TranscriptPostProcessor.process(transcript)
                                     sendMessage()
                                 }
-                                if !started && SFSpeechRecognizer.authorizationStatus() != .authorized {
+                                if !started,
+                                   STTProvider.selected != .deepgram,
+                                   SFSpeechRecognizer.authorizationStatus() != .authorized {
                                     showSpeechPermissionAlert = true
                                 }
                             }
