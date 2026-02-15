@@ -455,8 +455,6 @@ function sanitizeAppInstruction(instruction: string | undefined): string | undef
 const DANGEROUS_COMMAND_PATTERN = new RegExp(
   [
     String.raw`\brm\b`,
-    String.raw`\brm\s+-rf\b`,
-    String.raw`\brm\s+-fr\b`,
     String.raw`\bsudo\s+rm\b`,
     String.raw`\bgit\s+reset\s+--hard\b`,
     String.raw`\bgit\s+clean\s+-f(?:d|x|dx|fd|fdx)?\b`,
