@@ -210,6 +210,7 @@ final class DictationManager {
             }
 
             let selectedEngine = self.selectedDictationEngine()
+            var startFailureReason: String?
             let started = await input.startRecording(
                 mode: selectedEngine,
                 onComplete: { [weak self] transcript in
