@@ -1,46 +1,105 @@
 import Foundation
+import os
 
 struct DictionaryCorrector {
+
+    /// Cached compiled regex and replacement map to avoid expensive recompilation.
+    /// Uses only the semantic content (text + aliases) as the cache key, so metadata
+    /// changes like `updatedAt` don't needlessly invalidate the cache.
+    ///
+    /// This is a single static cache designed for the app's one global dictionary.
+    /// If multiple dictionary sets were used concurrently, they would thrash this cache.
+    @MainActor
+    private static var cache: (key: [[String]], regex: NSRegularExpression, replacements: [String: String])?
 
     @MainActor
     static func apply(_ text: String, using entries: [DictionaryEntry]) -> String {
         guard !text.isEmpty, !entries.isEmpty else { return text }
 
-        var result = text
+        let regex: NSRegularExpression
+        let replacementsMap: [String: String]
 
-        let pairs = entries.flatMap { entry -> [(alias: String, replacement: String)] in
-            var matches = [entry.text]
-            matches.append(contentsOf: entry.aliases)
+        // Build a semantic cache key from only text + aliases (ignores id, dates, etc.)
+        let cacheKey = entries.map { [$0.text] + $0.aliases }
 
+        // Check if cache is valid (semantic content matches)
+        if let cached = cache, cached.key == cacheKey {
+            regex = cached.regex
+            replacementsMap = cached.replacements
+        } else {
+            // Rebuild cache
+            // 1. Flatten entries to pairs (alias -> replacement)
+            var pairs: [(alias: String, replacement: String)] = []
+            for entry in entries {
+                // Include the entry text itself as an alias to correct casing
+                let allAliases = [entry.text] + entry.aliases
+                for alias in allAliases {
+                    pairs.append((alias: alias, replacement: entry.text))
+                }
+            }
+
+            // 2. Sort pairs by alias length descending (longest match wins in regex alternation)
+            pairs.sort { $0.alias.count > $1.alias.count }
+
+            // 3. Deduplicate aliases and build replacement map
+            // Use lowercased alias as key because regex is case-insensitive.
+            // Since pairs are sorted by length, and we iterate in order, this preserves priority if needed.
+            // However, for identical aliases (same string), we only need one entry.
+            var map: [String: String] = [:]
+            var uniqueAliases: [String] = []
             var seen = Set<String>()
-            return matches.compactMap { match in
-                guard seen.insert(match).inserted else { return nil }
-                return (alias: match, replacement: entry.text)
+
+            for pair in pairs {
+                let trimmed = pair.alias.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                let key = pair.alias.lowercased()
+                if !seen.contains(key) {
+                    seen.insert(key)
+                    uniqueAliases.append(pair.alias)
+                    map[key] = pair.replacement
+                }
+            }
+
+            guard !uniqueAliases.isEmpty else { return text }
+
+            // 4. Construct a single regex pattern
+            // Pattern: (?<!\w)(?:escapedAlias1|escapedAlias2|...)(?!\w)
+            let pattern = uniqueAliases.map { NSRegularExpression.escapedPattern(for: $0) }
+                .joined(separator: "|")
+            let fullPattern = "(?<!\\w)(?:\(pattern))(?!\\w)"
+
+            do {
+                regex = try NSRegularExpression(pattern: fullPattern, options: .caseInsensitive)
+                replacementsMap = map
+                cache = (cacheKey, regex, map)
+            } catch {
+                Log.app.error("Failed to compile regex for dictionary: \(error)")
+                cache = nil
+                return text
             }
         }
-        .sorted { $0.alias.count > $1.alias.count }
 
-        // Collect all matches against the original text to prevent cascading rewrites.
+        var result = text
+        let nsRange = NSRange(result.startIndex..., in: result)
+        let matches = regex.matches(in: result, range: nsRange)
+
         var replacements: [(range: Range<String.Index>, replacement: String)] = []
 
-        for pair in pairs {
-            let escaped = NSRegularExpression.escapedPattern(for: pair.alias)
-            let pattern = "(?<!\\w)\(escaped)(?!\\w)"
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
-                continue
-            }
-            let nsRange = NSRange(result.startIndex..., in: result)
-            for match in regex.matches(in: result, range: nsRange) {
-                guard let swiftRange = Range(match.range, in: result) else { continue }
-                let overlaps = replacements.contains { $0.range.overlaps(swiftRange) }
-                if !overlaps {
-                    replacements.append((range: swiftRange, replacement: pair.replacement))
+        for match in matches {
+            guard let range = Range(match.range, in: result) else { continue }
+            let matchedString = String(result[range])
+
+            // Look up replacement using lowercased match
+            if let replacement = replacementsMap[matchedString.lowercased()] {
+                // Only replace if the text is actually different (e.g. casing correction)
+                if matchedString != replacement {
+                    replacements.append((range: range, replacement: replacement))
                 }
             }
         }
 
         // Apply from back to front so earlier indices stay valid.
-        for rep in replacements.sorted(by: { $0.range.lowerBound > $1.range.lowerBound }) {
+        for rep in replacements.reversed() {
             result.replaceSubrange(rep.range, with: rep.replacement)
         }
 

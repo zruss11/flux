@@ -29,9 +29,15 @@ struct HasPendingAttachmentsKey: PreferenceKey {
 }
 
 struct ChatView: View {
+    private struct ForkContext {
+        let sourceConversationId: UUID
+        let sourceTitle: String
+    }
+
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
+    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.apple.rawValue
     @State private var inputText = ""
     @State private var voiceInput = VoiceInput()
     @State private var showSkills = false
@@ -48,16 +54,24 @@ struct ChatView: View {
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
     @State private var showSpeechPermissionAlert = false
+    @State private var sttFailureMessage: String?
     @State private var worktreeEnabled = false
     @State private var showBranchPicker = false
     @State private var availableBranches: [String] = []
     @State private var branchCheckoutErrorMessage: String?
     @State private var imageImportErrorMessage: String?
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
+    @State private var forkBannerVisible = false
+    @State private var forkBannerDismissTask: Task<Void, Never>?
+    @State private var pendingForkContexts: [UUID: ForkContext] = [:]
 
     private let maxAttachmentBytes = 10 * 1024 * 1024
 
     private let shareScreenFileName = "__flux_screenshot.jpg"
+
+    private var speechInputProvider: SpeechInputProvider {
+        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .apple
+    }
 
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImageAttachments.isEmpty
@@ -94,7 +108,11 @@ struct ChatView: View {
                                     case .userMessage(let message):
                                         MessageBubble(message: message)
                                     case .assistantText(let message):
-                                        MessageBubble(message: message)
+                                        if message.role == .system {
+                                            ForkIndicatorView(content: message.content)
+                                        } else {
+                                            MessageBubble(message: message)
+                                        }
                                     case .toolCallGroup(_, let calls):
                                         ToolCallGroupView(calls: calls)
                                     case .permissionRequest(let req):
@@ -138,6 +156,16 @@ struct ChatView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
+                .overlay(alignment: .top) {
+                    if forkBannerVisible {
+                        ForkSuccessBanner()
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .opacity
+                            ))
+                            .padding(.top, 8)
+                    }
+                }
                 .onChange(of: conversationStore.scrollRevision) { _, _ in
                     guard conversationStore.lastScrollConversationId == conversationStore.activeConversationId,
                           let conversation = conversationStore.activeConversation,
@@ -175,11 +203,20 @@ struct ChatView: View {
                                     showMicPermissionAlert = true
                                     return
                                 }
-                                let started = await voiceInput.startRecording(mode: .live) { transcript in
-                                    inputText = DictionaryCorrector.apply(transcript, using: CustomDictionaryStore.shared.entries)
-                                    sendMessage()
-                                }
-                                if !started && SFSpeechRecognizer.authorizationStatus() != .authorized {
+                                let started = await voiceInput.startRecording(
+                                    mode: .live,
+                                    provider: speechInputProvider,
+                                    onComplete: { transcript in
+                                        inputText = TranscriptPostProcessor.process(transcript)
+                                        sendMessage()
+                                    },
+                                    onFailure: { reason in
+                                        if !reason.isEmpty {
+                                            sttFailureMessage = reason
+                                        }
+                                    }
+                                )
+                                if !started && speechInputProvider != .deepgram && SFSpeechRecognizer.authorizationStatus() != .authorized {
                                     showSpeechPermissionAlert = true
                                 }
                             }
@@ -286,7 +323,8 @@ struct ChatView: View {
             }
 
             // Workspace folder picker + Skills pill on the same line
-            HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
                 Button {
                     NotificationCenter.default.post(name: .islandOpenFolderPickerRequested, object: nil)
                 } label: {
@@ -330,7 +368,6 @@ struct ChatView: View {
                                 .foregroundStyle(.white.opacity(0.7))
                                 .lineLimit(1)
                         }
-                        .fixedSize()
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(
@@ -420,6 +457,35 @@ struct ChatView: View {
                             showWatcherAlertsChip = false
                         }
                     )
+
+                // Fork conversation pill
+                if conversationStore.activeConversationId != nil,
+                   !(conversationStore.activeConversation?.messages.isEmpty ?? true) {
+                    Button {
+                        forkCurrentConversation()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "rectangle.on.rectangle")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.6))
+                            Text("Fork")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(1)
+                        }
+                        .fixedSize()
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.06))
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 SkillsPillButton(isPresented: $showSkills)
@@ -464,6 +530,7 @@ struct ChatView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                }
             }
             .padding(.top, 8)
             .padding(.bottom, 12)
@@ -553,6 +620,15 @@ struct ChatView: View {
                 isInputFocused = true
             }
             GitBranchMonitor.shared.monitor(workspacePath: conversationStore.workspacePath)
+            agentBridge.onForkConversationResult = { conversationId, success, _ in
+                guard let uuid = UUID(uuidString: conversationId) else { return }
+                Task { @MainActor in
+                    handleForkConversationResult(conversationId: uuid, success: success)
+                }
+            }
+        }
+        .onDisappear {
+            forkBannerDismissTask?.cancel()
         }
         .onChange(of: conversationStore.workspacePath) { _, newPath in
             GitBranchMonitor.shared.monitor(workspacePath: newPath)
@@ -608,6 +684,20 @@ struct ChatView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Flux needs Speech Recognition access for on-device transcription. Please enable it in System Settings > Privacy & Security > Speech Recognition.")
+        }
+        .alert("Speech Input Error", isPresented: Binding(
+            get: { sttFailureMessage != nil },
+            set: { shown in
+                if !shown {
+                    sttFailureMessage = nil
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) {
+                sttFailureMessage = nil
+            }
+        } message: {
+            Text(sttFailureMessage ?? "Unable to start speech input.")
         }
         .alert("Image Import Failed", isPresented: Binding(
             get: { imageImportErrorMessage != nil },
@@ -702,6 +792,55 @@ struct ChatView: View {
         inputText = ""
         selectedSkillDirNames.removeAll()
         pendingImageAttachments.removeAll()
+    }
+
+    private func forkCurrentConversation() {
+        guard let sourceId = conversationStore.activeConversationId else { return }
+        forkBannerDismissTask?.cancel()
+        forkBannerVisible = false
+        let sourceTitle = conversationStore.summaries.first(where: { $0.id == sourceId })?.title ?? "Chat"
+        guard let newId = conversationStore.forkConversation(id: sourceId) else { return }
+        pendingForkContexts[newId] = ForkContext(
+            sourceConversationId: sourceId,
+            sourceTitle: sourceTitle
+        )
+
+        agentBridge.sendForkConversation(
+            sourceConversationId: sourceId.uuidString,
+            newConversationId: newId.uuidString
+        )
+    }
+
+    private func handleForkConversationResult(conversationId: UUID, success: Bool) {
+        guard let context = pendingForkContexts.removeValue(forKey: conversationId) else { return }
+
+        guard success else {
+            forkBannerDismissTask?.cancel()
+            forkBannerVisible = false
+            conversationStore.deleteConversation(id: conversationId)
+            if conversationStore.activeConversationId == conversationId {
+                conversationStore.openConversation(id: context.sourceConversationId)
+            }
+            return
+        }
+
+        conversationStore.addMessage(
+            to: conversationId,
+            role: .system,
+            content: "Forked from \"\(context.sourceTitle)\""
+        )
+
+        forkBannerDismissTask?.cancel()
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+            forkBannerVisible = true
+        }
+        forkBannerDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) {
+                forkBannerVisible = false
+            }
+        }
     }
 
     private func insertSkillToken(_ directoryName: String) {
@@ -904,5 +1043,61 @@ private extension MessageImageAttachment {
 
     var chatPayload: ChatImagePayload {
         ChatImagePayload(fileName: fileName, mediaType: mediaType, data: base64Data)
+    }
+}
+
+// MARK: - Fork UI Components
+
+/// Animated toast banner that slides in from the top when a conversation is forked.
+private struct ForkSuccessBanner: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.green)
+            Text("Conversation forked successfully")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.12))
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.green.opacity(0.3), lineWidth: 1)
+                )
+        )
+        .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+    }
+}
+
+/// Inline indicator shown in the conversation history at the fork point.
+private struct ForkIndicatorView: View {
+    let content: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 1)
+
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                Text(content)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+            }
+            .fixedSize()
+
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 6)
     }
 }

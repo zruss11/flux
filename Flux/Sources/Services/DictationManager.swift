@@ -23,6 +23,12 @@ final class DictationManager {
     /// to transform selected text rather than plain transcription.
     private(set) var isEditMode = false
 
+    /// Live transcript text updated in real-time during dictation.
+    /// Returns empty string when not dictating.
+    var liveTranscript: String {
+        voiceInput?.transcript ?? ""
+    }
+
     let historyStore = DictationHistoryStore()
 
     // MARK: - Private Properties
@@ -203,12 +209,15 @@ final class DictationManager {
                 }
             }
 
+            let selectedEngine = self.selectedDictationEngine()
+            var startFailureReason: String?
             let started = await input.startRecording(
-                mode: .batchOnDevice,
+                mode: selectedEngine,
                 onComplete: { [weak self] transcript in
                     self?.handleTranscript(transcript, attemptId: attemptId)
                 },
                 onFailure: { [weak self] reason in
+                    startFailureReason = reason
                     self?.handleRecordingFailure(reason, attemptId: attemptId, recordHistory: true)
                 }
             )
@@ -222,11 +231,13 @@ final class DictationManager {
             }
 
             guard started else {
-                self.handleRecordingFailure(
-                    "Unable to start dictation recording.",
-                    attemptId: attemptId,
-                    recordHistory: true
-                )
+                if startFailureReason == nil {
+                    self.handleRecordingFailure(
+                        "Unable to start dictation recording.",
+                        attemptId: attemptId,
+                        recordHistory: true
+                    )
+                }
                 return
             }
 
@@ -302,10 +313,9 @@ final class DictationManager {
 
         let duration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
 
-        // Filler word cleaning (defaults to enabled).
-        let cleanFillers = UserDefaults.standard.object(forKey: "dictationAutoCleanFillers") as? Bool ?? true
-        let cleanedText = cleanFillers ? FillerWordCleaner.clean(rawTranscript) : rawTranscript
-
+        // Run the full post-processing pipeline (filler removal, fragment repair,
+        // intent correction, number conversion, dictionary corrections).
+        let cleanedText = TranscriptPostProcessor.process(rawTranscript)
         // ── Edit mode: transform the selected text using the voice command ──
         if isEditMode, let selectedText = editModeSelectedText {
             Task { @MainActor [weak self] in
@@ -352,8 +362,8 @@ final class DictationManager {
         Task { @MainActor [weak self] in
             guard let self, self.isAttemptActive(attemptId) else { return }
 
-            // Apply custom dictionary corrections.
-            let correctedText = DictionaryCorrector.apply(cleanedText, using: CustomDictionaryStore.shared.entries)
+            // Pipeline already applied all corrections including dictionary.
+            let correctedText = cleanedText
 
             var enhancedText: String?
             var enhancementMethod: DictationEntry.EnhancementMethod = .none
@@ -685,5 +695,18 @@ final class DictationManager {
     private nonisolated static func isHotkeyHeldGlobally() -> Bool {
         let flags = CGEventSource.flagsState(.combinedSessionState)
         return flags.contains(.maskCommand) && flags.contains(.maskAlternate)
+    }
+
+    // MARK: - Engine Selection
+
+    /// Read the user's preferred dictation engine from UserDefaults.
+    private func selectedDictationEngine() -> VoiceInputMode {
+        let engine = UserDefaults.standard.string(forKey: "dictationEngine") ?? "apple"
+        switch engine {
+        case "parakeet":
+            return .parakeetOnDevice
+        default:
+            return .live
+        }
     }
 }

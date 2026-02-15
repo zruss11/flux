@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:flux}/Flux",
+      "name": "Debug Flux (Flux)",
+      "target": "Flux",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Flux (Flux)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:flux}/Flux",
+      "name": "Release Flux (Flux)",
+      "target": "Flux",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Flux (Flux)"
+    }
+  ]
+}

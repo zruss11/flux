@@ -85,7 +85,7 @@ struct CustomWatcherProvider: WatcherProvider {
             alerts: alerts,
             nextState: [
                 "lastBodyDigest": currentDigest,
-                "lastBodySnippet": responseBody?.prefix(2000).description ?? "",
+                "lastBodySnippet": responseBody.map { String($0.prefix(2000)) } ?? "",
                 "lastCheckAt": "\(Int(Date().timeIntervalSince1970))",
             ]
         )
@@ -165,7 +165,7 @@ struct CustomWatcherProvider: WatcherProvider {
 
     private func stableDigest(_ input: String) -> String {
         let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined().prefix(16).description
+        return String(digest.map { String(format: "%02x", $0) }.joined().prefix(16))
     }
 
     private func errorBucketKey(for config: Watcher) -> Int {

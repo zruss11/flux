@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Usage: bin/resolve-pr-thread THREAD_ID
+# Resolves a single PR review thread by its GraphQL node ID.
+set -euo pipefail
+
+THREAD_ID="${1:?Usage: bin/resolve-pr-thread THREAD_ID}"
+
+gh api graphql -f query='
+mutation($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) {
+    thread {
+      id
+      isResolved
+    }
+  }
+}' -f threadId="$THREAD_ID" --jq '.data.resolveReviewThread.thread | "Thread \(.id): resolved=\(.isResolved)"'
