@@ -23,6 +23,12 @@ final class DictationManager {
     /// to transform selected text rather than plain transcription.
     private(set) var isEditMode = false
 
+    /// Live transcript text updated in real-time during dictation.
+    /// Returns empty string when not dictating.
+    var liveTranscript: String {
+        voiceInput?.transcript ?? ""
+    }
+
     let historyStore = DictationHistoryStore()
 
     // MARK: - Private Properties
@@ -204,12 +210,14 @@ final class DictationManager {
             }
 
             let selectedEngine = self.selectedDictationEngine()
+            var startFailureReason: String?
             let started = await input.startRecording(
                 mode: selectedEngine,
                 onComplete: { [weak self] transcript in
                     self?.handleTranscript(transcript, attemptId: attemptId)
                 },
                 onFailure: { [weak self] reason in
+                    startFailureReason = reason
                     self?.handleRecordingFailure(reason, attemptId: attemptId, recordHistory: true)
                 }
             )
@@ -223,11 +231,13 @@ final class DictationManager {
             }
 
             guard started else {
-                self.handleRecordingFailure(
-                    "Unable to start dictation recording.",
-                    attemptId: attemptId,
-                    recordHistory: true
-                )
+                if startFailureReason == nil {
+                    self.handleRecordingFailure(
+                        "Unable to start dictation recording.",
+                        attemptId: attemptId,
+                        recordHistory: true
+                    )
+                }
                 return
             }
 
@@ -696,7 +706,7 @@ final class DictationManager {
         case "parakeet":
             return .parakeetOnDevice
         default:
-            return .batchOnDevice
+            return .live
         }
     }
 }

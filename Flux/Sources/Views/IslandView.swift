@@ -39,6 +39,11 @@ struct IslandView: View {
     @State private var hasPendingAttachments = false
     @State private var closedIndicatorsLatched = false
     @State private var clearClosedIndicatorsWorkItem: DispatchWorkItem?
+    
+    /// Debug mode: force show live transcript dropdown with mock text
+    @State private var debugShowLiveTranscript = false
+    @State private var debugMockTranscript = "This is a sample live transcript that grows as you speak more text into the microphone during dictation mode."
+    @State private var debugTranscriptTimer: Timer?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -300,11 +305,27 @@ struct IslandView: View {
                 .offset(y: currentHeight + hoverHeightBoost - 2 + (hasNotch ? 0 : windowManager.topOffset))
                 .allowsHitTesting(false)
             }
+
+            // Live transcript dropdown — shows real-time dictation text.
+            let showLiveTranscript = (!isExpanded && DictationManager.shared.isDictating && !DictationManager.shared.liveTranscript.isEmpty)
+                || (debugShowLiveTranscript && !isExpanded)
+            if showLiveTranscript {
+                LiveTranscriptDropdownView(
+                    transcript: debugShowLiveTranscript ? debugMockTranscript : DictationManager.shared.liveTranscript,
+                    containerWidth: currentWidth + hoverWidthBoost,
+                    cornerRadius: bottomRadius
+                )
+                .id("liveTranscript")
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                .offset(y: currentHeight + hoverHeightBoost - 2 + (hasNotch ? 0 : windowManager.topOffset))
+                .allowsHitTesting(false)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingClipboardNotification)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingDictationNotification)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: windowManager.showingTickerNotification)
+        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: DictationManager.shared.liveTranscript)
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 clearClosedIndicatorsWorkItem?.cancel()
@@ -483,6 +504,45 @@ struct IslandView: View {
             }
             .frame(width: closedRightSlotWidth, height: closedHeight)
             .offset(x: 6)
+
+            // Debug button for testing live transcript dropdown (only in DEBUG builds)
+            #if DEBUG
+            Button {
+                debugShowLiveTranscript.toggle()
+                if debugShowLiveTranscript {
+                    // Simulate growing transcript
+                    var counter = 0
+                    debugTranscriptTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+                        counter += 1
+                        let additions = [
+                            "Hello",
+                            " this is a test",
+                            " of the live transcript feature.",
+                            " As you speak,",
+                            " the text box grows",
+                            " to show more content",
+                            " in real-time.",
+                            " It's like magic!"
+                        ]
+                        if counter <= additions.count {
+                            debugMockTranscript += additions[counter - 1]
+                        } else {
+                            timer.invalidate()
+                        }
+                    }
+                } else {
+                    debugTranscriptTimer?.invalidate()
+                    debugTranscriptTimer = nil
+                }
+            } label: {
+                Image(systemName: debugShowLiveTranscript ? "text.bubble.fill" : "text.bubble")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .offset(x: -8)
+            #endif
         }
         .frame(width: closedWidth, height: closedHeight)
         .frame(maxWidth: .infinity, alignment: .top)
@@ -919,6 +979,8 @@ struct IslandSettingsView: View {
     @AppStorage("anthropicApiKey") private var apiKey = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("githubWatchedRepos") private var githubWatchedRepos = ""
+    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.apple.rawValue
+    @AppStorage(SpeechInputSettings.deepgramApiKeyStorageKey) private var deepgramApiKey = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
     @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
@@ -966,6 +1028,7 @@ struct IslandSettingsView: View {
     private enum EditingField: Hashable {
         case apiKey
         case linearToken
+        case deepgramApiKey
     }
 
     private enum InlineAutomationEditorMode: Equatable {
@@ -998,6 +1061,14 @@ struct IslandSettingsView: View {
             return development.path
         }
         return home.path
+    }
+
+    private var speechInputProvider: SpeechInputProvider {
+        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .apple
+    }
+
+    private var deepgramApiKeyConfigured: Bool {
+        !deepgramApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -1067,6 +1138,81 @@ struct IslandSettingsView: View {
                         )
                     }
                 )
+
+                divider
+
+                settingsRow(
+                    icon: "waveform",
+                    label: "Speech input",
+                    trailing: {
+                        AnyView(
+                            HStack(spacing: 8) {
+                                Menu {
+                                    ForEach(SpeechInputProvider.allCases) { provider in
+                                        Button(provider.displayName) {
+                                            speechInputProviderRaw = provider.rawValue
+                                        }
+                                    }
+                                } label: {
+                                    Text(speechInputProvider.displayName)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(
+                                            speechInputProvider == .deepgram && !deepgramApiKeyConfigured
+                                                ? .orange.opacity(0.9)
+                                                : .white.opacity(0.75)
+                                        )
+                                }
+                                .menuStyle(.borderlessButton)
+
+                                if speechInputProvider == .deepgram && !deepgramApiKeyConfigured {
+                                    Image(systemName: "exclamationmark.triangle")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(.orange)
+                                        .help("Deepgram selected but API key is missing")
+                                }
+
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.35))
+                                    .help("Choose Apple on-device transcription or Deepgram live streaming.")
+                            }
+                        )
+                    }
+                )
+
+                if editingField == .deepgramApiKey {
+                    editableRow(icon: "key.fill", label: "Deepgram API Key") {
+                        SecureField("Insert Deepgram API key", text: $deepgramApiKey)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onSubmit { editingField = nil }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        editingField = nil
+                    }
+                } else {
+                    settingsRow(
+                        icon: "key.fill",
+                        label: "Deepgram API Key",
+                        trailing: {
+                            AnyView(
+                                Text(deepgramApiKey.isEmpty ? "Not set" : "••••\(deepgramApiKey.suffix(4))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(deepgramApiKey.isEmpty ? .red.opacity(0.8) : .green.opacity(0.8))
+                            )
+                        }
+                    )
+                    .onTapGesture {
+                        editingField = .deepgramApiKey
+                    }
+                }
 
                 divider
 
