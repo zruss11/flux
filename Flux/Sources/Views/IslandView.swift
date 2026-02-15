@@ -29,6 +29,7 @@ struct IslandView: View {
     @Bindable var conversationStore: ConversationStore
     @Bindable var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
+    var voiceInput: VoiceInput
     var notchSize: CGSize
     @ObservedObject var windowManager: IslandWindowManager
 
@@ -466,6 +467,10 @@ struct IslandView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 22, height: 22)
+                } else if WakeWordDetector.shared.isEnabled {
+                    Circle()
+                        .fill(.green.opacity(0.6))
+                        .frame(width: 6, height: 6)
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
@@ -661,7 +666,12 @@ struct IslandView: View {
             Group {
                 switch contentType {
                 case .chat:
-                    ChatView(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture)
+                    ChatView(
+                        conversationStore: conversationStore,
+                        agentBridge: agentBridge,
+                        screenCapture: screenCapture,
+                        voiceInput: voiceInput
+                    )
                 case .settings:
                     IslandSettingsView(conversationStore: conversationStore, agentBridge: agentBridge)
                 case .history:

@@ -27,6 +27,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let toolRunner = ToolRunner()
     private let automationService = AutomationService.shared
     private let dictationManager = DictationManager.shared
+    private let wakeWordDetector = WakeWordDetector.shared
+    private let voiceInput = VoiceInput()
     private let clipboardMonitor = ClipboardMonitor.shared
     private let watcherService = WatcherService.shared
     private let watcherAlertsConversationId = UUID(uuidString: "5F9E3C52-8A47-4F9D-9C39-CFFB2E7F2A11")!
@@ -130,7 +132,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         IslandWindowManager.shared.showIsland(
             conversationStore: conversationStore,
             agentBridge: agentBridge,
-            screenCapture: screenCapture
+            screenCapture: screenCapture,
+            voiceInput: voiceInput
         )
 
         dictationManager.start(accessibilityReader: accessibilityReader)
@@ -159,6 +162,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
+        setupHandsFreeObserver()
+
+        // Auto-start hands-free if previously enabled.
+        if UserDefaults.standard.bool(forKey: "handsFreeEnabled") {
+            startWakeWordDetector()
+        }
+
         // Auto-start tour on first launch after permissions are granted
         if !UserDefaults.standard.bool(forKey: "hasCompletedTour") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -178,6 +188,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
         dictationManager.stop()
+        wakeWordDetector.stop()
         AppMonitor.shared.stop()
         SessionContextManager.shared.stop()
         clipboardMonitor.stop()
@@ -227,7 +238,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             IslandWindowManager.shared.showIsland(
                 conversationStore: conversationStore,
                 agentBridge: agentBridge,
-                screenCapture: screenCapture
+                screenCapture: screenCapture,
+                voiceInput: voiceInput
             )
         }
 
@@ -293,7 +305,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             IslandWindowManager.shared.showIsland(
                 conversationStore: conversationStore,
                 agentBridge: agentBridge,
-                screenCapture: screenCapture
+                screenCapture: screenCapture,
+                voiceInput: voiceInput
             )
         }
 
@@ -317,12 +330,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if IslandWindowManager.shared.isShown {
             IslandWindowManager.shared.hideIsland()
         } else {
-            IslandWindowManager.shared.showIsland(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture)
+            IslandWindowManager.shared.showIsland(conversationStore: conversationStore, agentBridge: agentBridge, screenCapture: screenCapture, voiceInput: voiceInput)
         }
     }
 
     @objc private func quitFromMenu() {
         NSApp.terminate(nil)
+    }
+
+    private func setupHandsFreeObserver() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleHandsFreeConfigChanged),
+            name: .handsFreeConfigDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func handleHandsFreeConfigChanged() {
+        if UserDefaults.standard.bool(forKey: "handsFreeEnabled") {
+            if !wakeWordDetector.isEnabled {
+                startWakeWordDetector()
+            }
+        } else {
+            wakeWordDetector.stop()
+        }
+    }
+
+    private func startWakeWordDetector() {
+        wakeWordDetector.start(
+            voiceInput: voiceInput,
+            conversationStore: conversationStore,
+            agentBridge: agentBridge
+        )
     }
 
     private func setupBridgeCallbacks() {

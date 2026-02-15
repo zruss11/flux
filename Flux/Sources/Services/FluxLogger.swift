@@ -53,4 +53,7 @@ enum Log {
 
     /// UI-layer diagnostics
     static let ui = Logger(subsystem: subsystem, category: "ui")
+
+    /// Wake word detection and hands-free mode
+    static let wakeWord = Logger(subsystem: subsystem, category: "wakeWord")
 }

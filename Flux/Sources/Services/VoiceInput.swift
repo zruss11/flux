@@ -54,6 +54,10 @@ final class VoiceInput {
     var transcript = ""
     var audioLevelMeter: AudioLevelMeter?
 
+    /// Called when recording starts (`true`) or stops (`false`), for coordination
+    /// with `WakeWordDetector` and other consumers.
+    var onRecordingStateChanged: ((Bool) -> Void)?
+
     private var audioEngine: AVAudioEngine?
     private var onComplete: ((String) -> Void)?
     private var onFailure: ((String) -> Void)?
@@ -234,6 +238,7 @@ final class VoiceInput {
 
             IslandWindowManager.shared.suppressDeactivationCollapse = true
             isRecording = true
+            onRecordingStateChanged?(true)
             transcript = ""
             return true
         } catch {
@@ -292,6 +297,7 @@ final class VoiceInput {
             try engine.start()
             IslandWindowManager.shared.suppressDeactivationCollapse = true
             isRecording = true
+            onRecordingStateChanged?(true)
             transcript = ""
             return true
         } catch {
@@ -313,6 +319,7 @@ final class VoiceInput {
         let hadTap = tapInstalled
 
         isRecording = false
+        onRecordingStateChanged?(false)
         IslandWindowManager.shared.suppressDeactivationCollapse = false
 
         let callback = onComplete
@@ -353,6 +360,7 @@ final class VoiceInput {
         tapInstalled = false
         audioEngine = nil
         isRecording = false
+        onRecordingStateChanged?(false)
         recordingMode = .live
         IslandWindowManager.shared.suppressDeactivationCollapse = false
 
@@ -547,6 +555,7 @@ final class VoiceInput {
         audioEngine?.stop()
         audioEngine = nil
         isRecording = false
+        onRecordingStateChanged?(false)
         transcript = ""
         recordingMode = .live
         pcmAccumulator.reset()

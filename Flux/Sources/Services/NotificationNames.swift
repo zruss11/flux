@@ -14,6 +14,7 @@ extension Notification.Name {
     static let islandOpenImagePickerRequested = Notification.Name("islandOpenImagePickerRequested")
     static let islandImageFilesSelected = Notification.Name("islandImageFilesSelected")
     static let islandStartTourRequested = Notification.Name("islandStartTourRequested")
+    static let handsFreeConfigDidChange = Notification.Name("handsFreeConfigDidChange")
 }
 
 extension NotificationPayloadKey {

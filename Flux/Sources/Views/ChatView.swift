@@ -37,8 +37,8 @@ struct ChatView: View {
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
+    @Bindable var voiceInput: VoiceInput
     @State private var inputText = ""
-    @State private var voiceInput = VoiceInput()
     @State private var showSkills = false
     @State private var dollarTriggerActive = false
     @State private var selectedSkillDirNames: Set<String> = []
@@ -199,10 +199,19 @@ struct ChatView: View {
                             }
                         }
                     } label: {
-                        Image(systemName: voiceInput.isRecording ? "mic.fill" : "mic")
-                            .font(.system(size: 14))
-                            .foregroundStyle(voiceInput.isRecording ? .red : .white.opacity(0.5))
-                            .frame(width: 28, height: 28)
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: voiceInput.isRecording ? "mic.fill" : "mic")
+                                .font(.system(size: 14))
+                                .foregroundStyle(voiceInput.isRecording ? .red : .white.opacity(0.5))
+                                .frame(width: 28, height: 28)
+
+                            if WakeWordDetector.shared.isEnabled && !voiceInput.isRecording {
+                                Circle()
+                                    .fill(.green)
+                                    .frame(width: 6, height: 6)
+                                    .offset(x: -2, y: 2)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
 
