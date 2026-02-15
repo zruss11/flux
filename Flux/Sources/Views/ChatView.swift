@@ -187,7 +187,7 @@ struct ChatView: View {
                     }
                 }
 
-                HStack(spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                     // Mic button
                     Button {
                         Task {
@@ -225,32 +225,58 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
 
-                    TextField("Message Flux…  $ skills  / commands", text: $inputText)
-                        .textFieldStyle(.plain)
+                    // Multi-line input with height driven by content (1–3 lines)
+                    Text(inputText.isEmpty ? " " : inputText)
                         .font(.system(size: 13))
-                        .foregroundStyle(.white)
-                        .focused($isInputFocused)
-                        .onSubmit {
-                            sendMessage()
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .opacity(0)
+                        .overlay(alignment: .topLeading) {
+                            // Placeholder
+                            if inputText.isEmpty {
+                                Text("Message Flux…  $ skills  / commands")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.white.opacity(0.4))
+                                    .padding(.leading, 5)
+                                    .allowsHitTesting(false)
+                            }
                         }
-                        .onKeyPress(.escape) {
-                            if showSlashCommands {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                                    showSlashCommands = false
+                        .overlay {
+                            TextEditor(text: $inputText)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.white)
+                                .scrollContentBackground(.hidden)
+                                .scrollIndicators(.hidden)
+                                .contentMargins(.all, EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                                .focused($isInputFocused)
+                                .onKeyPress(.return) {
+                                    if NSEvent.modifierFlags.contains(.shift) {
+                                        return .ignored
+                                    }
+                                    sendMessage()
+                                    return .handled
                                 }
-                                return .handled
-                            }
-                            if showSkills {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                                    showSkills = false
+                                .onKeyPress(.escape) {
+                                    if showSlashCommands {
+                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                            showSlashCommands = false
+                                        }
+                                        return .handled
+                                    }
+                                    if showSkills {
+                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                            showSkills = false
+                                        }
+                                        return .handled
+                                    }
+                                    if IslandWindowManager.shared.isExpanded {
+                                        IslandWindowManager.shared.collapse()
+                                        return .handled
+                                    }
+                                    return .ignored
                                 }
-                                return .handled
-                            }
-                            if IslandWindowManager.shared.isExpanded {
-                                IslandWindowManager.shared.collapse()
-                                return .handled
-                            }
-                            return .ignored
                         }
 
                     Button {
