@@ -4,7 +4,7 @@ struct SettingsView: View {
     @AppStorage("anthropicApiKey") private var apiKey = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
-    @AppStorage("dictationEngine") private var dictationEngine = "apple"
+    @AppStorage("dictationEngine") private var dictationEngine = "parakeet"
     @AppStorage(ASRPostProcessor.DefaultsKey.enableFragmentRepair) private var enableFragmentRepair = true
     @AppStorage(ASRPostProcessor.DefaultsKey.enableIntentCorrection) private var enableIntentCorrection = true
     @AppStorage(ASRPostProcessor.DefaultsKey.enableRepeatRemoval) private var enableRepeatRemoval = true

@@ -37,7 +37,7 @@ struct ChatView: View {
     @Bindable var conversationStore: ConversationStore
     var agentBridge: AgentBridge
     var screenCapture: ScreenCapture
-    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.apple.rawValue
+    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.parakeet.rawValue
     @State private var inputText = ""
     @State private var voiceInput = VoiceInput()
     @State private var showSkills = false
@@ -70,7 +70,7 @@ struct ChatView: View {
     private let shareScreenFileName = "__flux_screenshot.jpg"
 
     private var speechInputProvider: SpeechInputProvider {
-        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .apple
+        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .parakeet
     }
 
     private var canSendMessage: Bool {
@@ -200,7 +200,7 @@ struct ChatView: View {
                                     return
                                 }
                                 let started = await voiceInput.startRecording(
-                                    mode: .live,
+                                    mode: speechInputProvider.voiceInputMode,
                                     provider: speechInputProvider,
                                     onComplete: { transcript in
                                         inputText = TranscriptPostProcessor.process(transcript)

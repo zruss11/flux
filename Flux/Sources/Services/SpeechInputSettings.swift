@@ -1,6 +1,7 @@
 import Foundation
 
 enum SpeechInputProvider: String, CaseIterable, Identifiable, Sendable {
+    case parakeet = "parakeet"
     case apple = "apple"
     case deepgram = "deepgram"
 
@@ -8,6 +9,8 @@ enum SpeechInputProvider: String, CaseIterable, Identifiable, Sendable {
 
     var displayName: String {
         switch self {
+        case .parakeet:
+            return "Parakeet TDT"
         case .apple:
             return "Apple Speech"
         case .deepgram:
@@ -17,10 +20,24 @@ enum SpeechInputProvider: String, CaseIterable, Identifiable, Sendable {
 
     var requiresSpeechRecognitionPermission: Bool {
         switch self {
+        case .parakeet:
+            return false
         case .apple:
             return true
         case .deepgram:
             return false
+        }
+    }
+
+    /// The `VoiceInputMode` to use when starting a recording with this provider.
+    var voiceInputMode: VoiceInputMode {
+        switch self {
+        case .parakeet:
+            return .parakeetOnDevice
+        case .apple:
+            return .live
+        case .deepgram:
+            return .live
         }
     }
 }
@@ -34,7 +51,7 @@ extension UserDefaults {
     var speechInputProvider: SpeechInputProvider {
         get {
             let raw = string(forKey: SpeechInputSettings.providerStorageKey)
-            return SpeechInputProvider(rawValue: raw ?? "") ?? .apple
+            return SpeechInputProvider(rawValue: raw ?? "") ?? .parakeet
         }
         set {
             setValue(newValue.rawValue, forKey: SpeechInputSettings.providerStorageKey)

@@ -701,7 +701,7 @@ final class DictationManager {
 
     /// Read the user's preferred dictation engine from UserDefaults.
     private func selectedDictationEngine() -> VoiceInputMode {
-        let engine = UserDefaults.standard.string(forKey: "dictationEngine") ?? "apple"
+        let engine = UserDefaults.standard.string(forKey: "dictationEngine") ?? "parakeet"
         switch engine {
         case "parakeet":
             return .parakeetOnDevice

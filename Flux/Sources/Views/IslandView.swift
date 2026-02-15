@@ -947,7 +947,7 @@ struct IslandSettingsView: View {
     @AppStorage("anthropicApiKey") private var apiKey = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
     @AppStorage("githubWatchedRepos") private var githubWatchedRepos = ""
-    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.apple.rawValue
+    @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.parakeet.rawValue
     @AppStorage(SpeechInputSettings.deepgramApiKeyStorageKey) private var deepgramApiKey = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
@@ -1034,7 +1034,7 @@ struct IslandSettingsView: View {
     }
 
     private var speechInputProvider: SpeechInputProvider {
-        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .apple
+        SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .parakeet
     }
 
     private var deepgramApiKeyConfigured: Bool {
