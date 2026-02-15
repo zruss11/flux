@@ -41,7 +41,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         SecretMigration.migrateUserDefaultsTokensToKeychainIfNeeded()
-        TranscriptPostProcessor.registerDefaults()
 
         setupStatusItem()
         setupAutomationThreadObserver()
@@ -134,6 +133,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         dictationManager.start(accessibilityReader: accessibilityReader)
+
+        // Register default values for Parakeet transcription settings.
+        UserDefaults.standard.register(defaults: [
+            "dictationEngine": "apple",
+            "asrEnableFragmentRepair": true,
+            "asrEnableIntentCorrection": true,
+            "asrEnableRepeatRemoval": true,
+            "asrEnableNumberConversion": true,
+        ])
+
+        // Preload Parakeet models if they are already cached on disk.
+        ParakeetModelManager.shared.preloadIfNeeded()
+
         SessionContextManager.shared.start()
         clipboardMonitor.start()
         watcherService.startAll()
