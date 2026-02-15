@@ -13,6 +13,7 @@ struct SettingsView: View {
     @State private var automationService = AutomationService.shared
     @State private var showAutomationsManager = false
     @State private var parakeetManager = ParakeetModelManager.shared
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         Form {
@@ -122,26 +123,27 @@ struct SettingsView: View {
                                 Spacer()
 
                                 Button("Delete Models", role: .destructive) {
-                                    parakeetManager.deleteCachedModels()
+                                    showDeleteConfirmation = true
                                 }
                                 .controlSize(.small)
                             }
                             .padding(.top, 4)
                         }
                     }
-
-                    // Post-processing toggles
-                    GroupBox("Post-Processing") {
-                        Toggle("Fragment Repair", isOn: $enableFragmentRepair)
-                        Toggle("Intent Correction", isOn: $enableIntentCorrection)
-                        Toggle("Repeat Removal", isOn: $enableRepeatRemoval)
-                        Toggle("Number Conversion", isOn: $enableNumberConversion)
-                    }
-
-                    Text("Post-processing stages clean up raw transcription output.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
+
+                // Post-processing toggles — shown for all engines since the
+                // pipeline runs regardless of which engine produces the transcript.
+                GroupBox("Post-Processing") {
+                    Toggle("Fragment Repair", isOn: $enableFragmentRepair)
+                    Toggle("Intent Correction", isOn: $enableIntentCorrection)
+                    Toggle("Repeat Removal", isOn: $enableRepeatRemoval)
+                    Toggle("Number Conversion", isOn: $enableNumberConversion)
+                }
+
+                Text("Post-processing stages clean up raw transcription output.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Automations") {
@@ -169,6 +171,14 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .sheet(isPresented: $showAutomationsManager) {
             AutomationsManagerView()
+        }
+        .alert("Delete Parakeet Models?", isPresented: $showDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                parakeetManager.deleteCachedModels()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will delete all cached Parakeet models from disk. You will need to re-download them to use Parakeet transcription.")
         }
     }
 }

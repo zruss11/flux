@@ -138,13 +138,16 @@ struct ASRPostProcessor {
     /// - "X, sorry, Y" → "Y"
     /// - "X, actually Y" → "Y"
     private static let intentCorrectionPatterns: [(NSRegularExpression, String)] = {
+        // Patterns require the correction phrase to appear after a comma or
+        // clause boundary to avoid false positives on normal prose like
+        // "I actually like this".
         let patterns: [(String, String)] = [
-            (#"(.+?),?\s+wait,?\s+actually\s+(.+)"#, "$2"),
-            (#"(.+?),?\s+no,?\s+(?:wait,?\s+)?(.+)"#, "$2"),
-            (#"(.+?),?\s+I mean\s+(.+)"#, "$2"),
-            (#"(.+?),?\s+sorry,?\s+(.+)"#, "$2"),
-            (#"(.+?),?\s+actually,?\s+(.+)"#, "$2"),
-            (#"(.+?),?\s+or rather,?\s+(.+)"#, "$2"),
+            (#"(.+?),\s+wait,?\s+actually\s+(.+)"#, "$2"),
+            (#"(.+?),\s+no,?\s+(?:wait,?\s+)?(.+)"#, "$2"),
+            (#"(.+?),\s+I mean\s+(.+)"#, "$2"),
+            (#"(.+?),\s+sorry,?\s+(.+)"#, "$2"),
+            (#"(.+?),\s+actually,?\s+(.+)"#, "$2"),
+            (#"(.+?),\s+or rather,?\s+(.+)"#, "$2"),
         ]
         return patterns.compactMap { pattern, replacement in
             guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {

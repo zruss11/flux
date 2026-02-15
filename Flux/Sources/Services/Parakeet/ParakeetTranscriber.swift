@@ -43,7 +43,11 @@ struct ParakeetTranscriber: Sendable {
     // MARK: - Properties
 
     private let featureExtractor = FBankFeatureExtractor()
-    private let maxDecodingSteps = 1000
+
+    /// Maximum number of tokens to decode. Scales with audio length to
+    /// prevent truncation of long recordings (~10 tokens/second is generous).
+    private let baseMaxDecodingSteps = 1000
+    private let tokensPerSecond = 10
 
     // MARK: - Transcription
 
@@ -61,6 +65,17 @@ struct ParakeetTranscriber: Sendable {
 
         guard !pcmData.isEmpty else {
             throw TranscriptionError.emptyAudio
+        }
+
+        // Safely unwrap model references instead of force-unwrapping.
+        guard let encoderModel = modelManager.encoderModel else {
+            throw TranscriptionError.modelsNotLoaded
+        }
+        guard let decoderModel = modelManager.decoderModel else {
+            throw TranscriptionError.modelsNotLoaded
+        }
+        guard let jointModel = modelManager.jointDecisionModel else {
+            throw TranscriptionError.modelsNotLoaded
         }
 
         let startTime = CFAbsoluteTimeGetCurrent()
@@ -84,7 +99,7 @@ struct ParakeetTranscriber: Sendable {
         // Step 2: Run encoder on mel features.
         let encoderOutput = try runEncoder(
             melFeatures: melFeatures,
-            encoderModel: modelManager.encoderModel!,
+            encoderModel: encoderModel,
             preprocessorModel: modelManager.preprocessorModel
         )
 
@@ -92,10 +107,15 @@ struct ParakeetTranscriber: Sendable {
         Log.voice.info("[ParakeetTranscriber] Encoding: \(String(format: "%.1f", (encodeTime - featureTime) * 1000))ms")
 
         // Step 3: Run greedy RNNT/TDT decoding.
+        // Scale max decoding steps based on audio duration.
+        let audioDuration = Double(pcmData.count) / Double(MemoryLayout<Int16>.size) / 16000.0
+        let maxSteps = max(baseMaxDecodingSteps, Int(audioDuration) * tokensPerSecond)
+
         let tokenIds = try greedyDecode(
             encoderOutput: encoderOutput,
-            decoderModel: modelManager.decoderModel!,
-            jointModel: modelManager.jointDecisionModel!
+            decoderModel: decoderModel,
+            jointModel: jointModel,
+            maxDecodingSteps: maxSteps
         )
 
         let decodeTime = CFAbsoluteTimeGetCurrent()
@@ -106,7 +126,6 @@ struct ParakeetTranscriber: Sendable {
         let text = tokenizer.decodeRNNT(tokenIds)
 
         let totalTime = CFAbsoluteTimeGetCurrent() - startTime
-        let audioDuration = Double(pcmData.count) / Double(MemoryLayout<Int16>.size) / 16000.0
         let realtimeFactor = totalTime / max(audioDuration, 0.001)
 
         Log.voice.info("[ParakeetTranscriber] Total: \(String(format: "%.1f", totalTime * 1000))ms, RTF: \(String(format: "%.2f", realtimeFactor))")
@@ -244,7 +263,8 @@ struct ParakeetTranscriber: Sendable {
     private func greedyDecode(
         encoderOutput: MLMultiArray,
         decoderModel: MLModel,
-        jointModel: MLModel
+        jointModel: MLModel,
+        maxDecodingSteps: Int
     ) throws -> [Int] {
         var outputTokens: [Int] = []
 
@@ -304,6 +324,7 @@ struct ParakeetTranscriber: Sendable {
                 lastToken = predictedToken
 
                 if outputTokens.count >= maxDecodingSteps {
+                    Log.voice.warning("[ParakeetTranscriber] Hit max decoding steps (\(maxDecodingSteps)), output may be truncated")
                     break
                 }
             }

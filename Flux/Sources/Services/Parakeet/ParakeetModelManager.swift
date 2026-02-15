@@ -64,6 +64,11 @@ final class ParakeetModelManager {
                 return ["coremldata.bin", "metadata.json", "model.mil", "weights/weight.bin", "analytics/coremldata.bin"]
             }
         }
+
+        /// Critical files that must be present for the model to load successfully.
+        var requiredSubFiles: [String] {
+            ["coremldata.bin", "weights/weight.bin"]
+        }
     }
 
     /// Vocabulary files to download.
@@ -210,6 +215,7 @@ final class ParakeetModelManager {
 
             let totalFiles = Double(allDownloads.count)
             var completedFiles = 0.0
+            var failedFiles: [String] = []
 
             for (remotePath, localPath) in allDownloads {
                 if FileManager.default.fileExists(atPath: localPath.path) {
@@ -227,8 +233,8 @@ final class ParakeetModelManager {
                     if let httpResponse = response as? HTTPURLResponse,
                        httpResponse.statusCode != 200 {
                         Log.voice.warning("[ParakeetModelManager] HTTP \(httpResponse.statusCode) for \(remotePath), skipping")
-                        completedFiles += 1
-                        downloadProgress = completedFiles / totalFiles
+                        failedFiles.append(remotePath)
+                        // Do NOT increment progress for failed downloads.
                         continue
                     }
 
@@ -236,10 +242,23 @@ final class ParakeetModelManager {
                     Log.voice.info("[ParakeetModelManager] Downloaded \(remotePath)")
                 } catch {
                     Log.voice.warning("[ParakeetModelManager] Failed to download \(remotePath): \(error.localizedDescription)")
+                    failedFiles.append(remotePath)
+                    // Do NOT increment progress for failed downloads.
+                    continue
                 }
 
                 completedFiles += 1
                 downloadProgress = completedFiles / totalFiles
+            }
+
+            // Surface download failures before attempting to load.
+            if !failedFiles.isEmpty {
+                let failedList = failedFiles.joined(separator: ", ")
+                Log.voice.error("[ParakeetModelManager] Failed to download \(failedFiles.count) file(s): \(failedList)")
+                statusMessage = "Download incomplete: \(failedFiles.count) file(s) failed"
+                isLoading = false
+                downloadProgress = nil
+                return
             }
 
             downloadProgress = nil
@@ -279,13 +298,19 @@ final class ParakeetModelManager {
     }
 
     /// Whether model files exist on disk (even if not loaded into memory).
+    ///
+    /// This validates that each model directory exists AND contains critical
+    /// subfiles (e.g., `coremldata.bin`). A partial download will not pass.
     var areModelsCached: Bool {
         let modelsDir = Self.modelsDirectory
-        // Check that at least the core model directories exist.
         return ModelFile.allCases.allSatisfy { file in
-            FileManager.default.fileExists(
-                atPath: modelsDir.appendingPathComponent(file.directoryName).path
-            )
+            let modelDir = modelsDir.appendingPathComponent(file.directoryName)
+            // Check that the directory exists AND all required subfiles are present.
+            return file.requiredSubFiles.allSatisfy { subFile in
+                FileManager.default.fileExists(
+                    atPath: modelDir.appendingPathComponent(subFile).path
+                )
+            }
         }
     }
 

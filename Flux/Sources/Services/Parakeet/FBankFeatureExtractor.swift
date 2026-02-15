@@ -15,7 +15,7 @@ import os
 /// - 25ms window, 10ms hop
 /// - 16kHz sample rate
 /// - Pre-emphasis: 0.97
-struct FBankFeatureExtractor: Sendable {
+final class FBankFeatureExtractor: Sendable {
 
     // MARK: - Configuration
 
@@ -37,6 +37,10 @@ struct FBankFeatureExtractor: Sendable {
 
     /// Precomputed Hann window.
     private let hannWindow: [Float]
+
+    /// Cached FFT setup — created once and reused across all frames.
+    private let fftSetup: OpaquePointer
+    private let log2n: vDSP_Length
 
     // MARK: - Init
 
@@ -71,6 +75,14 @@ struct FBankFeatureExtractor: Sendable {
             fftSize: fft,
             sampleRate: sampleRate
         )
+
+        // Create FFT setup once (expensive operation).
+        self.log2n = vDSP_Length(log2(Float(fft)))
+        self.fftSetup = vDSP_create_fftsetup(self.log2n, FFTRadix(kFFTRadix2))!
+    }
+
+    deinit {
+        vDSP_destroy_fftsetup(fftSetup)
     }
 
     // MARK: - Feature Extraction
@@ -151,12 +163,6 @@ struct FBankFeatureExtractor: Sendable {
 
     /// Compute the power spectrum of a windowed frame using vDSP FFT.
     private func computePowerSpectrum(_ frame: [Float]) -> [Float] {
-        let log2n = vDSP_Length(log2(Float(fftSize)))
-        guard let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
-            return [Float](repeating: 0, count: fftSize / 2 + 1)
-        }
-        defer { vDSP_destroy_fftsetup(fftSetup) }
-
         // Pack real data into split complex format.
         let halfN = fftSize / 2
         var realPart = [Float](repeating: 0, count: halfN)
@@ -170,7 +176,7 @@ struct FBankFeatureExtractor: Sendable {
             }
         }
 
-        // Perform FFT.
+        // Perform FFT using the cached setup.
         var splitComplex = DSPSplitComplex(realp: &realPart, imagp: &imagPart)
         vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Forward))
 

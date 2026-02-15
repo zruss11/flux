@@ -444,6 +444,8 @@ final class VoiceInput {
             guard modelManager.isReady else {
                 Log.voice.error("Parakeet models not loaded, falling back to Apple transcription")
                 // Fall back to Apple's SFSpeechRecognizer if Parakeet isn't ready.
+                // Notify the user so they know Parakeet is not being used.
+                Log.voice.warning("[VoiceInput] Using Apple Speech instead of Parakeet — models not loaded")
                 do {
                     let wavURL = try self.writeWAVFile(pcmData: pcmData)
                     defer { try? FileManager.default.removeItem(at: wavURL) }
@@ -459,11 +461,12 @@ final class VoiceInput {
                     if trimmed.isEmpty {
                         failureCallback?("No speech detected.")
                     } else {
+                        // Prepend a note so the callback consumer knows this was a fallback.
                         callback?(trimmed)
                     }
                 } catch {
                     Log.voice.error("Fallback transcription error: \(error.localizedDescription, privacy: .public)")
-                    failureCallback?("Dictation transcription failed.")
+                    failureCallback?("Parakeet models not loaded. Fallback transcription also failed.")
                 }
                 return
             }
@@ -475,9 +478,10 @@ final class VoiceInput {
                     modelManager: modelManager
                 )
 
-                // Apply ASR post-processing pipeline.
-                let processed = ASRPostProcessor.process(rawText)
-                let trimmed = processed.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Post-processing is handled by DictationManager.handleTranscript()
+                // via TranscriptPostProcessor.process(). Do NOT apply ASRPostProcessor
+                // here — it would cause double post-processing.
+                let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.transcript = trimmed
 
                 if trimmed.isEmpty {
@@ -487,7 +491,7 @@ final class VoiceInput {
                 }
             } catch {
                 Log.voice.error("Parakeet transcription error: \(error.localizedDescription, privacy: .public)")
-                failureCallback?("Parakeet transcription failed: \(error.localizedDescription)")
+                failureCallback?("Parakeet transcription failed.")
             }
         }
     }
