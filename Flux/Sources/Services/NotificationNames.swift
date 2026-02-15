@@ -10,6 +10,7 @@ extension Notification.Name {
     static let appInstructionsDidChange = Notification.Name("appInstructionsDidChange")
     static let automationOpenThreadRequested = Notification.Name("automationOpenThreadRequested")
     static let islandOpenConversationRequested = Notification.Name("islandOpenConversationRequested")
+    static let islandOpenSettingsRequested = Notification.Name("islandOpenSettingsRequested")
     static let islandOpenFolderPickerRequested = Notification.Name("islandOpenFolderPickerRequested")
     static let islandOpenImagePickerRequested = Notification.Name("islandOpenImagePickerRequested")
     static let islandImageFilesSelected = Notification.Name("islandImageFilesSelected")

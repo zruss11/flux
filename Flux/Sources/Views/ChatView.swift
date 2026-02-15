@@ -41,6 +41,10 @@ struct ChatView: View {
     @State private var showSlashCommands = false
     @State private var slashTriggerActive = false
     @State private var slashSearchQuery = ""
+    @State private var ciStatusMonitor = CIStatusMonitor.shared
+    @State private var watcherService = WatcherService.shared
+    @AppStorage("showCIStatusChip") private var showCIStatusChip = true
+    @AppStorage("showWatcherAlertsChip") private var showWatcherAlertsChip = true
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
     @State private var showSpeechPermissionAlert = false
@@ -57,6 +61,10 @@ struct ChatView: View {
 
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImageAttachments.isEmpty
+    }
+
+    private var activeWatcherAlerts: [WatcherAlert] {
+        watcherService.alerts.filter { !$0.isDismissed }
     }
 
     var body: some View {
@@ -382,6 +390,37 @@ struct ChatView: View {
                     )
                 }
                 .buttonStyle(.plain)
+
+                if showCIStatusChip, ciStatusMonitor.aggregateStatus != .idle {
+                    CIStatusChip(
+                        aggregateStatus: ciStatusMonitor.aggregateStatus,
+                        repoStatuses: ciStatusMonitor.repoStatuses,
+                        onRefresh: {
+                            CIStatusMonitor.shared.forceRefresh()
+                        },
+                        onOpenSettings: {
+                            NotificationCenter.default.post(name: .islandOpenSettingsRequested, object: nil)
+                        },
+                        onHide: {
+                            showCIStatusChip = false
+                        }
+                    )
+                }
+
+                if showWatcherAlertsChip {
+                    WatcherAlertsChip(
+                        activeAlerts: activeWatcherAlerts,
+                        onDismissAll: {
+                            watcherService.dismissAllAlerts()
+                        },
+                        onOpenSettings: {
+                            NotificationCenter.default.post(name: .islandOpenSettingsRequested, object: nil)
+                        },
+                        onHide: {
+                            showWatcherAlertsChip = false
+                        }
+                    )
+                }
 
                 SkillsPillButton(isPresented: $showSkills)
 
