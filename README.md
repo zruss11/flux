@@ -6,12 +6,40 @@ A native macOS app with a Dynamic Island-style notch overlay powered by Claude a
 
 ## Features
 
-- 🖥️ **Screen-Aware AI** — Reads window contents via Accessibility API + captures screenshots via ScreenCaptureKit. No OCR, no guessing — actual structured data from any app.
-- 🎙️ **Voice Input** — On-device speech transcription with Apple Speech APIs (`SpeechAnalyzer` + `SpeechTranscriber`) on macOS 26+.
-- 🔧 **Custom Tool Builder** — Create AI-powered tools that combine LLM prompts with Shortcuts, shell scripts, AppleScript, and custom instructions.
-- 💬 **Multi-Channel** — Connect Discord, Slack, Telegram, WhatsApp so your AI copilot reaches you anywhere.
-- 🏝️ **Dynamic Island UI** — Notch-anchored overlay with Liquid Glass materials. Expands contextually, stays out of your way.
-- 🧠 **Claude Agent SDK** — Powered by Claude Sonnet with custom tools for screen capture, file ops, and automation.
+### 🖥️ Screen-Aware AI
+Reads window contents via Accessibility API and captures screenshots via ScreenCaptureKit. No OCR, no guessing — actual structured data from any app.
+
+### 🎙️ Advanced Voice Input
+Multiple speech-to-text engines with intelligent post-processing:
+- **Apple Speech** — Built-in on-device transcription via `SFSpeechRecognizer`
+- **Parakeet TDT v3** — NVIDIA's 0.6B parameter on-device model via CoreML for higher accuracy (~6 GB download, cached locally)
+- **Deepgram** — Cloud-based live streaming transcription with API key
+- **Post-Processing Pipeline** — Multi-stage transcript cleanup: fragment repair (`"wan- want"` → `"want"`), intent correction (`"wait, actually..."` handling), number conversion (`"twenty three"` → `"23"`), and repeat removal
+- **Live Transcript Dropdown** — Real-time transcription text displayed below the notch as you speak, with Liquid Glass styling
+
+### 🏝️ Dynamic Island UI
+Notch-anchored overlay with Liquid Glass materials. Expands contextually, stays out of your way.
+- **CI Status Chips** — Aggregate CI/build health from watched repos with popover details and quick actions
+- **Watcher Alert Chips** — Notification alerts with priority levels and management options
+- **CI Ticker Notifications** — Animated ticker bar for CI status transitions (e.g., failing → passing)
+- **Git Branch Pill** — View and switch branches via a searchable popover, right from the chat UI
+
+### 🔧 Custom Tool Builder
+Create AI-powered tools that combine LLM prompts with Shortcuts, shell scripts, and custom instructions. Tools require explicit user approval for dangerous operations (`rm`, destructive `git` commands).
+
+### 🧠 Claude Agent SDK
+Powered by Claude Sonnet with custom tools for screen capture, file ops, and automation.
+- **Session Forking** — Branch any conversation into an independent fork to explore alternatives without losing context
+- **Slash Commands** — Type `/` to access built-in commands (`/new`, `/clear`, `/compact`, `/help`, `/cost`) and custom commands from `.claude/commands/`
+- **Tool Approval UI** — In-chat permission cards for risky operations with Allow/Deny actions and clarifying questions
+
+### 👁️ Watchers
+Background monitors that poll external sources (email, repos, etc.) and route alerts into a dedicated Island conversation. Hardened with sendable state, bounded scheduling, stable digest-based dedupe, and lifecycle cleanup.
+
+### ⚙️ Developer Experience
+- **Editable Workspace Path** — Click the breadcrumb path to type or paste any directory
+- **Conductor Scripts** — Standardized `scripts/conductor-setup.sh` and `scripts/conductor-run.sh` for local development
+- **Onboarding Flow** — Full-size content window with live permission state, themed visuals, and one-click restart
 
 ## Requirements
 
@@ -19,6 +47,7 @@ A native macOS app with a Dynamic Island-style notch overlay powered by Claude a
 - Apple Silicon Mac with notch
 - Node.js 20+
 - Anthropic API key
+- Deepgram API key *(optional, for Deepgram STT)*
 
 ## Quick Start
 
@@ -32,6 +61,13 @@ xcodebuild -scheme Flux -configuration Debug build
 
 # Start the AI sidecar
 cd sidecar && npm install && npm start
+```
+
+Or use the conductor scripts:
+
+```bash
+./scripts/conductor-setup.sh   # bootstrap environment
+./scripts/conductor-run.sh     # launch app
 ```
 
 ## Testing
@@ -73,38 +109,47 @@ Release assets include:
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│         Flux (Swift/SwiftUI)        │
-│                                     │
-│  ┌─────────┐  ┌──────────────────┐  │
-│  │ Island  │  │ Screen Context   │  │
-│  │   UI    │  │ • AXUIElement    │  │
-│  │ (notch) │  │ • ScreenCapture  │  │
-│  │         │  │ • Selection      │  │
-│  └────┬────┘  └────────┬─────────┘  │
-│       │                │            │
-│       └───────┬────────┘            │
-│               │ WebSocket           │
-│       ┌───────▼────────┐            │
-│       │  Agent Bridge  │            │
-│       └───────┬────────┘            │
-└───────────────┼─────────────────────┘
-                │
-┌───────────────▼─────────────────────┐
-│      Sidecar (Node.js/TypeScript)   │
-│                                     │
-│  ┌──────────────────────────────┐   │
-│  │    Claude Agent SDK          │   │
-│  │    (Sonnet + Custom Tools)   │   │
-│  └──────────────────────────────┘   │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│          Flux (Swift/SwiftUI)            │
+│                                          │
+│  ┌──────────┐  ┌───────────────────────┐ │
+│  │ Island   │  │   Screen Context      │ │
+│  │   UI     │  │   • AXUIElement       │ │
+│  │ (notch)  │  │   • ScreenCapture     │ │
+│  │          │  │   • Selection          │ │
+│  │ • CI     │  └───────────┬───────────┘ │
+│  │   chips  │              │             │
+│  │ • ticker │  ┌───────────┴───────────┐ │
+│  │ • branch │  │   Voice Input         │ │
+│  │   pill   │  │   • Apple Speech      │ │
+│  │ • live   │  │   • Parakeet TDT v3   │ │
+│  │   trans. │  │   • Deepgram Stream   │ │
+│  │ • alerts │  │   • Post-Processing   │ │
+│  └────┬─────┘  └───────────┬───────────┘ │
+│       │                    │             │
+│       └────────┬───────────┘             │
+│                │ WebSocket               │
+│       ┌────────▼────────────┐            │
+│       │   Agent Bridge      │            │
+│       │   • Tool Approval   │            │
+│       │   • Session Forking │            │
+│       │   • Slash Commands  │            │
+│       └────────┬────────────┘            │
+│                │              ┌────────┐ │
+│                │              │Watchers│ │
+│                │              │ Engine │ │
+│                │              └────────┘ │
+└────────────────┼─────────────────────────┘
+                 │
+┌────────────────▼─────────────────────────┐
+│       Sidecar (Node.js/TypeScript)       │
+│                                          │
+│  ┌────────────────────────────────────┐  │
+│  │     Claude Agent SDK               │  │
+│  │     (Sonnet + Custom Tools)        │  │
+│  └────────────────────────────────────┘  │
+└──────────────────────────────────────────┘
 ```
-
-## Integrations
-
-Connect Flux to your messaging platforms so your AI copilot can reach you anywhere.
-
-- [Discord, Slack & Telegram Bot Setup Guide](docs/bot-setup.md)
 
 ## License
 
