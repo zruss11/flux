@@ -74,7 +74,21 @@ interface PermissionResponseMessage {
   answers?: Record<string, string>;
 }
 
-type IncomingMessage = ChatMessage | ToolResultMessage | SetApiKeyMessage | McpAuthMessage | SetTelegramConfigMessage | ActiveAppUpdateMessage | ForkConversationMessage | PermissionResponseMessage;
+interface HelloMessage {
+  type: 'hello';
+  token?: string;
+}
+
+type IncomingMessage =
+  | HelloMessage
+  | ChatMessage
+  | ToolResultMessage
+  | SetApiKeyMessage
+  | McpAuthMessage
+  | SetTelegramConfigMessage
+  | ActiveAppUpdateMessage
+  | ForkConversationMessage
+  | PermissionResponseMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -296,7 +310,11 @@ function isChatImageList(value: unknown): value is ChatImagePayload[] {
 function isIncomingMessage(value: unknown): value is IncomingMessage {
   if (!isRecord(value)) return false;
 
-  if (value.type === 'chat') {
+  if (value.type === 'hello') {
+    return value.token === undefined || isString(value.token);
+  }
+
+  if (value.type === 'chat') { 
     return isString(value.conversationId)
       && isString(value.content)
       && (value.images === undefined || isChatImageList(value.images));
@@ -461,6 +479,9 @@ const pendingPermissions = new Map<string, {
 
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
+
+const BRIDGE_AUTH_TOKEN = (process.env.FLUX_BRIDGE_TOKEN ?? '').trim();
+const REQUIRE_BRIDGE_AUTH = BRIDGE_AUTH_TOKEN.length > 0;
 let mcpBridgeUrl = '';
 let mainWss: WebSocketServer | null = null;
 let mcpBridgeWss: WebSocketServer | null = null;
@@ -602,7 +623,12 @@ const telegramBot = createTelegramBot({
 });
 
 export function startBridge(port: number): void {
-  const wss = new WebSocketServer({ port });
+  const wss = new WebSocketServer({
+    port,
+    host: '127.0.0.1',
+    // Keep generous but bounded payload sizes to avoid memory spikes (e.g. huge base64 screenshots).
+    maxPayload: parsePositiveIntEnv(process.env.FLUX_WS_MAX_PAYLOAD_BYTES, 25 * 1024 * 1024),
+  });
   mainWss = wss;
   startMcpBridge(port + 1);
 
@@ -611,17 +637,73 @@ export function startBridge(port: number): void {
   maybeStartAgentWarmup('bridge_start');
 
   wss.on('connection', (ws) => {
-    log.info('Swift app connected');
-    activeClient = ws;
+    // If auth is enabled, require a 'hello' handshake before accepting any other messages.
+    let isAuthenticated = !REQUIRE_BRIDGE_AUTH;
+
+    const denyAndClose = (reason: string) => {
+      try {
+        ws.send(JSON.stringify({ type: 'assistant_message', conversationId: 'system', content: reason }));
+      } catch {
+        // ignore
+      }
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+    };
 
     ws.on('message', (data) => {
-      const message = parseIncomingMessage(data.toString());
+      // Cheap precheck before JSON.parse.
+      const raw = data.toString();
+      if (raw.length > 0) {
+        const firstNonWs = raw.trimStart()[0];
+        if (firstNonWs !== '{') {
+          log.warn('Received non-JSON message from Swift app');
+          return;
+        }
+      }
+
+      const message = parseIncomingMessage(raw);
       if (!message) {
         log.warn('Received invalid message from Swift app');
         return;
       }
+
+      if (!isAuthenticated) {
+        if (message.type !== 'hello') {
+          log.warn('Rejected unauthenticated client message');
+          denyAndClose('Unauthorized: missing hello handshake.');
+          return;
+        }
+
+        const token = (message.token ?? '').trim();
+        if (token.length === 0 || token !== BRIDGE_AUTH_TOKEN) {
+          log.warn('Rejected client: invalid bridge token');
+          denyAndClose('Unauthorized: invalid bridge token.');
+          return;
+        }
+
+        isAuthenticated = true;
+        log.info('Swift app authenticated');
+
+        // Only now mark this socket as the active client.
+        activeClient = ws;
+        return;
+      }
+
+      // Ignore subsequent hello messages.
+      if (message.type === 'hello') return;
+
       handleMessage(ws, message);
     });
+
+    if (!REQUIRE_BRIDGE_AUTH) {
+      log.info('Swift app connected');
+      activeClient = ws;
+    } else {
+      log.info('Swift app connected (awaiting authentication)');
+    }
 
     ws.on('close', () => {
       log.info('Swift app disconnected');
@@ -762,8 +844,15 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
 
 function sanitizeChatImages(images: ChatImagePayload[] | undefined): ChatImagePayload[] {
   if (!Array.isArray(images)) return [];
+
+  const maxImages = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGES_PER_MESSAGE, 4);
+  // Base64 overhead is ~33%, so 8MB base64 is ~6MB binary.
+  const maxBase64Chars = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGE_BASE64_CHARS, 8 * 1024 * 1024);
+
   return images
+    .slice(0, Math.max(0, maxImages))
     .filter((image) => typeof image?.data === 'string' && image.data.length > 0)
+    .filter((image) => image.data.length <= maxBase64Chars)
     .map((image) => {
       const mediaType = image.mediaType?.startsWith('image/') ? image.mediaType : 'image/png';
       const fileName = typeof image.fileName === 'string' && image.fileName.trim().length > 0
