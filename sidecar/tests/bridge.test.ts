@@ -71,5 +71,23 @@ describe('bridge.ts', () => {
         const result = requiresApproval('run_shell_command', { command: ['rm', '-rf', '/'] });
         expect(result).toBe(true);
     });
+
+    it('should flag git stash drop', () => {
+      expect(requiresApproval('run_shell_command', { command: 'git stash drop' })).toBe(true);
+    });
+
+    it('should flag git branch -D', () => {
+      expect(requiresApproval('run_shell_command', { command: 'git branch -D feature' })).toBe(true);
+    });
+
+    it('should allow git push --force-with-lease', () => {
+      expect(requiresApproval('run_shell_command', { 
+        command: 'git push --force-with-lease' 
+      })).toBe(false);
+    });
+
+    it('should flag git stash clear', () => {
+      expect(requiresApproval('run_shell_command', { command: 'git stash clear' })).toBe(true);
+    });
   });
 });
