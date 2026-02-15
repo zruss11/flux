@@ -96,7 +96,7 @@ struct ChatView: View {
             // Messages
             ScrollViewReader { scrollProxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
                         if let conversation = conversationStore.activeConversation {
                             ForEach(conversation.displaySegments) { segment in
                                 Group {
@@ -997,6 +997,10 @@ struct MessageBubble: View {
 
             if message.role == .assistant { Spacer(minLength: 60) }
         }
+        // Prevent inherited implicit animations (e.g. from IslandView's
+        // spring animations) from animating text content, which causes
+        // the flicker where text briefly disappears then reappears.
+        .transaction { $0.animation = nil }
     }
 }
 

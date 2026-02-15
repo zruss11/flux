@@ -11,8 +11,12 @@ import os
 /// the Accessibility observer can miss notifications in Focus mode, but
 /// the DB is always written to.
 ///
-/// **Requires**: Full Disk Access (FDA) for the app to read the database.
-/// Without FDA the provider gracefully returns empty results.
+/// **IMPORTANT SECURITY NOTE**: This provider requires Full Disk Access (FDA)
+/// permission for the app to read Apple's notification database. Without FDA,
+/// the provider will gracefully fail with a warning and return empty results.
+/// Users should be informed that enabling FDA allows the app to access sensitive
+/// system databases. The implementation only reads notification data and does
+/// not modify or access other sensitive files.
 struct NotificationDBWatcherProvider: WatcherProvider {
     let type: Watcher.WatcherType = .notificationDB
 
@@ -91,8 +95,12 @@ struct NotificationDBWatcherProvider: WatcherProvider {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_double(stmt, 1, sinceCD)
-        sqlite3_bind_int(stmt, 2, Int32(maxResultsPerCheck))
+        guard sqlite3_bind_double(stmt, 1, sinceCD) == SQLITE_OK,
+              sqlite3_bind_int(stmt, 2, Int32(maxResultsPerCheck)) == SQLITE_OK else {
+            let errMsg = String(cString: sqlite3_errmsg(db))
+            Log.app.warning("NotificationDBWatcher: bind parameters failed — \(errMsg)")
+            return []
+        }
 
         var alerts: [WatcherAlert] = []
 
@@ -143,6 +151,11 @@ struct NotificationDBWatcherProvider: WatcherProvider {
     /// title and body fields via NSKeyedUnarchiver/PropertyListSerialization.
     private func decodeBplist(_ data: Data) -> DecodedNotification {
         var result = DecodedNotification()
+
+        // Validate data size to prevent excessive memory usage
+        guard data.count > 0 && data.count < 1_048_576 else { // Max 1MB
+            return result
+        }
 
         // Try PropertyListSerialization first (handles most cases).
         guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) else {
