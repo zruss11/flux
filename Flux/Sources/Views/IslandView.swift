@@ -67,7 +67,8 @@ struct IslandView: View {
 
     private var closedIndicatorSlotWidth: CGFloat {
         if showClosedActivityIndicators { return closedActiveWidthBoost / 2 }
-        if showClosedWaitingIndicator || showClosedReadyDot { return 10 }
+        if showClosedReadyDot { return 18 }
+        if showClosedWaitingIndicator { return 10 }
         return 0
     }
 
@@ -127,7 +128,7 @@ struct IslandView: View {
             return .waiting
         } else if isWorking {
             return .working
-        } else if agentBridge.isConnected && conversationStore.activeConversation != nil {
+        } else if conversationStore.unreadReadyCount > 0 {
             return .ready
         } else {
             return .none
@@ -348,6 +349,10 @@ struct IslandView: View {
                 clearClosedIndicatorsWorkItem = nil
                 closedIndicatorsLatched = false
                 windowManager.expandedContentSize = CGSize(width: expandedWidth, height: expandedHeight)
+                // Mark the active conversation as read when the island opens
+                if let activeId = conversationStore.activeConversationId {
+                    conversationStore.markConversationRead(activeId)
+                }
                 // Content fades in after the shell has finished its bounce
                 withAnimation(
                     reduceMotion
@@ -503,8 +508,7 @@ struct IslandView: View {
                     ClosedWaitingIndicator()
                         .frame(width: 8, height: 8)
                 } else if showReady {
-                    ClosedReadyDot()
-                        .frame(width: 7, height: 7)
+                    ClosedNotificationBadge(count: conversationStore.unreadReadyCount)
                 }
             }
             .frame(width: closedIndicatorSlotWidth, height: closedHeight)
@@ -960,11 +964,19 @@ private struct ClosedWaitingIndicator: View {
     }
 }
 
-private struct ClosedReadyDot: View {
+private struct ClosedNotificationBadge: View {
+    let count: Int
+
     var body: some View {
-        Circle()
-            .fill(Color.green)
-            .shadow(color: .green.opacity(0.6), radius: 4)
+        Text("\(count)")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(minWidth: 16, minHeight: 16)
+            .background(
+                Capsule()
+                    .fill(Color.red)
+            )
+            .shadow(color: .red.opacity(0.5), radius: 4)
     }
 }
 

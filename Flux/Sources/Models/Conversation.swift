@@ -153,6 +153,8 @@ final class ConversationStore {
     }
     var activeWorktreeBranch: String?
     private var runningConversationIds: Set<UUID> = []
+    /// Conversation IDs that finished running but haven't been viewed yet.
+    private(set) var unreadReadyConversationIds: Set<UUID> = []
     private(set) var scrollRevision: Int = 0
     private(set) var lastScrollConversationId: UUID?
 
@@ -182,8 +184,18 @@ final class ConversationStore {
         !runningConversationIds.isEmpty
     }
 
+    /// Number of conversations that finished but haven't been viewed yet.
+    var unreadReadyCount: Int {
+        unreadReadyConversationIds.count
+    }
+
     var activeConversationHasPendingUserInput: Bool {
         activeConversation?.hasPendingUserInput ?? false
+    }
+
+    /// Mark a conversation as read, removing it from the unread badge count.
+    func markConversationRead(_ id: UUID) {
+        unreadReadyConversationIds.remove(id)
     }
 
     // MARK: - Lifecycle
@@ -459,6 +471,7 @@ final class ConversationStore {
 
     /// Load a conversation from disk into memory and set it as active.
     func openConversation(id: UUID) {
+        markConversationRead(id)
         if let existing = conversations.first(where: { $0.id == id }) {
             activeConversationId = existing.id
             return
@@ -589,10 +602,19 @@ final class ConversationStore {
             // Flush any remaining stream buffer when streaming ends.
             flushStreamBuffer()
         }
+        let wasRunning = runningConversationIds.contains(conversationId)
         if isRunning {
             runningConversationIds.insert(conversationId)
         } else {
             runningConversationIds.remove(conversationId)
+            // If the conversation just finished, mark it as unread
+            // (unless it's the currently viewed conversation while the island is open).
+            if wasRunning && conversationId != activeConversationId {
+                unreadReadyConversationIds.insert(conversationId)
+            } else if wasRunning && conversationId == activeConversationId
+                        && !IslandWindowManager.shared.isExpanded {
+                unreadReadyConversationIds.insert(conversationId)
+            }
         }
     }
 
