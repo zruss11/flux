@@ -227,71 +227,15 @@ struct IslandView: View {
     private var hoverWidthBoost: CGFloat { (!isExpanded && isHovering) ? 8 : 0 }
     private var hoverHeightBoost: CGFloat { (!isExpanded && isHovering) ? 2 : 0 }
 
+    private var islandShape: AnyShape {
+        hasNotch
+            ? AnyShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
+            : AnyShape(RoundedRectangle(cornerRadius: pillRadius, style: .continuous))
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
-            notchContent
-                .frame(
-                    width: currentWidth + hoverWidthBoost,
-                    height: currentHeight + hoverHeightBoost,
-                    alignment: .top
-                )
-                .padding(.horizontal, isExpanded ? topRadius : bottomRadius)
-                .padding([.horizontal, .bottom], isExpanded ? 12 : 0)
-                .background {
-                    if isExpanded {
-                        ZStack {
-                            // Glass blur layer — ultra-thin material for transparency
-                            RoundedRectangle(cornerRadius: bottomRadius, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                            // Radial gradient overlay — denser center for readability, transparent edges
-                            RadialGradient(
-                                colors: [
-                                    .black.opacity(0.82),
-                                    .black.opacity(0.60),
-                                    .black.opacity(0.35)
-                                ],
-                                center: .center,
-                                startRadius: 20,
-                                endRadius: 300
-                            )
-                        }
-                    } else {
-                        Color.black
-                    }
-                }
-                .clipShape(
-                    hasNotch
-                        ? AnyShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
-                        : AnyShape(RoundedRectangle(cornerRadius: pillRadius, style: .continuous))
-                )
-                .overlay(alignment: .top) {
-                    if hasNotch {
-                        Rectangle()
-                            .fill(.black)
-                            .frame(height: 1)
-                            .padding(.horizontal, topRadius)
-                    }
-                }
-                .overlay {
-                    if !hasNotch {
-                        RoundedRectangle(cornerRadius: pillRadius, style: .continuous)
-                            .stroke(.white.opacity(0.1), lineWidth: 0.5)
-                    }
-                }
-                .shadow(
-                    color: (isExpanded || isHovering) ? .black.opacity(0.7) : .clear,
-                    radius: isExpanded ? 20 : 6,
-                    y: isExpanded ? 8 : 2
-                )
-                .animation(isExpanded ? openAnimation : closeAnimation, value: isExpanded)
-                .animation(.spring(response: 0.38, dampingFraction: 0.8), value: isHovering)
-                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: DictationManager.shared.isDictating)
-
-                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
-                .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
-                .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
-                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: hasPendingAttachments)
-                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: closedAgentState)
+            styledIslandShell
                 .padding(.top, hasNotch ? 0 : windowManager.topOffset)
 
             let notificationBaseOffset = currentHeight + hoverHeightBoost + 12 + (hasNotch ? 0 : windowManager.topOffset)
@@ -469,6 +413,34 @@ struct IslandView: View {
     }
 
     @ViewBuilder
+    private var styledIslandShell: some View {
+        notchContent
+            .frame(
+                width: currentWidth + hoverWidthBoost,
+                height: currentHeight + hoverHeightBoost,
+                alignment: .top
+            )
+            .padding(.horizontal, isExpanded ? topRadius : bottomRadius)
+            .padding([.horizontal, .bottom], isExpanded ? 12 : 0)
+            .background(isExpanded ? Color.clear : Color.black)
+            .contentShape(islandShape)
+            .clipShape(islandShape)
+            .glassEffect(isExpanded ? .regular : .identity, in: islandShape)
+            .shadow(
+                color: (isExpanded || isHovering) ? .black.opacity(0.35) : .clear,
+                radius: isExpanded ? 12 : 4,
+                y: isExpanded ? 6 : 2
+            )
+            .animation(isExpanded ? openAnimation : closeAnimation, value: isExpanded)
+            .animation(.spring(response: 0.38, dampingFraction: 0.8), value: isHovering)
+            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: DictationManager.shared.isDictating)
+            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: contentType)
+            .animation(.spring(response: 0.45, dampingFraction: 0.75), value: measuredChatHeight)
+            .animation(.spring(response: 0.45, dampingFraction: 0.78), value: skillsVisible)
+            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: hasPendingAttachments)
+            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: closedAgentState)
+    }
+
     private var notchContent: some View {
         ZStack(alignment: .top) {
             // Closed state — centered in the notch
@@ -903,15 +875,8 @@ private struct ClipboardNotificationView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(
-            Capsule()
-                .fill(.black)
-        )
-        .overlay(
-            Capsule()
-                .stroke(.white.opacity(0.15), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
+        .glassEffect(.regular, in: .capsule)
+        .shadow(color: .black.opacity(0.25), radius: 8, y: 3)
     }
 }
 
@@ -931,15 +896,8 @@ private struct DictationNotificationView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(
-            Capsule()
-                .fill(.black)
-        )
-        .overlay(
-            Capsule()
-                .stroke(.red.opacity(0.35), lineWidth: 0.8)
-        )
-        .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
+        .glassEffect(.regular.tint(.red.opacity(0.15)), in: .capsule)
+        .shadow(color: .black.opacity(0.25), radius: 8, y: 3)
     }
 }
 
@@ -2643,7 +2601,6 @@ struct IslandSettingsView: View {
         }
         .padding(.horizontal, 30)
         .padding(.vertical, 24)
-        .background(Color.black.opacity(0.98))
     }
 
     @discardableResult

@@ -32,26 +32,6 @@ struct LiveTranscriptDropdownView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // Background with Liquid Glass effect
-            UnevenRoundedRectangle(
-                topLeadingRadius: 0,
-                bottomLeadingRadius: cornerRadius,
-                bottomTrailingRadius: cornerRadius,
-                topTrailingRadius: 0,
-                style: .continuous
-            )
-            .fill(.black)
-            .overlay(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 0,
-                    bottomLeadingRadius: cornerRadius,
-                    bottomTrailingRadius: cornerRadius,
-                    topTrailingRadius: 0,
-                    style: .continuous
-                )
-                .stroke(.white.opacity(0.08), lineWidth: 0.5)
-            )
-
             // Transcript text
             ScrollView {
                 Text(transcript)
@@ -82,7 +62,17 @@ struct LiveTranscriptDropdownView: View {
         }
         .frame(width: containerWidth, height: isRevealed ? containerHeight : 0)
         .clipped()
-        .shadow(color: .black.opacity(0.5), radius: 10, y: 5)
+        .glassEffect(
+            .regular,
+            in: UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: cornerRadius,
+                bottomTrailingRadius: cornerRadius,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
+        )
+        .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
         .onAppear {
             // Animate in with a spring
             withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {

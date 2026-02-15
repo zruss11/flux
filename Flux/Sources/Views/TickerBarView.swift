@@ -47,25 +47,15 @@ struct TickerBarView: View {
         }
         .frame(width: barWidth, height: barHeight)
         .clipped()
-        .background(
-            UnevenRoundedRectangle(
+        .glassEffect(
+            .regular,
+            in: UnevenRoundedRectangle(
                 topLeadingRadius: 0,
                 bottomLeadingRadius: cornerRadius,
                 bottomTrailingRadius: cornerRadius,
                 topTrailingRadius: 0,
                 style: .continuous
             )
-            .fill(.black)
-        )
-        .overlay(
-            UnevenRoundedRectangle(
-                topLeadingRadius: 0,
-                bottomLeadingRadius: cornerRadius,
-                bottomTrailingRadius: cornerRadius,
-                topTrailingRadius: 0,
-                style: .continuous
-            )
-            .stroke(.white.opacity(0.08), lineWidth: 0.5)
         )
         // The "extrude" effect: clip height from 0 → barHeight
         .mask(
@@ -74,7 +64,7 @@ struct TickerBarView: View {
                 .frame(maxHeight: barHeight, alignment: .top)
         )
         // Subtle glow underneath
-        .shadow(color: .black.opacity(0.6), radius: 8, y: 4)
+        .shadow(color: .black.opacity(0.3), radius: 6, y: 3)
         .onAppear {
             // Phase 1: Extend the bar downward (organic growth)
             withAnimation(.spring(response: 0.55, dampingFraction: 0.78)) {
