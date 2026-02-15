@@ -174,7 +174,7 @@ struct IslandView: View {
         // No messages yet — compact initial state with just the input row.
         // Bump height when attachments are pending so the preview + pills stay visible.
         if messageCount == 0 && !skillsVisible {
-            let base = minExpandedHeight + 80
+            let base = minExpandedHeight + 160
             let attachmentBoost: CGFloat = hasPendingAttachments ? 80 : 0
             return base + attachmentBoost
         }

@@ -83,14 +83,10 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // "Pick up where you left off" pill when chat is empty
-            if conversationStore.activeConversation?.messages.isEmpty ?? true,
-               let recent = SessionContextManager.shared.historyStore.sessions.first {
-                RecentContextPill(session: recent) {
-                    inputText = "What was I doing in \(recent.appName)?"
-                    if let windowTitle = recent.windowTitle, !windowTitle.isEmpty {
-                        inputText += " The window was titled \"\(windowTitle)\"."
-                    }
+            // At a Glance cards when chat is empty
+            if conversationStore.activeConversation?.messages.isEmpty ?? true {
+                AtAGlanceView { prompt in
+                    inputText = prompt
                     sendMessage()
                 }
                 .padding(.horizontal, 12)
