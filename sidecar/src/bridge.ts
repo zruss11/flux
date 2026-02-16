@@ -1689,6 +1689,20 @@ function clearPendingToolCallsForConversation(conversationId: string, reason: st
     });
     pendingToolCalls.delete(toolUseId);
   }
+
+  for (const [toolUseId, pending] of pendingSwiftToolCalls.entries()) {
+    if (pending.conversationId !== conversationId) continue;
+    clearTimeout(pending.timeout);
+    pendingSwiftToolCalls.delete(toolUseId);
+    pending.reject(new Error(reason));
+    sendToClient(activeClient, {
+      type: 'tool_use_complete',
+      conversationId,
+      toolUseId,
+      toolName: pending.toolName,
+      resultPreview: reason,
+    });
+  }
 }
 
 function handlePermissionResponse(message: PermissionResponseMessage): void {
@@ -1743,6 +1757,19 @@ function flushPendingToolCalls(reason: string): void {
     });
     pendingToolCalls.delete(toolUseId);
   }
+
+  for (const [toolUseId, pending] of pendingSwiftToolCalls.entries()) {
+    clearTimeout(pending.timeout);
+    pendingSwiftToolCalls.delete(toolUseId);
+    pending.reject(new Error(reason));
+    sendToClient(activeClient, {
+      type: 'tool_use_complete',
+      conversationId: pending.conversationId,
+      toolUseId,
+      toolName: pending.toolName,
+      resultPreview: reason,
+    });
+  }
 }
 
 function sendToClient(ws: WebSocket | null, message: OutgoingMessage): void {
@@ -1751,7 +1778,8 @@ function sendToClient(ws: WebSocket | null, message: OutgoingMessage): void {
 }
 
 async function handleTelegramMessage(chatId: string, threadId: number | undefined, text: string): Promise<void> {
-  if (!runtimeApiKey) {
+  const anthropicKey = (process.env.ANTHROPIC_API_KEY ?? '').trim();
+  if (AGENT_PROVIDER === 'anthropic' && anthropicKey.length === 0) {
     await telegramBot.sendMessage(
       'No Anthropic API key configured. Open Island Settings and set your API key.',
       chatId,
