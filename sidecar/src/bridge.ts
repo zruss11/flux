@@ -590,8 +590,6 @@ interface ConversationSession {
   pendingMessages: QueuedUserMessage[];
 }
 
-const baseToolNames = new Set(baseTools.map((tool) => tool.name));
-
 const helperTools: ToolDefinition[] = [
   {
     name: 'linear__setup',
@@ -617,6 +615,7 @@ async function ensureMcpInitialized(): Promise<void> {
     mcpManager.registerFromSkills(cachedInstalledSkills);
     cachedRemoteTools = await loadRemoteTools();
   })().catch((err) => {
+    mcpInitPromise = null;
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`MCP init failed: ${msg}`);
   });
@@ -954,6 +953,13 @@ async function createAgentForConversation(
 
         const result = await new Promise<string>((resolve, reject) => {
           if (signal?.aborted) {
+            sendToClient(activeClient, {
+              type: 'tool_use_complete',
+              conversationId,
+              toolUseId: toolCallId,
+              toolName: def.name,
+              resultPreview: 'Aborted',
+            });
             reject(new Error('Tool execution aborted'));
             return;
           }
@@ -963,12 +969,26 @@ async function createAgentForConversation(
             // fires, the entry will already be gone — skip cleanup.
             if (!pendingSwiftToolCalls.has(toolCallId)) return;
             pendingSwiftToolCalls.delete(toolCallId);
+            sendToClient(activeClient, {
+              type: 'tool_use_complete',
+              conversationId,
+              toolUseId: toolCallId,
+              toolName: def.name,
+              resultPreview: 'Timed out',
+            });
             reject(new Error('Tool execution timed out'));
           }, TOOL_TIMEOUT_MS);
 
           const onAbort = () => {
             clearTimeout(timeout);
             pendingSwiftToolCalls.delete(toolCallId);
+            sendToClient(activeClient, {
+              type: 'tool_use_complete',
+              conversationId,
+              toolUseId: toolCallId,
+              toolName: def.name,
+              resultPreview: 'Aborted',
+            });
             reject(new Error('Tool execution aborted'));
           };
 
@@ -1250,7 +1270,7 @@ async function handleForkConversation(message: ForkConversationMessage): Promise
   const forkedAgent = await createAgentForConversation(newConversationId, {
     systemPrompt: state.systemPrompt,
     thinkingLevel: state.thinkingLevel as ThinkingLevel,
-    messages: [...state.messages],
+    messages: state.messages.map(m => ({ ...m })),
   });
 
   const forkedSession: ConversationSession = {
@@ -1386,25 +1406,35 @@ async function runAgentSession(session: ConversationSession, messages: QueuedUse
   sendToClient(activeClient, { type: 'run_status', conversationId, isWorking: true });
 
   try {
-    for (const msg of messages) {
-      const attachments = msg.images.map((image) => ({
-        type: 'image' as const,
-        data: image.data,
-        mimeType: image.mediaType,
-      }));
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      try {
+        const attachments = msg.images.map((image) => ({
+          type: 'image' as const,
+          data: image.data,
+          mimeType: image.mediaType,
+        }));
 
-      await session.agent.prompt(msg.text, attachments.length > 0 ? attachments : undefined);
+        await session.agent.prompt(msg.text, attachments.length > 0 ? attachments : undefined);
 
-      // Collect the full assistant response from streamed chunks and forward it.
-      const agentWithFlush = session.agent as Agent & { flushAccumulatedText: () => string };
-      const fullMessage = agentWithFlush.flushAccumulatedText();
-      if (fullMessage.length > 0) {
-        sendToClient(activeClient, {
-          type: 'assistant_message',
-          conversationId,
-          content: fullMessage,
-        });
-        forwardToTelegramIfNeeded(conversationId, fullMessage);
+        // Collect the full assistant response from streamed chunks and forward it.
+        const agentWithFlush = session.agent as Agent & { flushAccumulatedText: () => string };
+        const fullMessage = agentWithFlush.flushAccumulatedText();
+        if (fullMessage.length > 0) {
+          sendToClient(activeClient, {
+            type: 'assistant_message',
+            conversationId,
+            content: fullMessage,
+          });
+          forwardToTelegramIfNeeded(conversationId, fullMessage);
+        }
+      } catch (err) {
+        const remaining = messages.slice(i + 1);
+        if (remaining.length > 0) {
+          log.warn(`Agent prompt failed, re-queuing ${remaining.length} remaining messages`);
+          session.pendingMessages.unshift(...remaining);
+        }
+        throw err;
       }
     }
   } finally {
