@@ -10,6 +10,8 @@ export interface InstalledSkill {
   id: string;
   name: string;
   description?: string;
+  /** Absolute path to the SKILL.md file for on-demand loading. */
+  skillPath: string;
   defaultPrompt?: string;
   mcpDependencies: SkillMcpDependency[];
 }

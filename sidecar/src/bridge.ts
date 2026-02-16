@@ -11,6 +11,7 @@ import { createLogger } from './logger.js';
 import { baseTools } from './tools/index.js';
 import type { ToolDefinition } from './tools/types.js';
 import { loadInstalledSkills } from './skills/loadInstalledSkills.js';
+import type { InstalledSkill } from './skills/types.js';
 import { McpManager } from './mcp/manager.js';
 
 interface ChatMessage {
@@ -477,7 +478,6 @@ const ALLOWED_TOOLS = [
   'TeamCreate',
   'TeamDelete',
   'SendMessage',
-  'Skill',
   'NotebookEdit',
   'AskUserQuestion',
   'mcp__flux__*',
@@ -599,13 +599,14 @@ const helperTools: ToolDefinition[] = [
 
 const mcpManager = new McpManager();
 let cachedRemoteTools: ToolDefinition[] = [];
+let cachedInstalledSkills: InstalledSkill[] = [];
 let mcpInitPromise: Promise<void> | null = null;
 
 async function ensureMcpInitialized(): Promise<void> {
   if (mcpInitPromise) return mcpInitPromise;
   mcpInitPromise = (async () => {
-    const installedSkills = await loadInstalledSkills();
-    mcpManager.registerFromSkills(installedSkills);
+    cachedInstalledSkills = await loadInstalledSkills();
+    mcpManager.registerFromSkills(cachedInstalledSkills);
     cachedRemoteTools = await loadRemoteTools();
   })().catch((err) => {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1365,8 +1366,34 @@ Important guidelines:
 - Ask clarifying questions when the user's request is ambiguous or lacks necessary details
 - For straightforward requests that don't require screen information, proceed directly with the appropriate action`;
 
+function buildSkillsPromptSection(skills: InstalledSkill[]): string {
+  const withDesc = skills.filter((s) => s.description);
+  if (withDesc.length === 0) return '';
+
+  const entries = withDesc.map((s) =>
+    `<skill>\n<name>${s.name}</name>\n<description>${s.description}</description>\n<location>${s.skillPath}</location>\n</skill>`
+  ).join('\n');
+
+  return [
+    '',
+    '<skills>',
+    "You can use specialized 'skills' to help you with complex tasks. Each skill has a name and a description listed below.",
+    '',
+    'Skills are folders of instructions, scripts, and resources that extend your capabilities for specialized tasks. Each skill folder contains:',
+    '- **SKILL.md** (required): The main instruction file with YAML frontmatter (name, description) and detailed markdown instructions',
+    '',
+    'If a skill seems relevant to your current task, you MUST use your file-read tools to load the SKILL.md file at the given location to read its full instructions before proceeding. Once you have read the instructions, follow them exactly as documented.',
+    '',
+    entries,
+    '</skills>',
+  ].join('\n');
+}
+
 function buildFluxSystemPrompt(): string {
   let prompt = FLUX_SYSTEM_PROMPT;
+
+  // Inject available skills so the agent knows what capabilities are installed.
+  prompt += buildSkillsPromptSection(cachedInstalledSkills);
 
   // Inject live app context so the agent knows what the user is working in.
   // NOTE: This prompt is built once at session start. If the user switches apps
