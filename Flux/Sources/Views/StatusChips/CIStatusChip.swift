@@ -88,20 +88,23 @@ struct CIStatusChip: View {
             } label: {
                 StatusChipCapsule(fillOpacity: StatusChipStyle.defaultFillOpacity, strokeOpacity: StatusChipStyle.defaultStrokeOpacity) {
                     HStack(spacing: 4) {
-                        Image(systemName: visualState.iconName)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(visualState.tint.opacity(0.9))
-                            .rotationEffect(
-                                visualState == .running && !reduceMotion && runIconSpinning
-                                    ? .degrees(360)
-                                    : .degrees(0)
-                            )
-                            .animation(
-                                visualState == .running && !reduceMotion && runIconSpinning
-                                    ? .linear(duration: 1.0).repeatForever(autoreverses: false)
-                                    : .default,
-                                value: runIconSpinning
-                            )
+                        if visualState == .running {
+                            Image(systemName: visualState.iconName)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(visualState.tint.opacity(0.9))
+                                .rotationEffect(!reduceMotion && runIconSpinning ? .degrees(360) : .degrees(0))
+                                .animation(
+                                    !reduceMotion && runIconSpinning
+                                        ? .linear(duration: 1.0).repeatForever(autoreverses: false)
+                                        : nil,
+                                    value: runIconSpinning
+                                )
+                        } else {
+                            Image(systemName: visualState.iconName)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(visualState.tint.opacity(0.9))
+                                .rotationEffect(.degrees(0))
+                        }
 
                         Text("CI")
                             .font(.system(size: 11, weight: .medium))
