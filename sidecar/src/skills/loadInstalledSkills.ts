@@ -11,11 +11,11 @@ function getRepoRoot(): string {
   return path.resolve(sidecarRoot, '..'); // repo root
 }
 
-async function findAncestorWithAgentsSkills(startDir: string): Promise<string | null> {
+async function findAncestorSkillsDir(startDir: string, segments: string[]): Promise<string | null> {
   let cur = path.resolve(startDir);
   // Prevent infinite loops on weird paths.
   for (let i = 0; i < 50; i++) {
-    const skillsDir = path.join(cur, '.agents', 'skills');
+    const skillsDir = path.join(cur, ...segments);
     if (await fileExists(skillsDir)) return skillsDir;
 
     const parent = path.dirname(cur);
@@ -119,6 +119,7 @@ async function loadSkillsFromRoot(skillsRoot: string): Promise<InstalledSkill[]>
       id,
       name,
       description,
+      skillPath: skillMdPath,
       defaultPrompt,
       mcpDependencies,
     });
@@ -130,21 +131,25 @@ async function loadSkillsFromRoot(skillsRoot: string): Promise<InstalledSkill[]>
 export async function loadInstalledSkills(): Promise<InstalledSkill[]> {
   const repoRoot = getRepoRoot();
 
-  // Project skills: prefer `.agents/skills` discovered near CWD (active project),
+  // Project skills: prefer `.agents/skills` or `.pi/skills` discovered near CWD,
   // with a fallback to repo-local `.agents/skills` for dev.
-  const cwdProjectSkills = await findAncestorWithAgentsSkills(process.cwd());
+  const cwdProjectSkills = await findAncestorSkillsDir(process.cwd(), ['.agents', 'skills']);
+  const cwdPiSkills = await findAncestorSkillsDir(process.cwd(), ['.pi', 'skills']);
   const repoSkills = path.join(repoRoot, '.agents', 'skills');
 
-  // Global skills: users can install skills into ~/.claude/skills (and some setups use ~/.agents/skills).
+  // Global skills: users can install skills into multiple locations.
   const home = os.homedir();
   const globalClaudeSkills = path.join(home, '.claude', 'skills');
   const globalAgentsSkills = path.join(home, '.agents', 'skills');
+  const globalPiSkills = path.join(home, '.pi', 'agent', 'skills');
 
   const roots = [
     cwdProjectSkills,
+    cwdPiSkills,
     repoSkills,
     globalClaudeSkills,
     globalAgentsSkills,
+    globalPiSkills,
   ].filter((p): p is string => Boolean(p))
     .filter((p, i, arr) => arr.indexOf(p) === i);
 

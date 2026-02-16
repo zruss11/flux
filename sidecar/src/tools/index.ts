@@ -79,6 +79,16 @@ export const baseTools: ToolDefinition[] = [
   },
 
   {
+    name: 'get_current_datetime',
+    description:
+      'Get the current date, time, timezone, and UTC offset. Use this whenever you need to know the current date or time instead of guessing.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+
+  {
     name: 'create_automation',
     description:
       'Create a recurring automation. Provide the instruction prompt and a 5-field schedule expression (`minute hour day month weekday`, e.g. `0 9 * * 1-5`).',
