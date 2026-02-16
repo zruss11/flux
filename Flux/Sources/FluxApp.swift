@@ -578,6 +578,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case "read_selected_text":
             return await accessibilityReader.readSelectedText() ?? "No text selected"
 
+        case "read_file":
+            let path = (input["path"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let offset = intInput("offset") ?? 1
+            let limit = intInput("limit") ?? 200
+            return readFile(path: path, offset: offset, limit: limit)
+
+        case "run_shell_command":
+            let command = (input["command"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let workingDirectory = (input["workingDirectory"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let timeoutSeconds = intInput("timeoutSeconds") ?? 30
+            return await runShellCommand(command: command, workingDirectory: workingDirectory, timeoutSeconds: timeoutSeconds)
+
         case "set_worktree":
             let rawBranchName = (input["branchName"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -825,6 +837,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let entries: [ClipboardEntry]
     }
 
+    private struct ReadFileResponse: Codable {
+        let ok: Bool
+        let path: String
+        let offset: Int
+        let limit: Int
+        let totalLines: Int
+        let returnedLines: Int
+        let truncated: Bool
+        let content: String?
+        let error: String?
+    }
+
+    private struct ShellCommandResponse: Codable {
+        let ok: Bool
+        let command: String
+        let workingDirectory: String?
+        let timeoutSeconds: Int
+        let exitCode: Int32
+        let timedOut: Bool
+        let stdout: String
+        let stderr: String
+        let missingCommand: String?
+        let installSuggestion: String?
+    }
+
     private struct GitHubReposResponse: Codable {
         let ok: Bool
         let repos: [String]
@@ -870,6 +907,254 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         default: // "list"
             return encodeJSON(GitHubReposResponse(ok: true, repos: repos, message: nil))
         }
+    }
+
+    private func resolvedPathURL(for rawPath: String) -> URL {
+        let expanded = (rawPath as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            return URL(fileURLWithPath: expanded).standardizedFileURL
+        }
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        return cwd.appendingPathComponent(expanded).standardizedFileURL
+    }
+
+    private func readFile(path: String, offset: Int, limit: Int) -> String {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            return encodeJSON(ReadFileResponse(
+                ok: false,
+                path: path,
+                offset: max(1, offset),
+                limit: min(max(limit, 1), 2_000),
+                totalLines: 0,
+                returnedLines: 0,
+                truncated: false,
+                content: nil,
+                error: "Missing required parameter: path"
+            ))
+        }
+
+        let fileURL = resolvedPathURL(for: trimmedPath)
+        do {
+            let data = try Data(contentsOf: fileURL)
+            guard let text = String(data: data, encoding: .utf8) else {
+                return encodeJSON(ReadFileResponse(
+                    ok: false,
+                    path: fileURL.path,
+                    offset: max(1, offset),
+                    limit: min(max(limit, 1), 2_000),
+                    totalLines: 0,
+                    returnedLines: 0,
+                    truncated: false,
+                    content: nil,
+                    error: "File is not valid UTF-8 text"
+                ))
+            }
+
+            let normalized = text
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
+            let allLines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+            let safeOffset = max(1, offset)
+            let safeLimit = min(max(limit, 1), 2_000)
+            let startIndex = min(max(safeOffset - 1, 0), allLines.count)
+            let endIndex = min(startIndex + safeLimit, allLines.count)
+            let selected = Array(allLines[startIndex..<endIndex])
+
+            return encodeJSON(ReadFileResponse(
+                ok: true,
+                path: fileURL.path,
+                offset: safeOffset,
+                limit: safeLimit,
+                totalLines: allLines.count,
+                returnedLines: selected.count,
+                truncated: endIndex < allLines.count,
+                content: selected.joined(separator: "\n"),
+                error: nil
+            ))
+        } catch {
+            return encodeJSON(ReadFileResponse(
+                ok: false,
+                path: fileURL.path,
+                offset: max(1, offset),
+                limit: min(max(limit, 1), 2_000),
+                totalLines: 0,
+                returnedLines: 0,
+                truncated: false,
+                content: nil,
+                error: error.localizedDescription
+            ))
+        }
+    }
+
+    private func extractMissingCommand(from stderr: String) -> String? {
+        let pattern = #"command not found: ([^\s\n]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let ns = stderr as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        guard let match = regex.firstMatch(in: stderr, options: [], range: range),
+              match.numberOfRanges >= 2 else {
+            return nil
+        }
+        let commandRange = match.range(at: 1)
+        guard commandRange.location != NSNotFound else { return nil }
+        return ns.substring(with: commandRange)
+    }
+
+    private func firstCommandToken(from command: String) -> String? {
+        let parts = command
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0.isWhitespace })
+        guard let first = parts.first, !first.isEmpty else { return nil }
+        return String(first)
+    }
+
+    private func installSuggestion(for missingCommand: String?) -> String? {
+        guard let missingCommand else { return nil }
+        switch missingCommand.lowercased() {
+        case "imsg":
+            return "brew install steipete/tap/imsg"
+        case "gh":
+            return "brew install gh"
+        default:
+            return nil
+        }
+    }
+
+    private func runShellCommand(command: String, workingDirectory: String?, timeoutSeconds: Int) async -> String {
+        let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeTimeout = min(max(timeoutSeconds, 1), 120)
+        let trimmedWorkingDir = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedCommand.isEmpty else {
+            return encodeJSON(ShellCommandResponse(
+                ok: false,
+                command: command,
+                workingDirectory: trimmedWorkingDir,
+                timeoutSeconds: safeTimeout,
+                exitCode: -1,
+                timedOut: false,
+                stdout: "",
+                stderr: "Missing required parameter: command",
+                missingCommand: nil,
+                installSuggestion: nil
+            ))
+        }
+
+        let resolvedWorkingDirURL: URL?
+        if let trimmedWorkingDir, !trimmedWorkingDir.isEmpty {
+            let wdURL = resolvedPathURL(for: trimmedWorkingDir)
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: wdURL.path, isDirectory: &isDir)
+            guard exists, isDir.boolValue else {
+                return encodeJSON(ShellCommandResponse(
+                    ok: false,
+                    command: trimmedCommand,
+                    workingDirectory: wdURL.path,
+                    timeoutSeconds: safeTimeout,
+                    exitCode: -1,
+                    timedOut: false,
+                    stdout: "",
+                    stderr: "Working directory does not exist: \(wdURL.path)",
+                    missingCommand: nil,
+                    installSuggestion: nil
+                ))
+            }
+            resolvedWorkingDirURL = wdURL
+        } else {
+            resolvedWorkingDirURL = nil
+        }
+
+        let result = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
+
+                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                process.arguments = ["-lc", trimmedCommand]
+                process.standardOutput = stdoutPipe
+                process.standardError = stderrPipe
+
+                if let resolvedWorkingDirURL {
+                    process.currentDirectoryURL = resolvedWorkingDirURL
+                }
+
+                var env = ProcessInfo.processInfo.environment
+                let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+                let currentPath = env["PATH"] ?? "/usr/bin:/bin"
+                env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
+                process.environment = env
+
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume(returning: ShellCommandResponse(
+                        ok: false,
+                        command: trimmedCommand,
+                        workingDirectory: process.currentDirectoryURL?.path,
+                        timeoutSeconds: safeTimeout,
+                        exitCode: -1,
+                        timedOut: false,
+                        stdout: "",
+                        stderr: error.localizedDescription,
+                        missingCommand: nil,
+                        installSuggestion: nil
+                    ))
+                    return
+                }
+
+                let start = Date()
+                let hardDeadline = start.addingTimeInterval(TimeInterval(safeTimeout))
+                while process.isRunning && Date() < hardDeadline {
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+
+                var timedOut = false
+                if process.isRunning {
+                    timedOut = true
+                    process.terminate()
+
+                    let terminateDeadline = Date().addingTimeInterval(1.0)
+                    while process.isRunning && Date() < terminateDeadline {
+                        Thread.sleep(forTimeInterval: 0.05)
+                    }
+                }
+
+                process.waitUntilExit()
+
+                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+                let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+
+                let maxChars = 30_000
+                let clippedStdout = stdout.count > maxChars ? String(stdout.prefix(maxChars)) + "\n…(truncated)" : stdout
+                let clippedStderr = stderr.count > maxChars ? String(stderr.prefix(maxChars)) + "\n…(truncated)" : stderr
+
+                let missingCommand = self.extractMissingCommand(from: clippedStderr)
+                    ?? ((process.terminationStatus == 127) ? self.firstCommandToken(from: trimmedCommand) : nil)
+                let suggestion = self.installSuggestion(for: missingCommand)
+
+                continuation.resume(returning: ShellCommandResponse(
+                    ok: process.terminationStatus == 0 && !timedOut,
+                    command: trimmedCommand,
+                    workingDirectory: process.currentDirectoryURL?.path,
+                    timeoutSeconds: safeTimeout,
+                    exitCode: process.terminationStatus,
+                    timedOut: timedOut,
+                    stdout: clippedStdout,
+                    stderr: clippedStderr,
+                    missingCommand: missingCommand,
+                    installSuggestion: suggestion
+                ))
+            }
+        }
+
+        return encodeJSON(result)
     }
 
     // MARK: - GitHub Status (gh CLI)

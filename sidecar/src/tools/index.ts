@@ -77,6 +77,52 @@ export const baseTools: ToolDefinition[] = [
       properties: {},
     },
   },
+  {
+    name: 'read_file',
+    description:
+      'Read a UTF-8 text file from disk. Supports optional line offset and limit for large files. Use this to load SKILL.md instructions before executing a skill.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Absolute or relative file path to read.',
+        },
+        offset: {
+          type: 'number',
+          description: '1-indexed line number to start reading from (default: 1).',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of lines to read (default: 200, max: 2000).',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'run_shell_command',
+    description:
+      'Run a shell command on macOS and return stdout/stderr and exit code. Use this for CLI-based skills (for example imsg).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'Shell command to execute.',
+        },
+        workingDirectory: {
+          type: 'string',
+          description: 'Optional working directory for command execution.',
+        },
+        timeoutSeconds: {
+          type: 'number',
+          description: 'Optional timeout in seconds (default: 30, max: 120).',
+        },
+      },
+      required: ['command'],
+    },
+  },
 
   {
     name: 'get_current_datetime',

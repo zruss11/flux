@@ -78,7 +78,7 @@ enum SkillCatalog {
             description: "iMessage/SMS CLI for listing chats, history, watch, and sending",
             skillMdContent: """
             ---
-            name: imsg
+            name: imessage
             description: iMessage/SMS CLI for listing chats, history, watch, and sending.
             ---
 
@@ -89,6 +89,25 @@ enum SkillCatalog {
             Use `imsg` to read and send Messages.app iMessage/SMS on macOS.
 
             Requirements: Messages.app signed in, Full Disk Access for your terminal, and Automation permission to control Messages.app for sending.
+
+            ## Preflight (always run first)
+
+            ```bash
+            command -v imsg
+            ```
+
+            If `imsg` is missing, ask the user for permission to install it before continuing:
+
+            ```bash
+            brew install steipete/tap/imsg
+            ```
+
+            Then verify:
+
+            ```bash
+            imsg --help
+            imsg chats --limit 5 --json
+            ```
 
             ## Inputs to collect
 

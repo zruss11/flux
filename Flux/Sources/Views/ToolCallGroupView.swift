@@ -1,4 +1,268 @@
+import AppKit
 import SwiftUI
+
+// MARK: - Tool Icon Mapping
+
+private struct ToolKindVisual: Identifiable, Hashable {
+    let id: String
+    let label: String
+    let symbolName: String
+    let tint: Color
+    let customAssetNames: [String]
+
+    static func from(toolName rawToolName: String) -> ToolKindVisual {
+        let toolName = rawToolName.lowercased()
+
+        // MCP tool format: <serverId>__<toolName>
+        if let split = toolName.firstRange(of: "__") {
+            let serverId = String(toolName[..<split.lowerBound])
+            return visualForServer(id: serverId)
+        }
+
+        if toolName == "run_shell_command" || toolName.contains("shell") || toolName.contains("bash") || toolName.contains("terminal") {
+            return ToolKindVisual(
+                id: "terminal",
+                label: "Terminal",
+                symbolName: "apple.terminal",
+                tint: .orange,
+                customAssetNames: []
+            )
+        }
+
+        if toolName == "read_file" {
+            return ToolKindVisual(
+                id: "file",
+                label: "File",
+                symbolName: "doc.text",
+                tint: .indigo,
+                customAssetNames: []
+            )
+        }
+
+        if toolName.hasPrefix("calendar_") {
+            return ToolKindVisual(
+                id: "calendar",
+                label: "Calendar",
+                symbolName: "calendar",
+                tint: .red,
+                customAssetNames: []
+            )
+        }
+
+        if toolName.hasPrefix("linear_") || toolName == "linear__setup" || toolName == "linear__mcp_list_tools" {
+            return visualForServer(id: "linear")
+        }
+
+        if toolName == "check_github_status" || toolName == "manage_github_repos" || toolName.hasPrefix("github_") {
+            return visualForServer(id: "github")
+        }
+
+        if toolName.hasSuffix("automation") || toolName.contains("automation") {
+            return ToolKindVisual(
+                id: "automation",
+                label: "Automation",
+                symbolName: "clock.arrow.2.circlepath",
+                tint: .mint,
+                customAssetNames: []
+            )
+        }
+
+        if toolName == "capture_screen" || toolName == "read_visible_windows" || toolName == "read_ax_tree" {
+            return ToolKindVisual(
+                id: "screen",
+                label: "Screen",
+                symbolName: "display",
+                tint: .cyan,
+                customAssetNames: []
+            )
+        }
+
+        if toolName == "read_selected_text" {
+            return ToolKindVisual(
+                id: "selection",
+                label: "Selected text",
+                symbolName: "character.cursor.ibeam",
+                tint: .teal,
+                customAssetNames: []
+            )
+        }
+
+        if toolName == "read_clipboard_history" {
+            return ToolKindVisual(
+                id: "clipboard",
+                label: "Clipboard",
+                symbolName: "doc.on.clipboard",
+                tint: .purple,
+                customAssetNames: []
+            )
+        }
+
+        if toolName == "read_session_history" || toolName == "get_session_context_summary" {
+            return ToolKindVisual(
+                id: "session",
+                label: "Session",
+                symbolName: "clock.arrow.circlepath",
+                tint: .blue,
+                customAssetNames: []
+            )
+        }
+
+        if toolName == "delegate_to_agent" {
+            return ToolKindVisual(
+                id: "delegate",
+                label: "Delegate",
+                symbolName: "person.2.fill",
+                tint: .green,
+                customAssetNames: []
+            )
+        }
+
+        if toolName == "get_current_datetime" {
+            return ToolKindVisual(
+                id: "datetime",
+                label: "Date/Time",
+                symbolName: "clock",
+                tint: .gray,
+                customAssetNames: []
+            )
+        }
+
+        if toolName == "set_worktree" {
+            return ToolKindVisual(
+                id: "git",
+                label: "Git",
+                symbolName: "arrow.triangle.branch",
+                tint: .brown,
+                customAssetNames: []
+            )
+        }
+
+        return ToolKindVisual(
+            id: "generic",
+            label: "Tool",
+            symbolName: "wrench.and.screwdriver",
+            tint: .gray,
+            customAssetNames: []
+        )
+    }
+
+    private static func visualForServer(id serverId: String) -> ToolKindVisual {
+        switch serverId {
+        case "linear":
+            return ToolKindVisual(
+                id: "linear",
+                label: "Linear",
+                symbolName: "line.3.horizontal.decrease.circle",
+                tint: .white,
+                customAssetNames: ["tool-linear", "linear"]
+            )
+        case "notion":
+            return ToolKindVisual(
+                id: "notion",
+                label: "Notion",
+                symbolName: "note.text",
+                tint: .white,
+                customAssetNames: ["tool-notion", "notion"]
+            )
+        case "github":
+            return ToolKindVisual(
+                id: "github",
+                label: "GitHub",
+                symbolName: "chevron.left.forwardslash.chevron.right",
+                tint: .white,
+                customAssetNames: ["tool-github", "github"]
+            )
+        case "calendar":
+            return ToolKindVisual(
+                id: "calendar",
+                label: "Calendar",
+                symbolName: "calendar",
+                tint: .red,
+                customAssetNames: []
+            )
+        default:
+            return ToolKindVisual(
+                id: "mcp:\(serverId)",
+                label: serverId.capitalized,
+                symbolName: "puzzlepiece.extension",
+                tint: .gray,
+                customAssetNames: []
+            )
+        }
+    }
+}
+
+private struct ToolKindIconStack: View {
+    let kinds: [ToolKindVisual]
+    private let maxVisible = 5
+
+    var body: some View {
+        let visible = Array(kinds.prefix(maxVisible))
+        let remaining = max(kinds.count - maxVisible, 0)
+
+        HStack(spacing: -6) {
+            ForEach(visible) { kind in
+                iconBubble(kind: kind)
+            }
+
+            if remaining > 0 {
+                Text("+\(remaining)")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule(style: .circular)
+                            .fill(Color.white.opacity(0.14))
+                    )
+                    .overlay(
+                        Capsule(style: .circular)
+                            .strokeBorder(.white.opacity(0.22), lineWidth: 0.5)
+                    )
+                    .padding(.leading, 4)
+            }
+        }
+        .padding(.leading, 2)
+    }
+
+    @ViewBuilder
+    private func iconBubble(kind: ToolKindVisual) -> some View {
+        let custom = kind.customAssetNames.compactMap(Self.loadCustomAsset(named:)).first
+
+        ZStack {
+            Circle()
+                .fill(Color.black.opacity(0.28))
+                .frame(width: 18, height: 18)
+                .overlay(
+                    Circle()
+                        .strokeBorder(.white.opacity(0.22), lineWidth: 0.6)
+                )
+
+            if let custom {
+                Image(nsImage: custom)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 12, height: 12)
+            } else {
+                Image(systemName: kind.symbolName)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(kind.tint.opacity(0.95))
+            }
+        }
+        .help(kind.label)
+    }
+
+    private static func loadCustomAsset(named name: String) -> NSImage? {
+        let exts = ["pdf", "png", "jpg", "jpeg", "webp"]
+        for ext in exts {
+            if let url = Bundle.module.url(forResource: name, withExtension: ext, subdirectory: "ToolIcons"),
+               let image = NSImage(contentsOf: url) {
+                return image
+            }
+        }
+        return nil
+    }
+}
 
 // MARK: - Tool Call Group View
 
@@ -6,6 +270,20 @@ import SwiftUI
 struct ToolCallGroupView: View {
     let calls: [ToolCallInfo]
     @State private var isExpanded = false
+
+    private var uniqueToolKinds: [ToolKindVisual] {
+        var seen = Set<String>()
+        var ordered: [ToolKindVisual] = []
+
+        for call in calls {
+            let visual = ToolKindVisual.from(toolName: call.toolName)
+            if seen.insert(visual.id).inserted {
+                ordered.append(visual)
+            }
+        }
+
+        return ordered
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -35,6 +313,10 @@ struct ToolCallGroupView: View {
                     Text("Called Tools")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white.opacity(0.8))
+
+                    if !uniqueToolKinds.isEmpty {
+                        ToolKindIconStack(kinds: uniqueToolKinds)
+                    }
 
                     Spacer()
 
@@ -83,6 +365,8 @@ struct ToolCallRow: View {
         case "read_ax_tree": return "Read accessibility tree"
         case "read_visible_windows": return "Read visible windows"
         case "read_selected_text": return "Read selected text"
+        case "read_file": return "Read file"
+        case "run_shell_command": return "Run shell command"
         case "create_automation": return "Create automation"
         case "list_automations": return "List automations"
         case "update_automation": return "Update automation"

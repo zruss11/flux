@@ -61,6 +61,16 @@ describe('bridge.ts', () => {
       expect(result).toBe(false);
     });
 
+    it('should require approval for brew install', () => {
+      const result = requiresApproval('run_shell_command', { command: 'brew install steipete/tap/imsg' });
+      expect(result).toBe(true);
+    });
+
+    it('should allow benign command availability checks', () => {
+      const result = requiresApproval('run_shell_command', { command: 'command -v imsg' });
+      expect(result).toBe(false);
+    });
+
     it('should flag dangerous command in non-command tool if suspicious input found', () => {
         // Even if tool name doesn't sound like shell, if input has 'command' key with dangerous content
         const result = requiresApproval('some_tool', { command: 'rm -rf /' });

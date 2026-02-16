@@ -743,10 +743,11 @@ function sanitizeAppInstruction(instruction: string | undefined): string | undef
   return clipped.replace(/\r\n|\r/g, '\n');
 }
 
-// Optimization: Combine multiple dangerous command patterns into a single regex
+// Optimization: Combine approval-required command patterns into a single regex
 // to avoid O(N*M) matching (where N=inputs, M=patterns).
-const DANGEROUS_COMMAND_PATTERN = new RegExp(
+const APPROVAL_REQUIRED_COMMAND_PATTERN = new RegExp(
   [
+    // Destructive filesystem / git operations
     String.raw`\brm\b`,
     String.raw`\bsudo\s+rm\b`,
     String.raw`\bgit\s+reset\s+--hard\b`,
@@ -757,6 +758,9 @@ const DANGEROUS_COMMAND_PATTERN = new RegExp(
     String.raw`\bgit\s+rebase\s+--abort\b`,
     String.raw`\bgit\s+rebase\s+--skip\b`,
     String.raw`\bgit\s+stash\s+(?:drop|clear)\b`,
+    // Package installation / environment mutation
+    String.raw`\bbrew\s+install\b`,
+    String.raw`\bbrew\s+tap\b`,
   ].join('|'),
   'i'
 );
@@ -793,7 +797,7 @@ export function requiresApproval(toolName: string, input: Record<string, unknown
     return false;
   }
 
-  return commandCandidates.some((command) => DANGEROUS_COMMAND_PATTERN.test(command));
+  return commandCandidates.some((command) => APPROVAL_REQUIRED_COMMAND_PATTERN.test(command));
 }
 
 interface ConversationSession {
@@ -1866,6 +1870,12 @@ You have access to the following tools:
 - read_selected_text: Read currently selected text
 - read_clipboard_history: Read recent clipboard history
 
+**File Tool**:
+- read_file: Read UTF-8 text files from disk (supports offset/limit)
+
+**Shell Tool**:
+- run_shell_command: Execute shell commands on macOS (for CLI workflows)
+
 **Date/Time Tool**:
 - get_current_datetime: Get the current date, time, timezone, and UTC offset
 
@@ -1890,6 +1900,9 @@ You have access to the following tools:
 Important guidelines:
 - Do NOT use screen context tools unless the user's request specifically requires information about what's currently on their screen or visible in their windows
 - If the user has attached a screenshot or image to their message, use that image instead of capturing a new screenshot
+- When a relevant skill is available, read its SKILL.md with the read_file tool before using it
+- Use the run_shell_command tool for CLI-based workflows when appropriate
+- If run_shell_command reports a missingCommand/installSuggestion, tell the user what is missing and ask whether to run the suggested install command
 - Be concise and helpful in your responses
 - Ask clarifying questions when the user's request is ambiguous or lacks necessary details
 - For straightforward requests that don't require screen information, proceed directly with the appropriate action`;
