@@ -779,6 +779,35 @@ function createAgentForConversation(
         }
 
         // Local helper tools
+        if (def.name === 'get_current_datetime') {
+          const now = new Date();
+          const text = JSON.stringify({
+            iso: now.toISOString(),
+            local: now.toLocaleString(),
+            date: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+            time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            utcOffset: now.getTimezoneOffset(),
+          }, null, 2);
+
+          sendToClient(activeClient, {
+            type: 'tool_use_start',
+            conversationId,
+            toolUseId: toolCallId,
+            toolName: def.name,
+            inputSummary: 'Getting current date/time',
+          });
+          sendToClient(activeClient, {
+            type: 'tool_use_complete',
+            conversationId,
+            toolUseId: toolCallId,
+            toolName: def.name,
+            resultPreview: 'Done',
+          });
+
+          return { content: [{ type: 'text', text }], details: {} };
+        }
+
         if (def.name === 'linear__setup') {
           const text = [
             'Linear tools are available via the Linear MCP server, but require an access token.',
@@ -1340,6 +1369,9 @@ You have access to the following tools:
 - read_ax_tree: Read the accessibility tree of the frontmost window
 - read_selected_text: Read currently selected text
 - read_clipboard_history: Read recent clipboard history
+
+**Date/Time Tool**:
+- get_current_datetime: Get the current date, time, timezone, and UTC offset
 
 **Session Context Tools**:
 - read_session_history: Read recently visited apps/windows (with timestamps)
