@@ -15,6 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run Swift tests
+        env:
+          CI: true
+          FLUX_CI_ENVIRONMENT: true
         run: |
           swift --version
           swift test --package-path Flux
