@@ -103,7 +103,7 @@ export const baseTools: ToolDefinition[] = [
   {
     name: 'run_shell_command',
     description:
-      'Run a shell command on macOS and return stdout/stderr and exit code. Use this for CLI-based skills (for example imsg).',
+      'Run a shell command on macOS and return stdout/stderr and exit code. Use this for CLI-based workflows when a dedicated tool is unavailable.',
     input_schema: {
       type: 'object',
       properties: {
@@ -454,6 +454,65 @@ export const baseTools: ToolDefinition[] = [
         },
       },
       required: ['date'],
+    },
+  },
+  {
+    name: 'imessage_list_accounts',
+    description:
+      'List configured Messages.app accounts/services (iMessage/SMS/RCS) and their connection status. Uses AppleScript automation (no imsg CLI required).',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'imessage_list_chats',
+    description:
+      'List recent Messages.app chats with chat IDs and participants. Returns chat metadata only (not full message history). Uses AppleScript automation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Maximum chats to return (default: 10, max: 50).',
+        },
+        service: {
+          type: 'string',
+          enum: ['any', 'imessage', 'sms', 'rcs'],
+          description: 'Optional service filter.',
+        },
+      },
+    },
+  },
+  {
+    name: 'imessage_send_message',
+    description:
+      'Send a message through Messages.app via AppleScript. Provide either `to` (phone/email handle) or `chatId`, plus `text` and/or `filePath`.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        to: {
+          type: 'string',
+          description: 'Recipient handle (phone number or email).',
+        },
+        chatId: {
+          type: 'string',
+          description: 'Existing chat ID (use imessage_list_chats). Useful for group chats.',
+        },
+        text: {
+          type: 'string',
+          description: 'Message text to send.',
+        },
+        filePath: {
+          type: 'string',
+          description: 'Optional file path to send as attachment.',
+        },
+        service: {
+          type: 'string',
+          enum: ['auto', 'imessage', 'sms', 'rcs'],
+          description: 'Delivery service when using `to` (default: auto).',
+        },
+      },
     },
   },
 ];

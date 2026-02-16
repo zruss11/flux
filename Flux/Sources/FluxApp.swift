@@ -789,6 +789,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let date = input["date"] as? String ?? ""
             return await CalendarService.shared.navigateToDate(date: date)
 
+        // MARK: - Messages Tools
+
+        case "imessage_list_accounts":
+            return await MessagesService.shared.listAccounts()
+
+        case "imessage_list_chats":
+            let limit = intInput("limit") ?? 10
+            let service = input["service"] as? String
+            return await MessagesService.shared.listChats(limit: limit, service: service)
+
+        case "imessage_send_message":
+            let to = input["to"] as? String
+            let chatId = input["chatId"] as? String
+            let text = input["text"] as? String
+            let filePath = input["filePath"] as? String
+            let service = input["service"] as? String
+            return await MessagesService.shared.sendMessage(
+                to: to,
+                chatId: chatId,
+                text: text,
+                filePath: filePath,
+                service: service
+            )
+
         default:
             return "Unknown tool: \(toolName)"
         }
@@ -1015,8 +1039,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func installSuggestion(for missingCommand: String?) -> String? {
         guard let missingCommand else { return nil }
         switch missingCommand.lowercased() {
-        case "imsg":
-            return "brew install steipete/tap/imsg"
         case "gh":
             return "brew install gh"
         default:

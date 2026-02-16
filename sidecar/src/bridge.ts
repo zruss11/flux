@@ -785,6 +785,12 @@ export function collectCommandLikeInputValues(input: Record<string, unknown>): s
 
 export function requiresApproval(toolName: string, input: Record<string, unknown>): boolean {
   const lowerToolName = toolName.toLowerCase();
+
+  // Sending real messages should always require explicit user approval.
+  if (lowerToolName === 'imessage_send_message') {
+    return true;
+  }
+
   const isCommandExecutionTool =
     lowerToolName.includes('shell') ||
     lowerToolName.includes('bash') ||
@@ -1894,6 +1900,11 @@ You have access to the following tools:
 - calendar_delete_event
 - calendar_navigate_to_date
 
+**Messages Tools**:
+- imessage_list_accounts
+- imessage_list_chats
+- imessage_send_message
+
 **Remote MCP Tools (optional)**:
 - <serverId>__<toolName> (for MCP servers discovered via installed skills)
 
@@ -1903,6 +1914,7 @@ Important guidelines:
 - When a relevant skill is available, read its SKILL.md with the read_file tool before using it
 - Use the run_shell_command tool for CLI-based workflows when appropriate
 - If run_shell_command reports a missingCommand/installSuggestion, tell the user what is missing and ask whether to run the suggested install command
+- For Messages.app, prefer the dedicated imessage_* tools over CLI workflows
 - Be concise and helpful in your responses
 - Ask clarifying questions when the user's request is ambiguous or lacks necessary details
 - For straightforward requests that don't require screen information, proceed directly with the appropriate action`;
@@ -2428,6 +2440,8 @@ const TOOL_INPUT_SUMMARY_KEYS = [
   'path',
   'file',
   'target',
+  'to',
+  'chatId',
   'command',
   'script',
   'query',

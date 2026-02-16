@@ -71,6 +71,11 @@ describe('bridge.ts', () => {
       expect(result).toBe(false);
     });
 
+    it('should always require approval for imessage_send_message', () => {
+      const result = requiresApproval('imessage_send_message', { to: '+15551234567', text: 'hi' });
+      expect(result).toBe(true);
+    });
+
     it('should flag dangerous command in non-command tool if suspicious input found', () => {
         // Even if tool name doesn't sound like shell, if input has 'command' key with dangerous content
         const result = requiresApproval('some_tool', { command: 'rm -rf /' });

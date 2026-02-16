@@ -75,82 +75,32 @@ enum SkillCatalog {
         RecommendedSkill(
             directoryName: "imessage",
             displayName: "iMessage",
-            description: "iMessage/SMS CLI for listing chats, history, watch, and sending",
+            description: "Messages.app automation for listing chats/accounts and sending messages",
             skillMdContent: """
             ---
             name: imessage
-            description: iMessage/SMS CLI for listing chats, history, watch, and sending.
+            description: Use built-in Flux Messages tools (AppleScript automation, no imsg CLI).
             ---
 
-            # imsg Actions
+            # iMessage / Messages Tools
 
-            ## Overview
+            Use Flux's built-in `imessage_*` tools to automate Messages.app directly.
 
-            Use `imsg` to read and send Messages.app iMessage/SMS on macOS.
+            ## Available tools
 
-            Requirements: Messages.app signed in, Full Disk Access for your terminal, and Automation permission to control Messages.app for sending.
-
-            ## Preflight (always run first)
-
-            ```bash
-            command -v imsg
-            ```
-
-            If `imsg` is missing, ask the user for permission to install it before continuing:
-
-            ```bash
-            brew install steipete/tap/imsg
-            ```
-
-            Then verify:
-
-            ```bash
-            imsg --help
-            imsg chats --limit 5 --json
-            ```
-
-            ## Inputs to collect
-
-            - Recipient handle (phone/email) for `send`
-            - `chatId` for history/watch (from `imsg chats --limit 10 --json`)
-            - `text` and optional `file` path for sends
-
-            ## Actions
-
-            ### List chats
-
-            ```bash
-            imsg chats --limit 10 --json
-            ```
-
-            ### Fetch chat history
-
-            ```bash
-            imsg history --chat-id 1 --limit 20 --attachments --json
-            ```
-
-            ### Watch a chat
-
-            ```bash
-            imsg watch --chat-id 1 --attachments
-            ```
-
-            ### Send a message
-
-            ```bash
-            imsg send --to "+14155551212" --text "hi" --file /path/pic.jpg
-            ```
+            - `imessage_list_accounts`
+            - `imessage_list_chats`
+            - `imessage_send_message`
 
             ## Notes
 
-            - `--service imessage|sms|auto` controls delivery.
-            - Confirm recipient + message before sending.
+            - This flow does **not** require `imsg` or Full Disk Access.
+            - Messages history/transcripts are not exposed by AppleScript; chat listing returns metadata (chat IDs, participants, service).
+            - Sending should be confirmed with the user before execution.
+            - macOS may prompt for Automation permission (Flux controlling Messages.app).
             """,
             category: .communication,
-            requiredPermissions: [.automation],
-            dependencies: [
-                SkillDependency(kind: .brew, formula: "steipete/tap/imsg", bins: ["imsg"])
-            ]
+            requiredPermissions: [.automation]
         ),
         RecommendedSkill(
             directoryName: "calendar",

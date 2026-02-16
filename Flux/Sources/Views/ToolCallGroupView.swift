@@ -49,6 +49,16 @@ private struct ToolKindVisual: Identifiable, Hashable {
             )
         }
 
+        if toolName.hasPrefix("imessage_") {
+            return ToolKindVisual(
+                id: "messages",
+                label: "Messages",
+                symbolName: "message.fill",
+                tint: .green,
+                customAssetNames: []
+            )
+        }
+
         if toolName.hasPrefix("linear_") || toolName == "linear__setup" || toolName == "linear__mcp_list_tools" {
             return visualForServer(id: "linear")
         }
@@ -380,6 +390,9 @@ struct ToolCallRow: View {
         case "calendar_edit_event": return "Edit Event"
         case "calendar_delete_event": return "Delete Event"
         case "calendar_navigate_to_date": return "Navigate to Date"
+        case "imessage_list_accounts": return "List Message Accounts"
+        case "imessage_list_chats": return "List Message Chats"
+        case "imessage_send_message": return "Send Message"
         case "get_current_datetime": return "Get Date/Time"
         case "delegate_to_agent": return "Delegate to Agent"
         default:
