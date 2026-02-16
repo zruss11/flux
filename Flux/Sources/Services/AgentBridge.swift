@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import os
 
@@ -11,6 +12,7 @@ struct ChatImagePayload: Codable, Hashable, Sendable {
 final class AgentBridge: @unchecked Sendable {
     var isConnected = false
     var isAgentWorking = false
+    var availableProviders: [ProviderInfo] = []
 
     var onAssistantMessage: ((String, String) -> Void)?  // conversationId, content
     var onToolRequest: ((String, String, String, [String: Any]) -> Void)?  // conversationId, toolUseId, toolName, input
@@ -25,6 +27,16 @@ final class AgentBridge: @unchecked Sendable {
     var onForkConversationResult: ((String, Bool, String?) -> Void)?  // conversationId, success, reason
     var onPermissionRequest: ((String, String, String, [String: String]) -> Void)?  // conversationId, requestId, toolName, input
     var onAskUserQuestion: ((String, String, [[String: Any]]) -> Void)?  // conversationId, requestId, questions
+    var onSubAgentStart: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, agentId, agentName
+    var onSubAgentToolUse: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, subToolName, subToolStatus
+    var onSubAgentComplete: ((String, String, String) -> Void)?  // conversationId, toolUseId, resultPreview
+    var oauthProviders: [OAuthProviderStatus] = []
+    var oauthInProgress: String? = nil
+    var oauthProgressMessage: String? = nil
+
+    var onOAuthAuth: ((String, String, String?) -> Void)?  // provider, url, instructions
+    var onOAuthPrompt: ((String, String, String, String?, Bool) -> Void)?  // provider, requestId, message, placeholder, allowEmpty
+    var onOAuthComplete: ((String, Bool, String?) -> Void)?  // provider, success, error
     private var activeRunConversationIds: Set<String> = []
     private var activeToolUseIds: Set<String> = []
     private var activeStreamConversationIds: Set<String> = []
@@ -89,6 +101,8 @@ final class AgentBridge: @unchecked Sendable {
         // Send API key immediately on connection (don't wait for first receive)
         let storedKey = UserDefaults.standard.string(forKey: "anthropicApiKey") ?? ""
         sendApiKey(storedKey)
+        requestAvailableModels()
+        sendAllProviderKeys()
 
         // Send MCP auth config proactively; doesn't depend on receiving a message first.
         sendMcpAuthIfNeeded()
@@ -118,7 +132,7 @@ final class AgentBridge: @unchecked Sendable {
         }
     }
 
-    func sendChatMessage(conversationId: String, content: String, images: [ChatImagePayload] = []) {
+    func sendChatMessage(conversationId: String, content: String, images: [ChatImagePayload] = [], modelSpec: String? = nil) {
         setRunStatus(for: conversationId, isWorking: true)
 
         // Keep sidecar config in sync (user may have edited settings since connect).
@@ -139,6 +153,14 @@ final class AgentBridge: @unchecked Sendable {
                 ]
             }
         }
+        if let modelSpec {
+            message["modelSpec"] = modelSpec
+        }
+        send(message)
+    }
+
+    func requestAvailableModels() {
+        let message: [String: Any] = ["type": "list_models"]
         send(message)
     }
 
@@ -189,6 +211,46 @@ final class AgentBridge: @unchecked Sendable {
             "apiKey": key
         ]
         send(message)
+    }
+
+    func sendProviderKey(provider: String, apiKey: String) {
+        let message: [String: Any] = [
+            "type": "set_provider_key",
+            "provider": provider,
+            "apiKey": apiKey
+        ]
+        send(message)
+    }
+
+    func sendStartOAuth(provider: String) {
+        let message: [String: Any] = [
+            "type": "start_oauth",
+            "provider": provider
+        ]
+        send(message)
+    }
+
+    func sendCancelOAuth() {
+        send(["type": "cancel_oauth"])
+    }
+
+    func sendOAuthPromptResponse(requestId: String, answer: String) {
+        let message: [String: Any] = [
+            "type": "oauth_prompt_response",
+            "requestId": requestId,
+            "answer": answer
+        ]
+        send(message)
+    }
+
+    func sendAllProviderKeys() {
+        for config in ProviderKeys.allConfigs {
+            let key = (KeychainService.getString(forKey: config.keychainKey) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !key.isEmpty {
+                sendProviderKey(provider: config.id, apiKey: key)
+            }
+        }
     }
 
     /// Notify the sidecar of a frontmost-app change so it can adapt the system prompt.
@@ -292,8 +354,95 @@ final class AgentBridge: @unchecked Sendable {
     private func handleReceivedMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = json["type"] as? String,
-              let conversationId = json["conversationId"] as? String else { return }
+              let type = json["type"] as? String else { return }
+
+        // Handle messages that don't require a conversationId
+        if type == "list_models_response" {
+            if let providersRaw = json["providers"] as? [[String: Any]] {
+                let providers = providersRaw.compactMap { providerDict -> ProviderInfo? in
+                    guard let id = providerDict["id"] as? String else { return nil }
+                    let name = providerDict["name"] as? String ?? id
+                    let modelsRaw = providerDict["models"] as? [[String: Any]] ?? []
+                    let models = modelsRaw.compactMap { modelDict -> ModelInfo? in
+                        guard let modelId = modelDict["id"] as? String,
+                              let provider = modelDict["provider"] as? String else { return nil }
+                        return ModelInfo(
+                            id: modelId,
+                            name: modelDict["name"] as? String ?? modelId,
+                            provider: provider,
+                            reasoning: modelDict["reasoning"] as? Bool ?? false,
+                            contextWindow: modelDict["contextWindow"] as? Int ?? 0,
+                            maxTokens: modelDict["maxTokens"] as? Int ?? 0
+                        )
+                    }
+                    return ProviderInfo(id: id, name: name, models: models)
+                }
+                let oauthProvidersRaw = json["oauthProviders"] as? [[String: Any]] ?? []
+                let parsedOAuthProviders = oauthProvidersRaw.compactMap { dict -> OAuthProviderStatus? in
+                    guard let id = dict["id"] as? String,
+                          let name = dict["name"] as? String else { return nil }
+                    let authenticated = dict["authenticated"] as? Bool ?? false
+                    return OAuthProviderStatus(id: id, name: name, authenticated: authenticated)
+                }
+                Task { @MainActor in
+                    self.availableProviders = providers
+                    self.oauthProviders = parsedOAuthProviders
+                }
+            }
+            return
+        }
+
+        if type == "oauth_auth" {
+            if let provider = json["provider"] as? String,
+               let url = json["url"] as? String {
+                let instructions = json["instructions"] as? String
+                if let authUrl = URL(string: url) {
+                    NSWorkspace.shared.open(authUrl)
+                }
+                Task { @MainActor in
+                    self.onOAuthAuth?(provider, url, instructions)
+                }
+            }
+            return
+        }
+
+        if type == "oauth_prompt" {
+            if let provider = json["provider"] as? String,
+               let requestId = json["requestId"] as? String,
+               let message = json["message"] as? String {
+                let placeholder = json["placeholder"] as? String
+                let allowEmpty = json["allowEmpty"] as? Bool ?? false
+                Task { @MainActor in
+                    self.onOAuthPrompt?(provider, requestId, message, placeholder, allowEmpty)
+                }
+            }
+            return
+        }
+
+        if type == "oauth_progress" {
+            if let _ = json["provider"] as? String,
+               let message = json["message"] as? String {
+                Task { @MainActor in
+                    self.oauthProgressMessage = message
+                }
+            }
+            return
+        }
+
+        if type == "oauth_complete" {
+            if let provider = json["provider"] as? String,
+               let success = json["success"] as? Bool {
+                let error = json["error"] as? String
+                Task { @MainActor in
+                    self.oauthInProgress = nil
+                    self.oauthProgressMessage = nil
+                    self.onOAuthComplete?(provider, success, error)
+                }
+            }
+            return
+        }
+
+        guard let conversationId = json["conversationId"] as? String else { return }
 
         switch type {
         case "assistant_message":
@@ -395,6 +544,32 @@ final class AgentBridge: @unchecked Sendable {
                let questions = json["questions"] as? [[String: Any]] {
                 Task { @MainActor in
                     self.onAskUserQuestion?(conversationId, requestId, questions)
+                }
+            }
+
+        case "sub_agent_start":
+            if let toolUseId = json["toolUseId"] as? String,
+               let agentId = json["agentId"] as? String,
+               let agentName = json["agentName"] as? String {
+                Task { @MainActor in
+                    self.onSubAgentStart?(conversationId, toolUseId, agentId, agentName)
+                }
+            }
+
+        case "sub_agent_tool_use":
+            if let toolUseId = json["toolUseId"] as? String,
+               let subToolName = json["subToolName"] as? String,
+               let subToolStatus = json["subToolStatus"] as? String {
+                Task { @MainActor in
+                    self.onSubAgentToolUse?(conversationId, toolUseId, subToolName, subToolStatus)
+                }
+            }
+
+        case "sub_agent_complete":
+            if let toolUseId = json["toolUseId"] as? String,
+               let resultPreview = json["resultPreview"] as? String {
+                Task { @MainActor in
+                    self.onSubAgentComplete?(conversationId, toolUseId, resultPreview)
                 }
             }
 

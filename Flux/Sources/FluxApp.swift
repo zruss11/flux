@@ -462,6 +462,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.conversationStore.addAskUserQuestion(to: uuid, question: pending)
             }
         }
+
+        agentBridge.onSubAgentStart = { [weak self] conversationId, toolUseId, agentId, agentName in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                let activity = SubAgentActivity(
+                    id: toolUseId,
+                    agentId: agentId,
+                    agentName: agentName,
+                    toolCalls: [],
+                    status: .running
+                )
+                self.conversationStore.addSubAgentActivity(to: uuid, activity: activity)
+            }
+        }
+
+        agentBridge.onSubAgentToolUse = { [weak self] conversationId, toolUseId, subToolName, subToolStatus in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                if subToolStatus == "start" {
+                    let info = ToolCallInfo(id: UUID().uuidString, toolName: subToolName, inputSummary: "")
+                    self.conversationStore.addSubAgentToolCall(in: uuid, parentToolUseId: toolUseId, info: info)
+                } else {
+                    self.conversationStore.completeSubAgentToolCall(in: uuid, parentToolUseId: toolUseId, subToolName: subToolName)
+                }
+            }
+        }
+
+        agentBridge.onSubAgentComplete = { [weak self] conversationId, toolUseId, resultPreview in
+            guard let self, let uuid = UUID(uuidString: conversationId) else { return }
+            Task { @MainActor in
+                self.conversationStore.completeSubAgent(in: uuid, toolUseId: toolUseId, resultPreview: resultPreview)
+            }
+        }
     }
 
     private func setupWatcherCallbacks() {

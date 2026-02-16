@@ -1051,6 +1051,7 @@ struct IslandSettingsView: View {
     @AppStorage(SpeechInputSettings.providerStorageKey) private var speechInputProviderRaw = SpeechInputProvider.apple.rawValue
     @AppStorage(SpeechInputSettings.deepgramApiKeyStorageKey) private var deepgramApiKey = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
+    @AppStorage("defaultModelSpec") private var defaultModelSpec = "anthropic:claude-sonnet-4-20250514"
     @AppStorage("dictationAutoCleanFillers") private var dictationAutoCleanFillers = true
     @AppStorage("dictationSoundsEnabled") private var dictationSoundsEnabled = false
     @AppStorage("dictationEnhancementMode") private var dictationEnhancementMode = "none"
@@ -1084,6 +1085,13 @@ struct IslandSettingsView: View {
     @State private var cloneLocationPath = Self.defaultCloneLocationPath
     @State private var cloneInProgress = false
     @State private var cloneErrorMessage: String?
+    @State private var providerKeysExpanded = false
+    @State private var editingProviderKeyId: String? = nil
+    @State private var providerKeyValues: [String: String] = [:]
+    @State private var oauthPromptRequestId: String? = nil
+    @State private var oauthPromptAnswer: String = ""
+    @State private var showOAuthPrompt = false
+    @State private var oauthPromptMessage: String = ""
 
     // Automation editor fields
     @State private var editorName = ""
@@ -1100,6 +1108,7 @@ struct IslandSettingsView: View {
         case apiKey
         case linearToken
         case deepgramApiKey
+        case providerKey(String)  // provider ID
     }
 
     private enum InlineAutomationEditorMode: Equatable {
@@ -1142,42 +1151,143 @@ struct IslandSettingsView: View {
         !deepgramApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var defaultModelDisplayName: String {
+        for provider in agentBridge.availableProviders {
+            if let model = provider.models.first(where: { $0.modelSpec == defaultModelSpec }) {
+                return model.name
+            }
+        }
+        if let colonIndex = defaultModelSpec.firstIndex(of: ":") {
+            return String(defaultModelSpec[defaultModelSpec.index(after: colonIndex)...])
+        }
+        return defaultModelSpec
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 2) {
-                // API Key
-                if editingField == .apiKey {
-                    editableRow(icon: "key.fill", label: "API Key") {
-                        SecureField("sk-ant-...", text: $apiKey)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .focused($fieldFocused)
-                            .onSubmit { editingField = nil }
-                            .onAppear {
-                                IslandWindowManager.shared.makeKeyIfNeeded()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    fieldFocused = true
-                                }
-                            }
-                    } onDone: {
-                        editingField = nil
+                // Provider Keys (expandable section)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        providerKeysExpanded.toggle()
                     }
-                } else {
+                } label: {
                     settingsRow(
                         icon: "key.fill",
-                        label: "API Key",
+                        label: "Provider Keys",
                         trailing: {
                             AnyView(
-                                Text(apiKey.isEmpty ? "Not set" : "••••\(apiKey.suffix(4))")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(apiKey.isEmpty ? .red.opacity(0.8) : .green.opacity(0.8))
+                                HStack(spacing: 6) {
+                                    let configuredCount = ProviderKeys.allConfigs.filter { config in
+                                        let key = (KeychainService.getString(forKey: config.keychainKey) ?? "")
+                                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                                        return !key.isEmpty
+                                    }.count
+                                    if configuredCount > 0 {
+                                        Text("\(configuredCount) set")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.green.opacity(0.8))
+                                    }
+                                    Image(systemName: providerKeysExpanded ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                }
                             )
                         }
                     )
-                    .onTapGesture {
-                        editingField = .apiKey
+                }
+                .buttonStyle(.plain)
+
+                if providerKeysExpanded {
+                    VStack(spacing: 2) {
+                        // API key providers
+                        ForEach(ProviderKeys.allConfigs, id: \.id) { config in
+                            if case .providerKey(config.id) = editingField {
+                                editableRow(icon: "key.fill", label: config.label) {
+                                    SecureField(config.placeholder, text: Binding(
+                                        get: { providerKeyValues[config.id] ?? "" },
+                                        set: { providerKeyValues[config.id] = $0 }
+                                    ))
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white)
+                                    .focused($fieldFocused)
+                                    .onSubmit { saveProviderKey(config) }
+                                    .onAppear {
+                                        providerKeyValues[config.id] = KeychainService.getString(forKey: config.keychainKey) ?? ""
+                                        IslandWindowManager.shared.makeKeyIfNeeded()
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                            fieldFocused = true
+                                        }
+                                    }
+                                } onDone: {
+                                    saveProviderKey(config)
+                                }
+                            } else {
+                                let storedKey = KeychainService.getString(forKey: config.keychainKey) ?? ""
+                                settingsRow(
+                                    icon: "key.fill",
+                                    label: config.label,
+                                    trailing: {
+                                        AnyView(
+                                            Text(storedKey.isEmpty ? "Not set" : "••••\(storedKey.suffix(4))")
+                                                .font(.system(size: 12))
+                                                .foregroundStyle(storedKey.isEmpty ? .red.opacity(0.8) : .green.opacity(0.8))
+                                        )
+                                    }
+                                )
+                                .onTapGesture {
+                                    editingField = .providerKey(config.id)
+                                }
+                            }
+                        }
+
+                        // OAuth providers
+                        ForEach(agentBridge.oauthProviders) { provider in
+                            settingsRow(
+                                icon: "person.crop.circle.badge.checkmark",
+                                label: provider.name,
+                                trailing: {
+                                    AnyView(
+                                        Group {
+                                            if agentBridge.oauthInProgress == provider.id {
+                                                HStack(spacing: 6) {
+                                                    ProgressView()
+                                                        .controlSize(.small)
+                                                    if let msg = agentBridge.oauthProgressMessage {
+                                                        Text(msg)
+                                                            .font(.system(size: 10))
+                                                            .foregroundStyle(.white.opacity(0.6))
+                                                            .lineLimit(1)
+                                                    }
+                                                    Button("Cancel") {
+                                                        agentBridge.sendCancelOAuth()
+                                                        agentBridge.oauthInProgress = nil
+                                                    }
+                                                    .font(.system(size: 10))
+                                                    .foregroundStyle(.red.opacity(0.8))
+                                                    .buttonStyle(.plain)
+                                                }
+                                            } else if provider.authenticated {
+                                                Text("Connected")
+                                                    .font(.system(size: 11, weight: .medium))
+                                                    .foregroundStyle(.green.opacity(0.8))
+                                            } else {
+                                                Button("Login") {
+                                                    agentBridge.oauthInProgress = provider.id
+                                                    agentBridge.sendStartOAuth(provider: provider.id)
+                                                }
+                                                .font(.system(size: 11, weight: .medium))
+                                                .foregroundStyle(.blue.opacity(0.9))
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
+                                    )
+                                }
+                            )
+                        }
                     }
+                    .padding(.leading, 16)
                 }
 
                 divider
@@ -1206,6 +1316,33 @@ struct IslandSettingsView: View {
                                     .foregroundStyle(.white.opacity(0.35))
                                     .help("Controls how Flux generates titles for new chats.")
                             }
+                        )
+                    }
+                )
+
+                divider
+
+                settingsRow(
+                    icon: "cpu",
+                    label: "Default Model",
+                    trailing: {
+                        AnyView(
+                            Menu {
+                                ForEach(agentBridge.availableProviders) { provider in
+                                    Section(provider.name) {
+                                        ForEach(provider.models) { model in
+                                            Button(model.name) {
+                                                defaultModelSpec = model.modelSpec
+                                            }
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Text(defaultModelDisplayName)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.75))
+                            }
+                            .menuStyle(.borderlessButton)
                         )
                     }
                 )
@@ -1627,6 +1764,15 @@ struct IslandSettingsView: View {
         }
         .onAppear {
             reloadAppInstructionsCount()
+            agentBridge.onOAuthPrompt = { provider, requestId, message, placeholder, allowEmpty in
+                oauthPromptRequestId = requestId
+                oauthPromptMessage = message
+                oauthPromptAnswer = ""
+                showOAuthPrompt = true
+            }
+            agentBridge.onOAuthComplete = { provider, success, errorMessage in
+                agentBridge.requestAvailableModels()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .appInstructionsDidChange)) { _ in
             reloadAppInstructionsCount()
@@ -1665,6 +1811,21 @@ struct IslandSettingsView: View {
         .sheet(isPresented: $showCloneFromURLSheet) {
             cloneFromURLSheet
                 .frame(width: 860, height: 360)
+        }
+        .alert("OAuth Login", isPresented: $showOAuthPrompt) {
+            TextField("Enter code", text: $oauthPromptAnswer)
+            Button("Submit") {
+                if let requestId = oauthPromptRequestId {
+                    agentBridge.sendOAuthPromptResponse(requestId: requestId, answer: oauthPromptAnswer)
+                }
+                showOAuthPrompt = false
+            }
+            Button("Cancel", role: .cancel) {
+                agentBridge.sendCancelOAuth()
+                showOAuthPrompt = false
+            }
+        } message: {
+            Text(oauthPromptMessage)
         }
     }
 
@@ -2839,6 +3000,21 @@ struct IslandSettingsView: View {
     private func reloadAppInstructionsCount() {
         appInstructionsCount = AppInstructions.shared.instructions.count
     }
+    private func saveProviderKey(_ config: (id: String, label: String, keychainKey: String, placeholder: String)) {
+        let value = (providerKeyValues[config.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        try? KeychainService.setString(value, forKey: config.keychainKey)
+        agentBridge.sendProviderKey(provider: config.id, apiKey: value)
+
+        // Backward compat: also update the legacy Anthropic key path
+        if config.id == "anthropic" {
+            UserDefaults.standard.set(value, forKey: "anthropicApiKey")
+            agentBridge.sendApiKey(value)
+        }
+
+        editingField = nil
+        agentBridge.requestAvailableModels()
+    }
+
     private func editableRow<Field: View>(
         icon: String,
         label: String,

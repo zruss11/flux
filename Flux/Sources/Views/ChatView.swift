@@ -57,6 +57,9 @@ struct ChatView: View {
     @State private var sttFailureMessage: String?
     @State private var worktreeEnabled = false
     @State private var showBranchPicker = false
+    @State private var selectedModelSpec: String? = nil
+    @State private var showModelPicker = false
+    @AppStorage("defaultModelSpec") private var defaultModelSpec = "anthropic:claude-sonnet-4-20250514"
 
     @State private var branchCheckoutErrorMessage: String?
     @State private var imageImportErrorMessage: String?
@@ -75,6 +78,11 @@ struct ChatView: View {
 
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImageAttachments.isEmpty
+    }
+
+    private var isModelLocked: Bool {
+        guard let conversation = conversationStore.activeConversation else { return false }
+        return !conversation.messages.isEmpty
     }
 
     private var activeWatcherAlerts: [WatcherAlert] {
@@ -143,6 +151,8 @@ struct ChatView: View {
                                                 answers: answers
                                             )
                                         }
+                                    case .subAgentGroup(let activity):
+                                        SubAgentGroupView(activity: activity)
                                     }
                                 }
                                 .id(segment.id)
@@ -371,6 +381,17 @@ struct ChatView: View {
                     )
                 }
                 .buttonStyle(.plain)
+
+                // Model selector pill
+                ModelSelectorPill(
+                    selectedModelSpec: selectedModelSpec,
+                    isLocked: isModelLocked,
+                    availableProviders: agentBridge.availableProviders,
+                    defaultModelSpec: defaultModelSpec,
+                    onSelect: { spec in
+                        selectedModelSpec = spec
+                    }
+                )
 
                 // Git branch pill
                 if let branch = GitBranchMonitor.shared.currentBranch {
@@ -666,6 +687,7 @@ struct ChatView: View {
             worktreeEnabled = false
             conversationStore.activeWorktreeBranch = nil
             pendingImageAttachments.removeAll()
+            selectedModelSpec = conversationStore.activeConversation?.modelSpec
             if showSkills {
                 showSkills = false
                 dollarTriggerActive = false
@@ -798,17 +820,20 @@ struct ChatView: View {
         if let activeId = conversationStore.activeConversationId {
             conversationId = activeId
         } else {
-            let conversation = conversationStore.createConversation()
+            let effectiveModelSpec = selectedModelSpec ?? defaultModelSpec
+            let conversation = conversationStore.createConversation(modelSpec: effectiveModelSpec)
             conversationId = conversation.id
         }
 
         // Display what the user typed (with `$skill`), but send `/skill` to the sidecar.
         conversationStore.addMessage(to: conversationId, role: .user, content: text, imageAttachments: pendingImageAttachments)
         conversationStore.setConversationRunning(conversationId, isRunning: true)
+        let isFirstMessage = conversationStore.activeConversation?.messages.count == 1
         agentBridge.sendChatMessage(
             conversationId: conversationId.uuidString,
             content: outboundText,
-            images: pendingImageAttachments.map(\.chatPayload)
+            images: pendingImageAttachments.map(\.chatPayload),
+            modelSpec: isFirstMessage ? (selectedModelSpec ?? defaultModelSpec) : nil
         )
 
         inputText = ""

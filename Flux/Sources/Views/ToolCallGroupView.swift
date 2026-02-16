@@ -97,6 +97,7 @@ struct ToolCallRow: View {
         case "calendar_delete_event": return "Delete Event"
         case "calendar_navigate_to_date": return "Navigate to Date"
         case "get_current_datetime": return "Get Date/Time"
+        case "delegate_to_agent": return "Delegate to Agent"
         default:
             // Convert snake_case to Title Case, handle MCP-style names (e.g. linear__list_issues)
             return call.toolName

@@ -114,6 +114,22 @@ struct PendingAskUserQuestion: Identifiable, Codable {
     }
 }
 
+// MARK: - Sub-Agent Activity
+
+struct SubAgentActivity: Identifiable, Codable {
+    let id: String        // toolUseId (parent delegate_to_agent call)
+    let agentId: String
+    let agentName: String
+    var toolCalls: [ToolCallInfo]
+    var status: Status
+    var resultPreview: String?
+
+    enum Status: String, Codable {
+        case running
+        case complete
+    }
+}
+
 // MARK: - Display Segments
 
 /// A display-oriented view of the conversation that groups consecutive tool calls
@@ -124,6 +140,7 @@ enum DisplaySegment: Identifiable {
     case toolCallGroup(id: String, calls: [ToolCallInfo])
     case permissionRequest(PendingPermissionRequest)
     case askUserQuestion(PendingAskUserQuestion)
+    case subAgentGroup(SubAgentActivity)
 
     var id: String {
         switch self {
@@ -132,6 +149,7 @@ enum DisplaySegment: Identifiable {
         case .toolCallGroup(let id, _): return "tools-\(id)"
         case .permissionRequest(let req): return "perm-\(req.id)"
         case .askUserQuestion(let q): return "ask-\(q.id)"
+        case .subAgentGroup(let a): return "agent-\(a.id)"
         }
     }
 }
@@ -207,8 +225,9 @@ final class ConversationStore {
 
     // MARK: - Conversation CRUD
 
-    func createConversation() -> Conversation {
-        let conversation = Conversation()
+    func createConversation(modelSpec: String? = nil) -> Conversation {
+        var conversation = Conversation()
+        conversation.modelSpec = modelSpec
         conversations.append(conversation)
         activeConversationId = conversation.id
 
@@ -462,6 +481,68 @@ final class ConversationStore {
                 conversations[convIndex].messages[msgIndex].askUserQuestions[reqIndex].answers = answers
                 conversations[convIndex].invalidateDisplaySegments()
                 saveConversation(conversations[convIndex])
+                return
+            }
+        }
+    }
+
+    // MARK: - Sub-Agent Tracking
+
+    func addSubAgentActivity(to conversationId: UUID, activity: SubAgentActivity) {
+        flushStreamBuffer()
+        guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+
+        if let lastIndex = conversations[index].messages.indices.last,
+           conversations[index].messages[lastIndex].role == .assistant {
+            conversations[index].messages[lastIndex].subAgentActivities.append(activity)
+            conversations[index].invalidateDisplaySegments()
+        } else {
+            var message = Message(role: .assistant, content: "")
+            message.subAgentActivities.append(activity)
+            conversations[index].messages.append(message)
+            conversations[index].invalidateDisplaySegments()
+        }
+        lastScrollConversationId = conversationId
+        scrollRevision &+= 1
+    }
+
+    func addSubAgentToolCall(in conversationId: UUID, parentToolUseId: String, info: ToolCallInfo) {
+        guard let convIndex = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+
+        for msgIndex in conversations[convIndex].messages.indices.reversed() {
+            if let actIndex = conversations[convIndex].messages[msgIndex].subAgentActivities.firstIndex(where: { $0.id == parentToolUseId }) {
+                conversations[convIndex].messages[msgIndex].subAgentActivities[actIndex].toolCalls.append(info)
+                conversations[convIndex].invalidateDisplaySegments()
+                return
+            }
+        }
+    }
+
+    func completeSubAgentToolCall(in conversationId: UUID, parentToolUseId: String, subToolName: String) {
+        guard let convIndex = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+
+        for msgIndex in conversations[convIndex].messages.indices.reversed() {
+            if let actIndex = conversations[convIndex].messages[msgIndex].subAgentActivities.firstIndex(where: { $0.id == parentToolUseId }) {
+                if let tcIndex = conversations[convIndex].messages[msgIndex].subAgentActivities[actIndex].toolCalls.lastIndex(where: { $0.toolName == subToolName && $0.status == .pending }) {
+                    conversations[convIndex].messages[msgIndex].subAgentActivities[actIndex].toolCalls[tcIndex].status = .complete
+                    conversations[convIndex].invalidateDisplaySegments()
+                }
+                return
+            }
+        }
+    }
+
+    func completeSubAgent(in conversationId: UUID, toolUseId: String, resultPreview: String?) {
+        guard let convIndex = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+
+        for msgIndex in conversations[convIndex].messages.indices.reversed() {
+            if let actIndex = conversations[convIndex].messages[msgIndex].subAgentActivities.firstIndex(where: { $0.id == toolUseId }) {
+                conversations[convIndex].messages[msgIndex].subAgentActivities[actIndex].status = .complete
+                conversations[convIndex].messages[msgIndex].subAgentActivities[actIndex].resultPreview = resultPreview
+                conversations[convIndex].invalidateDisplaySegments()
+                saveConversation(conversations[convIndex])
+                lastScrollConversationId = conversationId
+                scrollRevision &+= 1
                 return
             }
         }
@@ -781,6 +862,7 @@ struct Conversation: Identifiable, Codable {
     let id: UUID
     var messages: [Message]
     let createdAt: Date
+    var modelSpec: String?
 
     /// Class-based box so the cache survives struct copies without triggering
     /// copy-on-write of the whole Conversation value.
@@ -790,15 +872,32 @@ struct Conversation: Identifiable, Codable {
     }
     private var _segmentCache = SegmentCache()
 
-    init(id: UUID = UUID(), messages: [Message] = [], createdAt: Date = Date()) {
+    init(id: UUID = UUID(), messages: [Message] = [], createdAt: Date = Date(), modelSpec: String? = nil) {
         self.id = id
         self.messages = messages
         self.createdAt = createdAt
+        self.modelSpec = modelSpec
     }
 
     // Exclude the cache from Codable.
     private enum CodingKeys: String, CodingKey {
-        case id, messages, createdAt
+        case id, messages, createdAt, modelSpec
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        messages = try container.decode([Message].self, forKey: .messages)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        modelSpec = try container.decodeIfPresent(String.self, forKey: .modelSpec)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(messages, forKey: .messages)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(modelSpec, forKey: .modelSpec)
     }
 
     var hasPendingUserInput: Bool {
@@ -840,6 +939,9 @@ struct Conversation: Identifiable, Codable {
                 for q in message.askUserQuestions {
                     segments.append(.askUserQuestion(q))
                 }
+                for activity in message.subAgentActivities {
+                    segments.append(.subAgentGroup(activity))
+                }
             case .system:
                 segments.append(.assistantText(message))
             }
@@ -860,6 +962,7 @@ struct Message: Identifiable, Codable {
     var toolCalls: [ToolCallInfo]
     var permissionRequests: [PendingPermissionRequest]
     var askUserQuestions: [PendingAskUserQuestion]
+    var subAgentActivities: [SubAgentActivity]
     let timestamp: Date
 
     init(
@@ -870,6 +973,7 @@ struct Message: Identifiable, Codable {
         toolCalls: [ToolCallInfo] = [],
         permissionRequests: [PendingPermissionRequest] = [],
         askUserQuestions: [PendingAskUserQuestion] = [],
+        subAgentActivities: [SubAgentActivity] = [],
         timestamp: Date = Date()
     ) {
         self.id = id
@@ -879,6 +983,7 @@ struct Message: Identifiable, Codable {
         self.toolCalls = toolCalls
         self.permissionRequests = permissionRequests
         self.askUserQuestions = askUserQuestions
+        self.subAgentActivities = subAgentActivities
         self.timestamp = timestamp
     }
 
@@ -890,6 +995,7 @@ struct Message: Identifiable, Codable {
         case toolCalls
         case permissionRequests
         case askUserQuestions
+        case subAgentActivities
         case timestamp
     }
 
@@ -902,6 +1008,7 @@ struct Message: Identifiable, Codable {
         toolCalls = try container.decodeIfPresent([ToolCallInfo].self, forKey: .toolCalls) ?? []
         permissionRequests = try container.decodeIfPresent([PendingPermissionRequest].self, forKey: .permissionRequests) ?? []
         askUserQuestions = try container.decodeIfPresent([PendingAskUserQuestion].self, forKey: .askUserQuestions) ?? []
+        subAgentActivities = try container.decodeIfPresent([SubAgentActivity].self, forKey: .subAgentActivities) ?? []
         timestamp = try container.decode(Date.self, forKey: .timestamp)
     }
 
@@ -914,6 +1021,7 @@ struct Message: Identifiable, Codable {
         try container.encode(toolCalls, forKey: .toolCalls)
         try container.encode(permissionRequests, forKey: .permissionRequests)
         try container.encode(askUserQuestions, forKey: .askUserQuestions)
+        try container.encode(subAgentActivities, forKey: .subAgentActivities)
         try container.encode(timestamp, forKey: .timestamp)
     }
 

@@ -4,7 +4,10 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { Agent, type AgentTool, type AgentMessage } from '@mariozechner/pi-agent-core';
-import { getModel, getProviders } from '@mariozechner/pi-ai';
+import { getModel, getProviders, getModels } from '@mariozechner/pi-ai';
+import { getEnvApiKey } from '@mariozechner/pi-ai';
+import { getOAuthProviders, getOAuthProvider, getOAuthApiKey } from '@mariozechner/pi-ai';
+import type { OAuthCredentials } from '@mariozechner/pi-ai';
 import { Type, type TSchema } from '@sinclair/typebox';
 import { createTelegramBot } from './telegram/bot.js';
 import { createLogger } from './logger.js';
@@ -13,12 +16,16 @@ import type { ToolDefinition } from './tools/types.js';
 import { loadInstalledSkills } from './skills/loadInstalledSkills.js';
 import type { InstalledSkill } from './skills/types.js';
 import { McpManager } from './mcp/manager.js';
+import { loadAgentProfiles } from './agents/loadAgentProfiles.js';
+import type { AgentProfile } from './agents/types.js';
+import { createSubAgentTool, type SubAgentNotifier } from './agents/subAgent.js';
 
 interface ChatMessage {
   type: 'chat';
   conversationId: string;
   content: string;
   images?: ChatImagePayload[];
+  modelSpec?: string;
 }
 
 interface ChatImagePayload {
@@ -81,6 +88,31 @@ interface PermissionResponseMessage {
   answers?: Record<string, string>;
 }
 
+interface ListModelsMessage {
+  type: 'list_models';
+}
+
+interface SetProviderKeyMessage {
+  type: 'set_provider_key';
+  provider: string;
+  apiKey: string;
+}
+
+interface StartOAuthMessage {
+  type: 'start_oauth';
+  provider: string;
+}
+
+interface CancelOAuthMessage {
+  type: 'cancel_oauth';
+}
+
+interface OAuthPromptResponseMessage {
+  type: 'oauth_prompt_response';
+  requestId: string;
+  answer: string;
+}
+
 interface HelloMessage {
   type: 'hello';
   token?: string;
@@ -95,7 +127,12 @@ type IncomingMessage =
   | SetTelegramConfigMessage
   | ActiveAppUpdateMessage
   | ForkConversationMessage
-  | PermissionResponseMessage;
+  | PermissionResponseMessage
+  | ListModelsMessage
+  | SetProviderKeyMessage
+  | StartOAuthMessage
+  | CancelOAuthMessage
+  | OAuthPromptResponseMessage;
 
 interface AssistantMessage {
   type: 'assistant_message';
@@ -164,6 +201,27 @@ interface AskUserQuestionMessage {
   }>;
 }
 
+interface ListModelsResponseMessage {
+  type: 'list_models_response';
+  providers: Array<{
+    id: string;
+    name: string;
+    models: Array<{
+      id: string;
+      name: string;
+      provider: string;
+      reasoning: unknown;
+      contextWindow: unknown;
+      maxTokens: unknown;
+    }>;
+  }>;
+  oauthProviders?: Array<{
+    id: string;
+    name: string;
+    authenticated: boolean;
+  }>;
+}
+
 type OutgoingMessage =
   | AssistantMessage
   | ToolRequestMessage
@@ -174,7 +232,34 @@ type OutgoingMessage =
   | SessionInfoMessage
   | ForkConversationResultMessage
   | PermissionRequestMessage
-  | AskUserQuestionMessage;
+  | AskUserQuestionMessage
+  | ListModelsResponseMessage
+  | SubAgentStartMessage
+  | SubAgentToolUseMessage
+  | SubAgentCompleteMessage;
+
+interface SubAgentStartMessage {
+  type: 'sub_agent_start';
+  conversationId: string;
+  toolUseId: string;
+  agentId: string;
+  agentName: string;
+}
+
+interface SubAgentToolUseMessage {
+  type: 'sub_agent_tool_use';
+  conversationId: string;
+  toolUseId: string;
+  subToolName: string;
+  subToolStatus: 'start' | 'complete';
+}
+
+interface SubAgentCompleteMessage {
+  type: 'sub_agent_complete';
+  conversationId: string;
+  toolUseId: string;
+  resultPreview: string;
+}
 
 interface SDKUserMessage {
   type: 'user';
@@ -361,6 +446,26 @@ function isIncomingMessage(value: unknown): value is IncomingMessage {
     return isString(value.requestId) && isString(value.behavior);
   }
 
+  if (value.type === 'list_models') {
+    return true;
+  }
+
+  if (value.type === 'set_provider_key') {
+    return isString(value.provider) && isString(value.apiKey);
+  }
+
+  if (value.type === 'start_oauth') {
+    return isString(value.provider);
+  }
+
+  if (value.type === 'cancel_oauth') {
+    return true;
+  }
+
+  if (value.type === 'oauth_prompt_response') {
+    return isString(value.requestId) && isString(value.answer);
+  }
+
   return false;
 }
 
@@ -508,6 +613,115 @@ const pendingPermissions = new Map<string, {
 let activeClient: WebSocket | null = null;
 let runtimeApiKey: string | null = process.env.ANTHROPIC_API_KEY ?? null;
 
+const PROVIDER_ENV_MAP: Record<string, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  google: 'GEMINI_API_KEY',
+  groq: 'GROQ_API_KEY',
+  xai: 'XAI_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  cerebras: 'CEREBRAS_API_KEY',
+  'azure-openai-responses': 'AZURE_OPENAI_API_KEY',
+  'vercel-ai-gateway': 'AI_GATEWAY_API_KEY',
+  zai: 'ZAI_API_KEY',
+  minimax: 'MINIMAX_API_KEY',
+  huggingface: 'HF_TOKEN',
+  opencode: 'OPENCODE_API_KEY',
+  'kimi-coding': 'KIMI_API_KEY',
+};
+
+const AUTH_JSON_PATH = path.join(process.env.HOME || '~', '.flux', 'auth.json');
+let oauthCredentials: Record<string, OAuthCredentials> = {};
+
+function loadOAuthCredentials(): void {
+  try {
+    if (fs.existsSync(AUTH_JSON_PATH)) {
+      oauthCredentials = JSON.parse(fs.readFileSync(AUTH_JSON_PATH, 'utf-8'));
+    }
+  } catch {
+    oauthCredentials = {};
+  }
+}
+
+function saveOAuthCredentials(): void {
+  const dir = path.dirname(AUTH_JSON_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(AUTH_JSON_PATH, JSON.stringify(oauthCredentials, null, 2));
+}
+
+let activeOAuthAbort: AbortController | null = null;
+const oauthPromptResolvers = new Map<string, (answer: string) => void>();
+
+async function handleStartOAuth(ws: WebSocket, message: StartOAuthMessage): Promise<void> {
+  const provider = getOAuthProvider(message.provider);
+  if (!provider) {
+    sendToClient(ws, { type: 'oauth_complete', provider: message.provider, success: false, error: 'Unknown OAuth provider' } as any);
+    return;
+  }
+
+  activeOAuthAbort?.abort();
+  activeOAuthAbort = new AbortController();
+  const signal = activeOAuthAbort.signal;
+
+  try {
+    const credentials = await provider.login({
+      onAuth: (info) => {
+        sendToClient(ws, {
+          type: 'oauth_auth',
+          provider: message.provider,
+          url: info.url,
+          instructions: info.instructions,
+        } as any);
+      },
+      onPrompt: async (prompt) => {
+        const requestId = crypto.randomUUID();
+        sendToClient(ws, {
+          type: 'oauth_prompt',
+          provider: message.provider,
+          requestId,
+          message: prompt.message,
+          placeholder: prompt.placeholder,
+          allowEmpty: prompt.allowEmpty,
+        } as any);
+        return new Promise<string>((resolve) => {
+          oauthPromptResolvers.set(requestId, resolve);
+        });
+      },
+      onProgress: (msg) => {
+        sendToClient(ws, {
+          type: 'oauth_progress',
+          provider: message.provider,
+          message: msg,
+        } as any);
+      },
+      signal,
+    });
+
+    oauthCredentials[message.provider] = credentials;
+    saveOAuthCredentials();
+
+    const apiKeyResult = await getOAuthApiKey(message.provider, oauthCredentials);
+    if (apiKeyResult) {
+      oauthCredentials[message.provider] = apiKeyResult.newCredentials;
+      saveOAuthCredentials();
+      const envVar = PROVIDER_ENV_MAP[message.provider];
+      if (envVar) {
+        process.env[envVar] = apiKeyResult.apiKey;
+      }
+    }
+
+    sendToClient(ws, { type: 'oauth_complete', provider: message.provider, success: true } as any);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg !== 'Login cancelled') {
+      sendToClient(ws, { type: 'oauth_complete', provider: message.provider, success: false, error: msg } as any);
+    }
+  } finally {
+    activeOAuthAbort = null;
+  }
+}
+
 const BRIDGE_AUTH_TOKEN = (process.env.FLUX_BRIDGE_TOKEN ?? '').trim();
 const REQUIRE_BRIDGE_AUTH = BRIDGE_AUTH_TOKEN.length > 0;
 let mcpBridgeUrl = '';
@@ -606,6 +820,7 @@ const helperTools: ToolDefinition[] = [
 const mcpManager = new McpManager();
 let cachedRemoteTools: ToolDefinition[] = [];
 let cachedInstalledSkills: InstalledSkill[] = [];
+let cachedAgentProfiles: AgentProfile[] = [];
 let mcpInitPromise: Promise<void> | null = null;
 
 async function ensureMcpInitialized(): Promise<void> {
@@ -614,6 +829,10 @@ async function ensureMcpInitialized(): Promise<void> {
     cachedInstalledSkills = await loadInstalledSkills();
     mcpManager.registerFromSkills(cachedInstalledSkills);
     cachedRemoteTools = await loadRemoteTools();
+    cachedAgentProfiles = await loadAgentProfiles();
+    if (cachedAgentProfiles.length > 0) {
+      log.info(`Discovered ${cachedAgentProfiles.length} agent profile(s): ${cachedAgentProfiles.map((p) => p.id).join(', ')}`);
+    }
   })().catch((err) => {
     mcpInitPromise = null;
     const msg = err instanceof Error ? err.message : String(err);
@@ -1024,6 +1243,90 @@ async function createAgentForConversation(
     return tool;
   });
 
+  // Sub-agent delegation tool — only added when profiles are available.
+  if (cachedAgentProfiles.length > 0) {
+    // Build a helper that converts a ToolDefinition into a sidecar-local-only AgentTool
+    // (no Swift/WebSocket routing) for use inside sub-agents.
+    const buildLocalAgentTool = (def: ToolDefinition): AgentTool => {
+      const params = jsonSchemaToTypeBox(def.input_schema);
+      return {
+        name: def.name,
+        label: def.name,
+        description: def.description,
+        parameters: params,
+        execute: async (_toolCallId, toolParams) => {
+          const input = (toolParams ?? {}) as Record<string, unknown>;
+
+          // get_current_datetime — handled locally
+          if (def.name === 'get_current_datetime') {
+            const now = new Date();
+            const text = JSON.stringify({
+              iso: now.toISOString(),
+              local: now.toLocaleString(),
+              date: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+              time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              utcOffset: now.getTimezoneOffset(),
+            }, null, 2);
+            return { content: [{ type: 'text', text }], details: {} };
+          }
+
+          // MCP tools
+          const parsed = mcpManager.parseAnthropicToolName(def.name);
+          if (parsed) {
+            await ensureMcpInitialized();
+            const res = await mcpManager.callTool(parsed.serverId, parsed.mcpToolName, input);
+            return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }], details: {} };
+          }
+
+          throw new Error(`Tool "${def.name}" is not available to sub-agents (Swift tools are not supported in sub-agents).`);
+        },
+      };
+    };
+
+    // Only sidecar-local tools are available to sub-agents (not Swift UI tools).
+    const sidecarLocalToolDefs = [...baseTools.filter((t) => t.name === 'get_current_datetime'), ...cachedRemoteTools];
+
+    const subAgentTool = createSubAgentTool({
+      profiles: cachedAgentProfiles,
+      conversationId,
+      defaultProvider: provider,
+      defaultModel: modelId,
+      availableToolDefs: sidecarLocalToolDefs,
+      buildAgentTool: buildLocalAgentTool,
+      notifier: {
+        onStart(toolUseId, agentId, agentName) {
+          sendToClient(activeClient, {
+            type: 'sub_agent_start',
+            conversationId,
+            toolUseId,
+            agentId,
+            agentName,
+          });
+        },
+        onToolUse(toolUseId, subToolName, status) {
+          sendToClient(activeClient, {
+            type: 'sub_agent_tool_use',
+            conversationId,
+            toolUseId,
+            subToolName,
+            subToolStatus: status,
+          });
+        },
+        onComplete(toolUseId, resultPreview) {
+          sendToClient(activeClient, {
+            type: 'sub_agent_complete',
+            conversationId,
+            toolUseId,
+            resultPreview,
+          });
+        },
+      },
+    });
+
+    tools.push(subAgentTool);
+  }
+
   const agent = new Agent({
     initialState: {
       systemPrompt,
@@ -1031,6 +1334,23 @@ async function createAgentForConversation(
       thinkingLevel: overrides?.thinkingLevel ?? AGENT_THINKING_LEVEL,
       tools,
       messages: overrides?.messages ?? [],
+    },
+    getApiKey: async (providerName: string) => {
+      if (oauthCredentials[providerName]) {
+        try {
+          const result = await getOAuthApiKey(providerName, oauthCredentials);
+          if (result) {
+            oauthCredentials[providerName] = result.newCredentials;
+            saveOAuthCredentials();
+            log.info(`OAuth API key resolved for ${providerName}`);
+            return result.apiKey;
+          }
+          log.warn(`getOAuthApiKey returned null for ${providerName}`);
+        } catch (err) {
+          log.warn(`OAuth key resolution failed for ${providerName}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      return undefined;
     },
   });
 
@@ -1078,6 +1398,7 @@ const telegramBot = createTelegramBot({
 });
 
 export function startBridge(port: number): void {
+  loadOAuthCredentials();
   const wss = new WebSocketServer({
     port,
     host: '127.0.0.1',
@@ -1212,6 +1533,40 @@ function handleMessage(ws: WebSocket, message: IncomingMessage): void {
     case 'permission_response':
       handlePermissionResponse(message);
       break;
+    case 'list_models':
+      handleListModels(ws);
+      break;
+    case 'set_provider_key': {
+      const envVar = PROVIDER_ENV_MAP[message.provider];
+      if (envVar) {
+        const key = (message.apiKey ?? '').trim();
+        if (key.length > 0) {
+          process.env[envVar] = key;
+        } else {
+          delete process.env[envVar];
+        }
+        log.info(`Provider key updated: ${message.provider} → ${envVar}`);
+      }
+      if (message.provider === 'anthropic') {
+        runtimeApiKey = message.apiKey;
+      }
+      break;
+    }
+    case 'start_oauth':
+      void handleStartOAuth(ws, message);
+      break;
+    case 'cancel_oauth':
+      activeOAuthAbort?.abort();
+      activeOAuthAbort = null;
+      break;
+    case 'oauth_prompt_response': {
+      const resolver = oauthPromptResolvers.get(message.requestId);
+      if (resolver) {
+        resolver(message.answer);
+        oauthPromptResolvers.delete(message.requestId);
+      }
+      break;
+    }
     default:
       log.warn('Unknown message type:', (message as unknown as Record<string, unknown>).type);
   }
@@ -1225,6 +1580,46 @@ function handleActiveAppUpdate(message: ActiveAppUpdateMessage): void {
     appInstruction: sanitizeAppInstruction(message.appInstruction),
   };
   log.info(`Active app updated: ${lastActiveApp.appName} (${lastActiveApp.bundleId})`);
+}
+
+function handleListModels(ws: WebSocket): void {
+  const providerIds = getProviders();
+  const providers = providerIds
+    .filter((providerId) => {
+      const key = getEnvApiKey(providerId);
+      if (key !== undefined && key.trim().length > 0) return true;
+      if (oauthCredentials[providerId]) return true;
+      return false;
+    })
+    .map((providerId) => {
+      let models;
+      try {
+        models = getModels(providerId);
+      } catch {
+        return null;
+      }
+      return {
+        id: providerId,
+        name: providerId,
+        models: models.map((m) => ({
+          id: m.id,
+          name: m.name,
+          provider: String(m.provider),
+          reasoning: m.reasoning,
+          contextWindow: m.contextWindow,
+          maxTokens: m.maxTokens,
+        })),
+      };
+    })
+    .filter((p): p is NonNullable<typeof p> => p !== null);
+
+  const oauthProviders = getOAuthProviders().map((p) => ({
+    id: p.id,
+    name: p.name,
+    authenticated: !!oauthCredentials[p.id],
+  }));
+
+  sendToClient(ws, { type: 'list_models_response', providers, oauthProviders } as any);
 }
 
 function handleMcpAuth(message: McpAuthMessage): void {
@@ -1289,31 +1684,27 @@ async function handleForkConversation(message: ForkConversationMessage): Promise
 }
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
-  const { conversationId, content } = message;
+  const { conversationId, content, modelSpec } = message;
   const images = sanitizeChatImages(message.images);
   const summary = content.trim().length > 0 ? content : '[image-only message]';
   const imageSummary = images.length > 0 ? ` (+${images.length} image${images.length === 1 ? '' : 's'})` : '';
   log.info(`[${conversationId}] User: ${summary}${imageSummary}`);
 
-  const providerKeyMap: Record<string, string> = {
-    anthropic: 'ANTHROPIC_API_KEY',
-    openai: 'OPENAI_API_KEY',
-    google: 'GOOGLE_API_KEY',
-  };
-  const envKeyName = providerKeyMap[AGENT_PROVIDER];
+  const effectiveProvider = modelSpec ? parseAgentModelSpec(modelSpec).provider : AGENT_PROVIDER;
+  const envKeyName = PROVIDER_ENV_MAP[effectiveProvider];
   if (envKeyName) {
     const apiKey = (process.env[envKeyName] ?? '').trim();
-    if (apiKey.length === 0) {
+    if (apiKey.length === 0 && !oauthCredentials[effectiveProvider]) {
       sendToClient(ws, {
         type: 'assistant_message',
         conversationId,
-        content: `No ${AGENT_PROVIDER} API key configured. Please set ${envKeyName} in Island Settings.`,
+        content: `No ${effectiveProvider} API key configured. Please set ${envKeyName} in Island Settings.`,
       });
       return;
     }
   }
 
-  await enqueueUserMessage(conversationId, content, images);
+  await enqueueUserMessage(conversationId, content, images, modelSpec);
 }
 
 function sanitizeChatImages(images: ChatImagePayload[] | undefined): ChatImagePayload[] {
@@ -1373,9 +1764,9 @@ function userMessageContent(message: QueuedUserMessage): string | SDKUserContent
   return blocks;
 }
 
-async function enqueueUserMessage(conversationId: string, content: string, images: ChatImagePayload[] = []): Promise<void> {
+async function enqueueUserMessage(conversationId: string, content: string, images: ChatImagePayload[] = [], modelSpec?: string): Promise<void> {
   if (content.trim().length === 0 && images.length === 0) return;
-  const session = await getSession(conversationId);
+  const session = await getSession(conversationId, modelSpec);
   const message: QueuedUserMessage = { text: content, images };
 
   if (session.isRunning) {
@@ -1417,16 +1808,26 @@ async function runAgentSession(session: ConversationSession, messages: QueuedUse
 
         await session.agent.prompt(msg.text, attachments.length > 0 ? attachments : undefined);
 
-        // Collect the full assistant response from streamed chunks and forward it.
+        // Collect the full assistant response from streamed chunks.
+        // The content was already delivered to the Swift client token-by-token
+        // via stream_chunk events, so we only forward the full text to Telegram
+        // (which doesn't receive stream chunks).
         const agentWithFlush = session.agent as Agent & { flushAccumulatedText: () => string };
         const fullMessage = agentWithFlush.flushAccumulatedText();
         if (fullMessage.length > 0) {
+          forwardToTelegramIfNeeded(conversationId, fullMessage);
+        }
+
+        // The Agent class catches streaming/API errors internally and stores
+        // them in state.error without re-throwing. If prompt() produced no
+        // streamed text, check for an internal error and surface it.
+        const agentError = session.agent.state.error;
+        if (fullMessage.length === 0 && agentError) {
           sendToClient(activeClient, {
             type: 'assistant_message',
             conversationId,
-            content: fullMessage,
+            content: `Error: ${agentError}`,
           });
-          forwardToTelegramIfNeeded(conversationId, fullMessage);
         }
       } catch (err) {
         const remaining = messages.slice(i + 1);
@@ -1516,11 +1917,34 @@ function buildSkillsPromptSection(skills: InstalledSkill[]): string {
   ].join('\n');
 }
 
+function buildAgentsPromptSection(profiles: AgentProfile[]): string {
+  if (profiles.length === 0) return '';
+
+  const entries = profiles.map((p) =>
+    `<agent>\n<id>${p.id}</id>\n<name>${p.name}</name>\n${p.description ? `<description>${p.description}</description>\n` : ''}</agent>`
+  ).join('\n');
+
+  return [
+    '',
+    '<agents>',
+    'You can delegate tasks to specialized sub-agents using the `delegate_to_agent` tool. Each agent has its own expertise and system prompt.',
+    '',
+    'Use delegation when a task would benefit from a specialist\'s focused analysis (e.g., code review, summarization, writing).',
+    'The sub-agent runs independently and returns its result to you. You can then incorporate, refine, or present the result to the user.',
+    '',
+    entries,
+    '</agents>',
+  ].join('\n');
+}
+
 function buildFluxSystemPrompt(): string {
   let prompt = FLUX_SYSTEM_PROMPT;
 
   // Inject available skills so the agent knows what capabilities are installed.
   prompt += buildSkillsPromptSection(cachedInstalledSkills);
+
+  // Inject available agent profiles for sub-agent delegation.
+  prompt += buildAgentsPromptSection(cachedAgentProfiles);
 
   // Inject live app context so the agent knows what the user is working in.
   // NOTE: This prompt is built once at session start. If the user switches apps
@@ -1536,12 +1960,34 @@ function buildFluxSystemPrompt(): string {
   return prompt;
 }
 
-async function getSession(conversationId: string): Promise<ConversationSession> {
+async function getSession(conversationId: string, modelSpec?: string): Promise<ConversationSession> {
   let session = sessions.get(conversationId);
   if (!session) {
+    let overrides: Parameters<typeof createAgentForConversation>[1] | undefined;
+    if (modelSpec) {
+      const { provider, model } = parseAgentModelSpec(modelSpec);
+      overrides = { modelProvider: provider, modelId: model };
+    }
+
+    // Resolve OAuth API key if needed
+    const sessionProvider = overrides?.modelProvider ?? AGENT_PROVIDER;
+    if (oauthCredentials[sessionProvider]) {
+      try {
+        const result = await getOAuthApiKey(sessionProvider, oauthCredentials);
+        if (result) {
+          oauthCredentials[sessionProvider] = result.newCredentials;
+          saveOAuthCredentials();
+          const envVar = PROVIDER_ENV_MAP[sessionProvider];
+          if (envVar) process.env[envVar] = result.apiKey;
+        }
+      } catch (err) {
+        log.warn(`OAuth key refresh failed for ${sessionProvider}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     session = {
       conversationId,
-      agent: await createAgentForConversation(conversationId),
+      agent: await createAgentForConversation(conversationId, overrides),
       isRunning: false,
       pendingMessages: [],
     };
