@@ -13,3 +13,7 @@
 ## 2026-02-15 - [Regex Combination Optimization]
 **Learning:** Iterating through an array of `RegExp` objects for matching (O(N*M)) is slower than combining them into a single `RegExp` with alternations (O(N)), especially for frequently executed checks like security validations.
 **Action:** Combine multiple regex patterns into a single compiled regex using `|` alternations where possible.
+
+## 2026-02-16 - [String Allocation for Checks]
+**Learning:** Using `.trim().length > 0` to check for non-empty strings allocates a new string, which can be expensive for large inputs (like file contents or scripts).
+**Action:** Use `/\S/.test(str)` to check for non-whitespace characters without allocating a new string.

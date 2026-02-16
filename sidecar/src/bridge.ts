@@ -554,6 +554,8 @@ function parseSettingSources(value: string | undefined): Array<'user' | 'project
 
 type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
+const AGENT_FALLBACK_PROVIDER = (process.env.FLUX_AGENT_PROVIDER || 'anthropic').trim() || 'anthropic';
+
 function parseAgentModelSpec(spec: string): { provider: string; model: string } {
   const trimmed = spec.trim();
   if (!trimmed) return { provider: 'anthropic', model: 'claude-sonnet-4-20250514' };
@@ -564,8 +566,7 @@ function parseAgentModelSpec(spec: string): { provider: string; model: string } 
     if (provider && model) return { provider, model };
   }
 
-  const fallbackProvider = (process.env.FLUX_AGENT_PROVIDER || 'anthropic').trim() || 'anthropic';
-  return { provider: fallbackProvider, model: trimmed };
+  return { provider: AGENT_FALLBACK_PROVIDER, model: trimmed };
 }
 
 const AGENT_MODEL_SPEC = process.env.FLUX_AGENT_MODEL || 'anthropic:claude-sonnet-4-20250514';
@@ -577,6 +578,8 @@ const AGENT_THINKING_LEVEL: ThinkingLevel = VALID_THINKING_LEVELS.has(rawThinkin
   : 'low';
 const AGENT_SETTING_SOURCES = parseSettingSources(process.env.FLUX_AGENT_SETTING_SOURCES);
 const AGENT_IDLE_TIMEOUT_MS = parsePositiveIntEnv(process.env.FLUX_AGENT_IDLE_TIMEOUT_MS, 900_000);
+const MAX_IMAGES_PER_MESSAGE = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGES_PER_MESSAGE, 4);
+const MAX_IMAGE_BASE64_CHARS = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGE_BASE64_CHARS, 8 * 1024 * 1024);
 const AGENT_WARMUP_ENABLED = process.env.FLUX_AGENT_WARMUP_ENABLED !== '0';
 const AGENT_WARMUP_MAX_ATTEMPTS = parsePositiveIntEnv(process.env.FLUX_AGENT_WARMUP_MAX_ATTEMPTS, 2);
 const TOOL_TIMEOUT_MS = 60_000;
@@ -771,13 +774,13 @@ export function collectCommandLikeInputValues(input: Record<string, unknown>): s
   const values: string[] = [];
   for (const key of COMMAND_LIKE_KEYS) {
     const value = input[key];
-    if (typeof value === 'string' && value.trim().length > 0) {
+    if (typeof value === 'string' && /\S/.test(value)) {
       values.push(value);
       continue;
     }
     if (Array.isArray(value)) {
       const combined = value.filter((item): item is string => typeof item === 'string').join(' ');
-      if (combined.trim().length > 0) values.push(combined);
+      if (/\S/.test(combined)) values.push(combined);
     }
   }
   return values;
@@ -1720,14 +1723,11 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
 function sanitizeChatImages(images: ChatImagePayload[] | undefined): ChatImagePayload[] {
   if (!Array.isArray(images)) return [];
 
-  const maxImages = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGES_PER_MESSAGE, 4);
   // Base64 overhead is ~33%, so 8MB base64 is ~6MB binary.
-  const maxBase64Chars = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGE_BASE64_CHARS, 8 * 1024 * 1024);
-
   return images
-    .slice(0, Math.max(0, maxImages))
+    .slice(0, Math.max(0, MAX_IMAGES_PER_MESSAGE))
     .filter((image) => typeof image?.data === 'string' && image.data.length > 0)
-    .filter((image) => image.data.length <= maxBase64Chars)
+    .filter((image) => image.data.length <= MAX_IMAGE_BASE64_CHARS)
     .map((image) => {
       const mediaType = image.mediaType?.startsWith('image/') ? image.mediaType : 'image/png';
       const fileName = typeof image.fileName === 'string' && image.fileName.trim().length > 0
