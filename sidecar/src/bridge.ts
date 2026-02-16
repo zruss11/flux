@@ -1144,6 +1144,16 @@ function handleMcpAuth(message: McpAuthMessage): void {
   } else {
     mcpAuthTokens.set(message.serverId, token);
   }
+
+  // Keep MCP manager in sync so helper tools (e.g. linear__mcp_list_tools) work.
+  void ensureMcpInitialized()
+    .then(() => mcpManager.setAuthToken(message.serverId, token))
+    .then(async () => {
+      cachedRemoteTools = await loadRemoteTools();
+    })
+    .catch(() => {
+      // ignore
+    });
 }
 
 function handleForkConversation(message: ForkConversationMessage): void {
