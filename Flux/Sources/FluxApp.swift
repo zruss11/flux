@@ -27,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let automationService = AutomationService.shared
     private let dictationManager = DictationManager.shared
+    private let dictationToAgentManager = DictationToAgentManager.shared
     private let clipboardMonitor = ClipboardMonitor.shared
     private let watcherService = WatcherService.shared
     private let watcherAlertsConversationId = UUID(uuidString: "5F9E3C52-8A47-4F9D-9C39-CFFB2E7F2A11")!
@@ -133,6 +134,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         dictationManager.start(accessibilityReader: accessibilityReader)
+        dictationToAgentManager.start(
+            conversationStore: conversationStore,
+            agentBridge: agentBridge,
+            screenCapture: screenCapture
+        )
 
         // Register default values for Parakeet transcription settings.
         UserDefaults.standard.register(defaults: [
@@ -582,7 +588,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let path = (input["path"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let offset = intInput("offset") ?? 1
             let limit = intInput("limit") ?? 200
-            return readFile(path: path, offset: offset, limit: limit)
+            return await readFile(path: path, offset: offset, limit: limit)
 
         case "run_shell_command":
             let command = (input["command"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -933,7 +939,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func resolvedPathURL(for rawPath: String) -> URL {
+    private nonisolated func resolvedPathURL(for rawPath: String) -> URL {
         let expanded = (rawPath as NSString).expandingTildeInPath
         if expanded.hasPrefix("/") {
             return URL(fileURLWithPath: expanded).standardizedFileURL
@@ -942,14 +948,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return cwd.appendingPathComponent(expanded).standardizedFileURL
     }
 
-    private func readFile(path: String, offset: Int, limit: Int) -> String {
+    private nonisolated static func encodeReadFileResponse(_ value: ReadFileResponse) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        guard let data = try? encoder.encode(value),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{\"ok\":false,\"error\":\"Failed to encode JSON response.\"}"
+        }
+        return json
+    }
+
+    private func readFile(path: String, offset: Int, limit: Int) async -> String {
         let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeOffset = max(1, offset)
+        let safeLimit = min(max(limit, 1), 2_000)
+
         guard !trimmedPath.isEmpty else {
-            return encodeJSON(ReadFileResponse(
+            return Self.encodeReadFileResponse(ReadFileResponse(
                 ok: false,
                 path: path,
-                offset: max(1, offset),
-                limit: min(max(limit, 1), 2_000),
+                offset: safeOffset,
+                limit: safeLimit,
                 totalLines: 0,
                 returnedLines: 0,
                 truncated: false,
@@ -959,60 +978,61 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let fileURL = resolvedPathURL(for: trimmedPath)
-        do {
-            let data = try Data(contentsOf: fileURL)
-            guard let text = String(data: data, encoding: .utf8) else {
-                return encodeJSON(ReadFileResponse(
+
+        return await Task.detached(priority: .userInitiated) { [fileURL, safeOffset, safeLimit] in
+            do {
+                let data = try Data(contentsOf: fileURL)
+                guard let text = String(data: data, encoding: .utf8) else {
+                    return Self.encodeReadFileResponse(ReadFileResponse(
+                        ok: false,
+                        path: fileURL.path,
+                        offset: safeOffset,
+                        limit: safeLimit,
+                        totalLines: 0,
+                        returnedLines: 0,
+                        truncated: false,
+                        content: nil,
+                        error: "File is not valid UTF-8 text"
+                    ))
+                }
+
+                let normalized = text
+                    .replacingOccurrences(of: "\r\n", with: "\n")
+                    .replacingOccurrences(of: "\r", with: "\n")
+                let allLines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+                let startIndex = min(max(safeOffset - 1, 0), allLines.count)
+                let endIndex = min(startIndex + safeLimit, allLines.count)
+                let selected = Array(allLines[startIndex..<endIndex])
+
+                return Self.encodeReadFileResponse(ReadFileResponse(
+                    ok: true,
+                    path: fileURL.path,
+                    offset: safeOffset,
+                    limit: safeLimit,
+                    totalLines: allLines.count,
+                    returnedLines: selected.count,
+                    truncated: endIndex < allLines.count,
+                    content: selected.joined(separator: "\n"),
+                    error: nil
+                ))
+            } catch {
+                return Self.encodeReadFileResponse(ReadFileResponse(
                     ok: false,
                     path: fileURL.path,
-                    offset: max(1, offset),
-                    limit: min(max(limit, 1), 2_000),
+                    offset: safeOffset,
+                    limit: safeLimit,
                     totalLines: 0,
                     returnedLines: 0,
                     truncated: false,
                     content: nil,
-                    error: "File is not valid UTF-8 text"
+                    error: error.localizedDescription
                 ))
             }
-
-            let normalized = text
-                .replacingOccurrences(of: "\r\n", with: "\n")
-                .replacingOccurrences(of: "\r", with: "\n")
-            let allLines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-
-            let safeOffset = max(1, offset)
-            let safeLimit = min(max(limit, 1), 2_000)
-            let startIndex = min(max(safeOffset - 1, 0), allLines.count)
-            let endIndex = min(startIndex + safeLimit, allLines.count)
-            let selected = Array(allLines[startIndex..<endIndex])
-
-            return encodeJSON(ReadFileResponse(
-                ok: true,
-                path: fileURL.path,
-                offset: safeOffset,
-                limit: safeLimit,
-                totalLines: allLines.count,
-                returnedLines: selected.count,
-                truncated: endIndex < allLines.count,
-                content: selected.joined(separator: "\n"),
-                error: nil
-            ))
-        } catch {
-            return encodeJSON(ReadFileResponse(
-                ok: false,
-                path: fileURL.path,
-                offset: max(1, offset),
-                limit: min(max(limit, 1), 2_000),
-                totalLines: 0,
-                returnedLines: 0,
-                truncated: false,
-                content: nil,
-                error: error.localizedDescription
-            ))
-        }
+        }.value
     }
 
-    private func extractMissingCommand(from stderr: String) -> String? {
+    private nonisolated func extractMissingCommand(from stderr: String) -> String? {
         let pattern = #"command not found: ([^\s\n]+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
             return nil
@@ -1028,7 +1048,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return ns.substring(with: commandRange)
     }
 
-    private func firstCommandToken(from command: String) -> String? {
+    private nonisolated func firstCommandToken(from command: String) -> String? {
         let parts = command
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: { $0.isWhitespace })
@@ -1036,7 +1056,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return String(first)
     }
 
-    private func installSuggestion(for missingCommand: String?) -> String? {
+    private nonisolated func installSuggestion(for missingCommand: String?) -> String? {
         guard let missingCommand else { return nil }
         switch missingCommand.lowercased() {
         case "gh":

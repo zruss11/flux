@@ -173,6 +173,8 @@ struct ChatView: View {
                     }
                 }
                 .onChange(of: conversationStore.scrollRevision) { _, _ in
+                    // Avoid expensive off-screen ScrollViewReader work while the island is collapsed.
+                    guard IslandWindowManager.shared.isExpanded else { return }
                     guard conversationStore.lastScrollConversationId == conversationStore.activeConversationId,
                           let conversation = conversationStore.activeConversation,
                           let lastSegment = conversation.displaySegments.last else { return }
@@ -709,6 +711,7 @@ struct ChatView: View {
                 }
             }
         }
+
         .alert("Microphone Access Required", isPresented: $showMicPermissionAlert) {
             Button("Open Settings") {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
