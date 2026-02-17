@@ -191,6 +191,7 @@ struct AtAGlanceView: View {
     let onOpenWorktree: (WorktreeSnapshot) -> Void
 
     @State private var worktreeMonitor = WorktreeStatusMonitor.shared
+    @State private var linearIssueMonitor = LinearIssueMonitor.shared
 
     private let maxCards = 3
 
@@ -277,8 +278,10 @@ struct AtAGlanceView: View {
     var body: some View {
         let items = glanceItems
         let worktrees = worktreeMonitor.snapshots
+        let linearIssues = linearIssueMonitor.issues
+        let showLinearSection = true
 
-        if !items.isEmpty || !worktrees.isEmpty || worktreeMonitor.isLoading {
+        if !items.isEmpty || !worktrees.isEmpty || worktreeMonitor.isLoading || showLinearSection {
             ScrollView {
                 VStack(spacing: 6) {
                     if !items.isEmpty {
@@ -316,6 +319,25 @@ struct AtAGlanceView: View {
                             onOpenWorktree(snapshot)
                         }
                     }
+
+                    if showLinearSection {
+                        LinearIssuesBoardView(
+                            issues: linearIssues,
+                            isConfigured: linearIssueMonitor.isConfigured,
+                            isLoading: linearIssueMonitor.isLoading,
+                            errorMessage: linearIssueMonitor.lastError,
+                            onSelect: { issue in
+                                if let rawURL = issue.url, let url = URL(string: rawURL) {
+                                    NSWorkspace.shared.open(url)
+                                } else {
+                                    onPromptAction("Open Linear issue \(issue.identifier): \(issue.title)")
+                                }
+                            },
+                            onOpenSetup: {
+                                NotificationCenter.default.post(name: .islandOpenSettingsRequested, object: nil)
+                            }
+                        )
+                    }
                 }
                 .padding(.vertical, 2)
             }
@@ -323,9 +345,11 @@ struct AtAGlanceView: View {
             .transition(.opacity.combined(with: .move(edge: .top)))
             .onAppear {
                 worktreeMonitor.monitor(workspacePath: conversationStore.workspacePath)
+                linearIssueMonitor.start()
             }
             .onDisappear {
                 worktreeMonitor.stop()
+                linearIssueMonitor.stop()
             }
             .onChange(of: conversationStore.workspacePath) { _, newPath in
                 worktreeMonitor.monitor(workspacePath: newPath)

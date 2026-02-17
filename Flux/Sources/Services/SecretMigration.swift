@@ -4,6 +4,7 @@ enum SecretKeys {
     static let discordBotToken = "discordBotToken"
     static let slackBotToken = "slackBotToken"
     static let telegramBotToken = "telegramBotToken"
+    static let linearApiKey = "linearApiKey"
 }
 
 enum ProviderKeys {
@@ -33,6 +34,7 @@ enum SecretMigration {
         migrateKey(SecretKeys.discordBotToken)
         migrateKey(SecretKeys.slackBotToken)
         migrateKey(SecretKeys.telegramBotToken)
+        migrateKey(SecretKeys.linearApiKey)
         migrateAnthropicApiKeyIfNeeded()
     }
 

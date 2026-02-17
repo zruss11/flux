@@ -457,6 +457,7 @@ struct IslandView: View {
                 openedHeaderContent
                     .frame(height: max(24, closedHeight))
                     .zIndex(10)
+                    .allowsHitTesting(true)
 
                 expandedBody
                     .zIndex(0)
@@ -865,6 +866,8 @@ struct IslandView: View {
                 }
             }
         }
+        // Keep body interactions constrained below the header strip.
+        .clipped()
     }
 }
 
@@ -1087,6 +1090,7 @@ struct IslandSettingsView: View {
     @State private var githubRepoActionError: String?
     @State private var showRepoProjectPicker = false
     @State private var showCloneFromURLSheet = false
+    @State private var linearApiKey = ""
     @State private var cloneGitURL = ""
     @State private var cloneLocationPath = Self.defaultCloneLocationPath
     @State private var cloneInProgress = false
@@ -1112,6 +1116,7 @@ struct IslandSettingsView: View {
 
     private enum EditingField: Hashable {
         case apiKey
+        case linearApiKey
         case linearToken
         case deepgramApiKey
         case providerKey(String)  // provider ID
@@ -1605,6 +1610,41 @@ struct IslandSettingsView: View {
 
                 divider
 
+                // Linear API Key (native At-a-Glance integration)
+                if editingField == .linearApiKey {
+                    editableRow(icon: "line.3.horizontal.decrease.circle", label: "Linear API Key") {
+                        SecureField("lin_api_...", text: $linearApiKey)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .focused($fieldFocused)
+                            .onSubmit { editingField = nil }
+                            .onAppear {
+                                IslandWindowManager.shared.makeKeyIfNeeded()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    fieldFocused = true
+                                }
+                            }
+                    } onDone: {
+                        editingField = nil
+                    }
+                } else {
+                    settingsRow(
+                        icon: "line.3.horizontal.decrease.circle",
+                        label: "Linear API Key",
+                        trailing: {
+                            AnyView(
+                                Text(linearApiKey.isEmpty ? "Not set" : "••••\(linearApiKey.suffix(4))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(linearApiKey.isEmpty ? .red.opacity(0.8) : .green.opacity(0.8))
+                            )
+                        }
+                    )
+                    .onTapGesture {
+                        editingField = .linearApiKey
+                    }
+                }
+
                 // Linear MCP Token
                 if editingField == .linearToken {
                     editableRow(icon: "rectangle.connected.to.line.below", label: "Linear MCP Token") {
@@ -1770,6 +1810,7 @@ struct IslandSettingsView: View {
         }
         .onAppear {
             reloadAppInstructionsCount()
+            linearApiKey = KeychainService.getString(forKey: SecretKeys.linearApiKey) ?? ""
             agentBridge.onOAuthPrompt = { provider, requestId, message, placeholder, allowEmpty in
                 oauthPromptRequestId = requestId
                 oauthPromptMessage = message
@@ -1787,6 +1828,8 @@ struct IslandSettingsView: View {
             switch old {
             case .apiKey:
                 agentBridge.sendApiKey(apiKey)
+            case .linearApiKey:
+                saveLinearApiKey()
             default:
                 break
             }
@@ -3006,6 +3049,15 @@ struct IslandSettingsView: View {
     private func reloadAppInstructionsCount() {
         appInstructionsCount = AppInstructions.shared.instructions.count
     }
+
+    private func saveLinearApiKey() {
+        let trimmed = linearApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        linearApiKey = trimmed
+        try? KeychainService.setString(trimmed, forKey: SecretKeys.linearApiKey)
+        NotificationCenter.default.post(name: .linearApiKeyDidChange, object: nil)
+        LinearIssueMonitor.shared.forceRefresh()
+    }
+
     private func saveProviderKey(_ config: (id: String, label: String, keychainKey: String, placeholder: String)) {
         let value = (providerKeyValues[config.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         try? KeychainService.setString(value, forKey: config.keychainKey)

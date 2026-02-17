@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("anthropicApiKey") private var apiKey = ""
     @AppStorage("linearMcpToken") private var linearMcpToken = ""
+    @State private var linearApiKey = ""
     @AppStorage("chatTitleCreator") private var chatTitleCreatorRaw = ChatTitleCreator.foundationModels.rawValue
     @AppStorage("dictationEngine") private var dictationEngine = "apple"
     @AppStorage(ASRPostProcessor.DefaultsKey.enableFragmentRepair) private var enableFragmentRepair = true
@@ -37,11 +38,18 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("MCP") {
+            Section("Linear") {
+                SecureField("Linear API Key", text: $linearApiKey)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("Used for native Linear issue syncing in At a Glance.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 SecureField("Linear MCP Token", text: $linearMcpToken)
                     .textFieldStyle(.roundedBorder)
 
-                Text("Used for Linear issue/project tools in the agent sidecar.")
+                Text("Optional: used for Linear MCP tools in the sidecar.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -179,6 +187,14 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will delete all cached Parakeet models from disk. You will need to re-download them to use Parakeet transcription.")
+        }
+        .onAppear {
+            linearApiKey = KeychainService.getString(forKey: SecretKeys.linearApiKey) ?? ""
+        }
+        .onChange(of: linearApiKey) { _, value in
+            try? KeychainService.setString(value, forKey: SecretKeys.linearApiKey)
+            NotificationCenter.default.post(name: .linearApiKeyDidChange, object: nil)
+            LinearIssueMonitor.shared.forceRefresh()
         }
     }
 }
