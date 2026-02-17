@@ -138,7 +138,13 @@ final class AgentBridge: @unchecked Sendable {
         }
     }
 
-    func sendChatMessage(conversationId: String, content: String, images: [ChatImagePayload] = [], modelSpec: String? = nil) {
+    func sendChatMessage(
+        conversationId: String,
+        content: String,
+        images: [ChatImagePayload] = [],
+        modelSpec: String? = nil,
+        thinkingLevel: ThinkingLevel? = nil
+    ) {
         setRunStatus(for: conversationId, isWorking: true)
 
         // Keep sidecar config in sync (user may have edited settings since connect).
@@ -161,6 +167,9 @@ final class AgentBridge: @unchecked Sendable {
         }
         if let modelSpec {
             message["modelSpec"] = modelSpec
+        }
+        if let thinkingLevel {
+            message["thinkingLevel"] = thinkingLevel.rawValue
         }
         send(message)
     }

@@ -67,6 +67,149 @@ struct ModelSelectorPill: View {
     }
 }
 
+/// Toolbar pill button for selecting a reasoning depth (thinking level).
+struct ThinkingLevelPill: View {
+    let selectedThinkingLevel: ThinkingLevel?
+    let isLocked: Bool
+    let defaultThinkingLevel: ThinkingLevel
+    let onSelect: (ThinkingLevel?) -> Void
+
+    @State private var showPopover = false
+
+    private var displayLevel: ThinkingLevel {
+        selectedThinkingLevel ?? defaultThinkingLevel
+    }
+
+    private var textOpacity: Double {
+        isLocked ? 0.35 : 0.6
+    }
+
+    var body: some View {
+        Button {
+            showPopover.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "brain")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(textOpacity))
+                Text(displayLevel.displayName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(textOpacity))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(0.10))
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isLocked)
+        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+            ThinkingLevelPickerPopover(
+                selectedThinkingLevel: selectedThinkingLevel,
+                defaultThinkingLevel: defaultThinkingLevel
+            ) { level in
+                showPopover = false
+                onSelect(level)
+            }
+        }
+    }
+}
+
+struct ThinkingLevelPickerPopover: View {
+    let selectedThinkingLevel: ThinkingLevel?
+    let defaultThinkingLevel: ThinkingLevel
+    let onSelect: (ThinkingLevel?) -> Void
+
+    @State private var hoveredLevel: ThinkingLevel?
+    @State private var hoveredDefault = false
+
+    private var selectedLevel: ThinkingLevel {
+        selectedThinkingLevel ?? defaultThinkingLevel
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                onSelect(nil)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: selectedThinkingLevel == nil ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(selectedThinkingLevel == nil ? .blue : .secondary)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Use Default")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white)
+                        Text(defaultThinkingLevel.displayName)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(hoveredDefault ? Color.white.opacity(0.08) : (selectedThinkingLevel == nil ? Color.accentColor.opacity(0.08) : .clear))
+                    .padding(.horizontal, 4)
+            )
+            .onHover { isHovered in
+                hoveredDefault = isHovered
+            }
+
+            Divider()
+                .padding(.vertical, 4)
+
+            ForEach(ThinkingLevel.allCases, id: \.self) { level in
+                let isSelected = selectedLevel == level
+
+                Button {
+                    onSelect(level)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 11))
+                            .foregroundStyle(isSelected ? .blue : .secondary)
+
+                        Text(level.displayName)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white)
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(hoveredLevel == level ? Color.white.opacity(0.08) : (isSelected ? Color.accentColor.opacity(0.08) : .clear))
+                        .padding(.horizontal, 4)
+                )
+                .onHover { isHovered in
+                    hoveredLevel = isHovered ? level : nil
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(width: 190)
+        .background(.black.opacity(0.85))
+    }
+}
+
 /// Popover content for browsing and selecting an AI model, grouped by provider.
 struct ModelPickerPopover: View {
     let selectedModelSpec: String?

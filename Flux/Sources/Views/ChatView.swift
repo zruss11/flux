@@ -56,8 +56,10 @@ struct ChatView: View {
     @State private var worktreeEnabled = false
     @State private var showBranchPicker = false
     @State private var selectedModelSpec: String? = nil
+    @State private var selectedThinkingLevel: ThinkingLevel? = nil
     @State private var showModelPicker = false
     @AppStorage("defaultModelSpec") private var defaultModelSpec = "anthropic:claude-sonnet-4-20250514"
+    @AppStorage("defaultThinkingLevel") private var defaultThinkingLevelRaw = ThinkingLevel.low.rawValue
 
     @State private var branchCheckoutErrorMessage: String?
     @State private var imageImportErrorMessage: String?
@@ -76,6 +78,26 @@ struct ChatView: View {
 
     private var speechInputProvider: SpeechInputProvider {
         SpeechInputProvider(rawValue: speechInputProviderRaw) ?? .apple
+    }
+
+    private var defaultThinkingLevel: ThinkingLevel {
+        ThinkingLevel(rawValue: defaultThinkingLevelRaw) ?? .low
+    }
+
+    private var effectiveModelSpec: String {
+        selectedModelSpec ?? defaultModelSpec
+    }
+
+    private var effectiveThinkingLevel: ThinkingLevel {
+        selectedThinkingLevel ?? defaultThinkingLevel
+    }
+
+    private var selectedModelInfo: ModelInfo? {
+        modelInfo(for: effectiveModelSpec)
+    }
+
+    private var selectedModelSupportsReasoning: Bool {
+        selectedModelInfo?.reasoning ?? false
     }
 
     private var canSendMessage: Bool {
@@ -340,6 +362,12 @@ struct ChatView: View {
                                     sendMessage()
                                     return .handled
                                 }
+                                .onKeyPress(.tab) {
+                                    guard NSEvent.modifierFlags.contains(.shift) else {
+                                        return .ignored
+                                    }
+                                    return cycleThinkingLevelIfAvailable() ? .handled : .ignored
+                                }
                                 .onKeyPress(.escape) {
                                     if showSlashCommands {
                                         withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
@@ -464,6 +492,18 @@ struct ChatView: View {
                         selectedModelSpec = spec
                     }
                 )
+
+                // Thinking level selector pill (reasoning models only)
+                if selectedModelSupportsReasoning {
+                    ThinkingLevelPill(
+                        selectedThinkingLevel: selectedThinkingLevel,
+                        isLocked: isModelLocked,
+                        defaultThinkingLevel: defaultThinkingLevel,
+                        onSelect: { level in
+                            selectedThinkingLevel = level
+                        }
+                    )
+                }
 
                 // Git branch pill
                 if let branch = GitBranchMonitor.shared.currentBranch {
@@ -711,6 +751,8 @@ struct ChatView: View {
             }
         }
         .onAppear {
+            selectedModelSpec = conversationStore.activeConversation?.modelSpec
+            selectedThinkingLevel = conversationStore.activeConversation?.thinkingLevel
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isInputFocused = true
             }
@@ -742,6 +784,7 @@ struct ChatView: View {
             worktreeEnabled = false
             pendingImageAttachments.removeAll()
             selectedModelSpec = conversationStore.activeConversation?.modelSpec
+            selectedThinkingLevel = conversationStore.activeConversation?.thinkingLevel
             if let newConversationId,
                let worktreeBranch = conversationStore.worktreeBranch(for: newConversationId) {
                 conversationStore.activeWorktreeBranch = worktreeBranch
@@ -830,6 +873,24 @@ struct ChatView: View {
         }
     }
 
+    private func modelInfo(for modelSpec: String?) -> ModelInfo? {
+        guard let spec = modelSpec else { return nil }
+        for provider in agentBridge.availableProviders {
+            if let model = provider.models.first(where: { $0.modelSpec == spec }) {
+                return model
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
+    private func cycleThinkingLevelIfAvailable() -> Bool {
+        guard selectedModelSupportsReasoning else { return false }
+        guard !isModelLocked else { return false }
+        selectedThinkingLevel = effectiveThinkingLevel.next
+        return true
+    }
+
     private func openWorktreeConversation(_ snapshot: WorktreeSnapshot) {
         if conversationStore.workspacePath != snapshot.path {
             conversationStore.workspacePath = snapshot.path
@@ -842,7 +903,11 @@ struct ChatView: View {
         }
 
         let effectiveModelSpec = selectedModelSpec ?? defaultModelSpec
-        let conversation = conversationStore.createConversation(modelSpec: effectiveModelSpec)
+        let initialThinkingLevel = modelInfo(for: effectiveModelSpec)?.reasoning == true ? self.effectiveThinkingLevel : nil
+        let conversation = conversationStore.createConversation(
+            modelSpec: effectiveModelSpec,
+            thinkingLevel: initialThinkingLevel
+        )
         let title = conversationStore.worktreeTaskTitle(for: snapshot.branch) ?? snapshot.branch
         conversationStore.renameConversation(id: conversation.id, to: title)
         conversationStore.bindWorktreeBranch(snapshot.branch, to: conversation.id, title: title)
@@ -901,7 +966,11 @@ struct ChatView: View {
             conversationId = activeId
         } else {
             let effectiveModelSpec = selectedModelSpec ?? defaultModelSpec
-            let conversation = conversationStore.createConversation(modelSpec: effectiveModelSpec)
+            let initialThinkingLevel = modelInfo(for: effectiveModelSpec)?.reasoning == true ? self.effectiveThinkingLevel : nil
+            let conversation = conversationStore.createConversation(
+                modelSpec: effectiveModelSpec,
+                thinkingLevel: initialThinkingLevel
+            )
             conversationId = conversation.id
         }
 
@@ -909,11 +978,19 @@ struct ChatView: View {
         conversationStore.addMessage(to: conversationId, role: .user, content: text, imageAttachments: pendingImageAttachments)
         conversationStore.setConversationRunning(conversationId, isRunning: true)
         let isFirstMessage = conversationStore.activeConversation?.messages.count == 1
+        let firstMessageModelSpec = isFirstMessage ? (selectedModelSpec ?? defaultModelSpec) : nil
+        let firstMessageThinkingLevel: ThinkingLevel? = {
+            guard isFirstMessage else { return nil }
+            guard modelInfo(for: firstMessageModelSpec)?.reasoning == true else { return nil }
+            return effectiveThinkingLevel
+        }()
+
         agentBridge.sendChatMessage(
             conversationId: conversationId.uuidString,
             content: outboundText,
             images: pendingImageAttachments.map(\.chatPayload),
-            modelSpec: isFirstMessage ? (selectedModelSpec ?? defaultModelSpec) : nil
+            modelSpec: firstMessageModelSpec,
+            thinkingLevel: firstMessageThinkingLevel
         )
 
         inputText = ""

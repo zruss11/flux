@@ -436,9 +436,10 @@ final class ConversationStore {
 
     // MARK: - Conversation CRUD
 
-    func createConversation(modelSpec: String? = nil) -> Conversation {
+    func createConversation(modelSpec: String? = nil, thinkingLevel: ThinkingLevel? = nil) -> Conversation {
         var conversation = Conversation()
         conversation.modelSpec = modelSpec
+        conversation.thinkingLevel = thinkingLevel
         conversations.append(conversation)
         activeConversationId = conversation.id
 
@@ -1129,6 +1130,7 @@ struct Conversation: Identifiable, Codable {
     var messages: [Message]
     let createdAt: Date
     var modelSpec: String?
+    var thinkingLevel: ThinkingLevel?
 
     /// Class-based box so the cache survives struct copies without triggering
     /// copy-on-write of the whole Conversation value.
@@ -1138,16 +1140,23 @@ struct Conversation: Identifiable, Codable {
     }
     private var _segmentCache = SegmentCache()
 
-    init(id: UUID = UUID(), messages: [Message] = [], createdAt: Date = Date(), modelSpec: String? = nil) {
+    init(
+        id: UUID = UUID(),
+        messages: [Message] = [],
+        createdAt: Date = Date(),
+        modelSpec: String? = nil,
+        thinkingLevel: ThinkingLevel? = nil
+    ) {
         self.id = id
         self.messages = messages
         self.createdAt = createdAt
         self.modelSpec = modelSpec
+        self.thinkingLevel = thinkingLevel
     }
 
     // Exclude the cache from Codable.
     private enum CodingKeys: String, CodingKey {
-        case id, messages, createdAt, modelSpec
+        case id, messages, createdAt, modelSpec, thinkingLevel
     }
 
     init(from decoder: Decoder) throws {
@@ -1156,6 +1165,7 @@ struct Conversation: Identifiable, Codable {
         messages = try container.decode([Message].self, forKey: .messages)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         modelSpec = try container.decodeIfPresent(String.self, forKey: .modelSpec)
+        thinkingLevel = try container.decodeIfPresent(ThinkingLevel.self, forKey: .thinkingLevel)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1164,6 +1174,7 @@ struct Conversation: Identifiable, Codable {
         try container.encode(messages, forKey: .messages)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encodeIfPresent(modelSpec, forKey: .modelSpec)
+        try container.encodeIfPresent(thinkingLevel, forKey: .thinkingLevel)
     }
 
     var hasPendingUserInput: Bool {

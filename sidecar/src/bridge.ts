@@ -26,6 +26,7 @@ interface ChatMessage {
   content: string;
   images?: ChatImagePayload[];
   modelSpec?: string;
+  thinkingLevel?: ThinkingLevel;
 }
 
 interface ChatImagePayload {
@@ -406,10 +407,12 @@ function isIncomingMessage(value: unknown): value is IncomingMessage {
     return value.token === undefined || isString(value.token);
   }
 
-  if (value.type === 'chat') { 
+  if (value.type === 'chat') {
     return isString(value.conversationId)
       && isString(value.content)
-      && (value.images === undefined || isChatImageList(value.images));
+      && (value.images === undefined || isChatImageList(value.images))
+      && (value.modelSpec === undefined || isString(value.modelSpec))
+      && (value.thinkingLevel === undefined || VALID_THINKING_LEVELS.has(value.thinkingLevel as ThinkingLevel));
   }
 
   if (value.type === 'tool_result') {
@@ -1695,6 +1698,9 @@ async function handleForkConversation(message: ForkConversationMessage): Promise
 
 async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
   const { conversationId, content, modelSpec } = message;
+  const thinkingLevel = message.thinkingLevel && VALID_THINKING_LEVELS.has(message.thinkingLevel)
+    ? message.thinkingLevel
+    : undefined;
   const images = sanitizeChatImages(message.images);
   const summary = content.trim().length > 0 ? content : '[image-only message]';
   const imageSummary = images.length > 0 ? ` (+${images.length} image${images.length === 1 ? '' : 's'})` : '';
@@ -1714,7 +1720,7 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
     }
   }
 
-  await enqueueUserMessage(conversationId, content, images, modelSpec);
+  await enqueueUserMessage(conversationId, content, images, modelSpec, thinkingLevel);
 }
 
 function sanitizeChatImages(images: ChatImagePayload[] | undefined): ChatImagePayload[] {
@@ -1774,9 +1780,15 @@ function userMessageContent(message: QueuedUserMessage): string | SDKUserContent
   return blocks;
 }
 
-async function enqueueUserMessage(conversationId: string, content: string, images: ChatImagePayload[] = [], modelSpec?: string): Promise<void> {
+async function enqueueUserMessage(
+  conversationId: string,
+  content: string,
+  images: ChatImagePayload[] = [],
+  modelSpec?: string,
+  thinkingLevel?: ThinkingLevel,
+): Promise<void> {
   if (content.trim().length === 0 && images.length === 0) return;
-  const session = await getSession(conversationId, modelSpec);
+  const session = await getSession(conversationId, modelSpec, thinkingLevel);
   const message: QueuedUserMessage = { text: content, images };
 
   if (session.isRunning) {
@@ -1985,13 +1997,24 @@ function buildFluxSystemPrompt(): string {
   return prompt;
 }
 
-async function getSession(conversationId: string, modelSpec?: string): Promise<ConversationSession> {
+async function getSession(
+  conversationId: string,
+  modelSpec?: string,
+  thinkingLevel?: ThinkingLevel,
+): Promise<ConversationSession> {
   let session = sessions.get(conversationId);
   if (!session) {
     let overrides: Parameters<typeof createAgentForConversation>[1] | undefined;
-    if (modelSpec) {
-      const { provider, model } = parseAgentModelSpec(modelSpec);
-      overrides = { modelProvider: provider, modelId: model };
+    if (modelSpec || thinkingLevel) {
+      overrides = {};
+      if (modelSpec) {
+        const { provider, model } = parseAgentModelSpec(modelSpec);
+        overrides.modelProvider = provider;
+        overrides.modelId = model;
+      }
+      if (thinkingLevel) {
+        overrides.thinkingLevel = thinkingLevel;
+      }
     }
 
     // Resolve OAuth API key if needed
