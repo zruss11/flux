@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Glance Item Model
@@ -5,46 +6,63 @@ import SwiftUI
 /// Represents a single card in the At a Glance section.
 /// Priority determines sort order (lower = more urgent = shown first).
 enum GlanceItem: Identifiable, Sendable {
+    case inboxUnread(title: String, timestamp: Date, conversationId: UUID, totalCount: Int)
+    case inboxWorking(title: String, timestamp: Date, conversationId: UUID, totalCount: Int)
     case ciFailing(repos: [String])
     case watcherAlert(title: String, summary: String, type: String, timestamp: Date, totalCount: Int)
     case ciRunning(repos: [String])
     case clipboard(content: String, timestamp: Date)
-    case recentActivity(appName: String, windowTitle: String?, startedAt: Date)
+    case recentActivity(appName: String, bundleId: String?, windowTitle: String?, startedAt: Date)
     case ciPassing(repoCount: Int)
     case gitBranch(branch: String)
 
     var id: String {
         switch self {
-        case .ciFailing:       return "ci-failing"
-        case .watcherAlert:    return "watcher-alert"
-        case .ciRunning:       return "ci-running"
-        case .clipboard:       return "clipboard"
-        case .recentActivity:  return "recent-activity"
-        case .ciPassing:       return "ci-passing"
-        case .gitBranch:       return "git-branch"
+        case .inboxUnread(_, _, let conversationId, _):
+            return "inbox-unread-\(conversationId.uuidString)"
+        case .inboxWorking(_, _, let conversationId, _):
+            return "inbox-working-\(conversationId.uuidString)"
+        case .ciFailing:
+            return "ci-failing"
+        case .watcherAlert:
+            return "watcher-alert"
+        case .ciRunning:
+            return "ci-running"
+        case .clipboard:
+            return "clipboard"
+        case .recentActivity:
+            return "recent-activity"
+        case .ciPassing:
+            return "ci-passing"
+        case .gitBranch:
+            return "git-branch"
         }
     }
 
     /// Lower = higher urgency = shown first.
     var sortPriority: Int {
         switch self {
-        case .ciFailing:       return 0
-        case .watcherAlert:    return 1
-        case .ciRunning:       return 2
-        case .clipboard:       return 3
-        case .recentActivity:  return 4
-        case .gitBranch:       return 5
-        case .ciPassing:       return 6
+        case .inboxUnread:     return 0
+        case .inboxWorking:    return 1
+        case .ciFailing:       return 2
+        case .watcherAlert:    return 3
+        case .ciRunning:       return 4
+        case .clipboard:       return 5
+        case .recentActivity:  return 6
+        case .gitBranch:       return 7
+        case .ciPassing:       return 8
         }
     }
 
     var icon: String {
         switch self {
+        case .inboxUnread:                          return "tray.full.fill"
+        case .inboxWorking:                         return "hourglass"
         case .ciFailing:                            return "xmark.circle.fill"
         case .watcherAlert(_, _, let type, _, _):   return watcherIconName(type)
         case .ciRunning:                            return "arrow.triangle.2.circlepath"
         case .clipboard:                            return "doc.on.clipboard"
-        case .recentActivity(let app, _, _):        return appIconName(for: app)
+        case .recentActivity(let app, _, _, _):     return appIconName(for: app)
         case .ciPassing:                            return "checkmark.circle.fill"
         case .gitBranch:                            return "point.topleft.down.curvedto.point.bottomright.up"
         }
@@ -52,6 +70,8 @@ enum GlanceItem: Identifiable, Sendable {
 
     var accentColor: Color {
         switch self {
+        case .inboxUnread:     return .blue
+        case .inboxWorking:    return .yellow
         case .ciFailing:       return .red
         case .watcherAlert:    return .orange
         case .ciRunning:       return .yellow
@@ -64,6 +84,10 @@ enum GlanceItem: Identifiable, Sendable {
 
     var title: String {
         switch self {
+        case .inboxUnread(let title, _, _, let totalCount):
+            return totalCount > 1 ? "\(title) (+\(totalCount - 1) unread)" : title
+        case .inboxWorking(let title, _, _, let totalCount):
+            return totalCount > 1 ? "\(title) (+\(totalCount - 1) running)" : title
         case .ciFailing(let repos):
             return repos.count == 1
                 ? "\(shortRepoName(repos[0])) failing"
@@ -76,7 +100,7 @@ enum GlanceItem: Identifiable, Sendable {
                 : "\(repos.count) repos running"
         case .clipboard:
             return "Recently copied"
-        case .recentActivity(let app, _, _):
+        case .recentActivity(let app, _, _, _):
             return app
         case .ciPassing(let count):
             return count == 1 ? "CI passing" : "All \(count) repos passing"
@@ -87,6 +111,10 @@ enum GlanceItem: Identifiable, Sendable {
 
     var subtitle: String? {
         switch self {
+        case .inboxUnread:
+            return "Agent finished — message left to read"
+        case .inboxWorking:
+            return "Agent task still working"
         case .ciFailing(let repos):
             return repos.count == 1 ? nil : repos.map(shortRepoName).joined(separator: ", ")
         case .watcherAlert(_, let summary, _, _, _):
@@ -95,7 +123,7 @@ enum GlanceItem: Identifiable, Sendable {
             return repos.count == 1 ? nil : repos.map(shortRepoName).joined(separator: ", ")
         case .clipboard(let content, _):
             return content.trimmingCharacters(in: .whitespacesAndNewlines)
-        case .recentActivity(_, let windowTitle, _):
+        case .recentActivity(_, _, let windowTitle, _):
             return windowTitle
         case .ciPassing:
             return nil
@@ -106,6 +134,10 @@ enum GlanceItem: Identifiable, Sendable {
 
     var prompt: String {
         switch self {
+        case .inboxUnread:
+            return "Show me my unread agent updates."
+        case .inboxWorking:
+            return "Show me my in-progress agent tasks."
         case .ciFailing:
             return "My CI is failing. Check the status and help me fix it."
         case .watcherAlert(let title, let summary, _, _, _):
@@ -115,7 +147,7 @@ enum GlanceItem: Identifiable, Sendable {
         case .clipboard(let content, _):
             let preview = String(content.prefix(200))
             return "I just copied this:\n\n\(preview)\n\nWhat is this? Summarize it for me."
-        case .recentActivity(let app, let windowTitle, _):
+        case .recentActivity(let app, _, let windowTitle, _):
             var text = "What was I doing in \(app)?"
             if let windowTitle, !windowTitle.isEmpty {
                 text += " The window was titled \"\(windowTitle)\"."
@@ -128,13 +160,24 @@ enum GlanceItem: Identifiable, Sendable {
         }
     }
 
+    var conversationId: UUID? {
+        switch self {
+        case .inboxUnread(_, _, let conversationId, _), .inboxWorking(_, _, let conversationId, _):
+            return conversationId
+        default:
+            return nil
+        }
+    }
+
     /// Timestamp for display, if applicable.
     var timestamp: Date? {
         switch self {
-        case .watcherAlert(_, _, _, let ts, _): return ts
-        case .clipboard(_, let ts):             return ts
-        case .recentActivity(_, _, let ts):     return ts
-        default:                                return nil
+        case .inboxUnread(_, let ts, _, _):        return ts
+        case .inboxWorking(_, let ts, _, _):       return ts
+        case .watcherAlert(_, _, _, let ts, _):    return ts
+        case .clipboard(_, let ts):                return ts
+        case .recentActivity(_, _, _, let ts):     return ts
+        default:                                   return nil
         }
     }
 }
@@ -142,12 +185,39 @@ enum GlanceItem: Identifiable, Sendable {
 // MARK: - At a Glance View
 
 struct AtAGlanceView: View {
-    let onAction: (String) -> Void
+    @Bindable var conversationStore: ConversationStore
+    let onPromptAction: (String) -> Void
+    let onOpenConversation: (UUID) -> Void
+    let onOpenWorktree: (WorktreeSnapshot) -> Void
+
+    @State private var worktreeMonitor = WorktreeStatusMonitor.shared
 
     private let maxCards = 3
 
     private var glanceItems: [GlanceItem] {
         var items: [GlanceItem] = []
+
+        // Inbox: unread updates first.
+        let unreadSummaries = conversationStore.inboxUnreadSummaries
+        if let topUnread = unreadSummaries.first {
+            items.append(.inboxUnread(
+                title: topUnread.title,
+                timestamp: topUnread.lastMessageAt,
+                conversationId: topUnread.id,
+                totalCount: unreadSummaries.count
+            ))
+        }
+
+        // Inbox: long-running tasks still in progress.
+        let runningSummaries = conversationStore.inboxRunningSummaries
+        if let topRunning = runningSummaries.first {
+            items.append(.inboxWorking(
+                title: topRunning.title,
+                timestamp: topRunning.lastMessageAt,
+                conversationId: topRunning.id,
+                totalCount: runningSummaries.count
+            ))
+        }
 
         // CI Status
         let ci = CIStatusMonitor.shared
@@ -193,6 +263,7 @@ struct AtAGlanceView: View {
         if let recent = SessionContextManager.shared.historyStore.sessions.first {
             items.append(.recentActivity(
                 appName: recent.appName,
+                bundleId: recent.bundleId,
                 windowTitle: recent.windowTitle,
                 startedAt: recent.startedAt
             ))
@@ -205,15 +276,60 @@ struct AtAGlanceView: View {
 
     var body: some View {
         let items = glanceItems
-        if !items.isEmpty {
-            VStack(spacing: 4) {
-                ForEach(items) { item in
-                    GlanceCardView(item: item) {
-                        onAction(item.prompt)
+        let worktrees = worktreeMonitor.snapshots
+
+        if !items.isEmpty || !worktrees.isEmpty || worktreeMonitor.isLoading {
+            ScrollView {
+                VStack(spacing: 6) {
+                    if !items.isEmpty {
+                        VStack(spacing: 4) {
+                            ForEach(items) { item in
+                                GlanceCardView(item: item) {
+                                    if let conversationId = item.conversationId {
+                                        onOpenConversation(conversationId)
+                                    } else {
+                                        onPromptAction(item.prompt)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if worktreeMonitor.isLoading && worktrees.isEmpty {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Loading worktrees…")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.55))
+                            Spacer()
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                    }
+
+                    if !worktrees.isEmpty {
+                        WorktreeStatusBoardView(
+                            snapshots: worktrees,
+                            taskTitleByBranch: conversationStore.worktreeTaskTitlesByBranch
+                        ) { snapshot in
+                            onOpenWorktree(snapshot)
+                        }
                     }
                 }
+                .padding(.vertical, 2)
             }
+            .scrollIndicators(.hidden)
             .transition(.opacity.combined(with: .move(edge: .top)))
+            .onAppear {
+                worktreeMonitor.monitor(workspacePath: conversationStore.workspacePath)
+            }
+            .onDisappear {
+                worktreeMonitor.stop()
+            }
+            .onChange(of: conversationStore.workspacePath) { _, newPath in
+                worktreeMonitor.monitor(workspacePath: newPath)
+            }
         }
     }
 }
@@ -234,10 +350,7 @@ private struct GlanceCardView: View {
                     .padding(.vertical, 4)
 
                 HStack(spacing: 6) {
-                    Image(systemName: item.icon)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(item.accentColor)
-                        .frame(width: 16)
+                    leadingIcon
 
                     VStack(alignment: .leading, spacing: 0) {
                         Text(item.title)
@@ -282,6 +395,61 @@ private struct GlanceCardView: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var leadingIcon: some View {
+        if case let .recentActivity(appName, bundleId, _, _) = item,
+           let icon = resolveAppIcon(bundleId: bundleId, appName: appName) {
+            Image(nsImage: icon)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 13, height: 13)
+                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                .frame(width: 16)
+        } else {
+            Image(systemName: item.icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(item.accentColor)
+                .frame(width: 16)
+        }
+    }
+
+    @MainActor
+    private func resolveAppIcon(bundleId: String?, appName: String) -> NSImage? {
+        let normalizedBundleId = bundleId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedBundleId: String?
+
+        if let normalizedBundleId, !normalizedBundleId.isEmpty {
+            resolvedBundleId = normalizedBundleId
+        } else {
+            resolvedBundleId = AppInstructions.shared.instructions
+                .first(where: { $0.appName.caseInsensitiveCompare(appName) == .orderedSame })?
+                .bundleId
+        }
+
+        if let resolvedBundleId {
+            if let discovered = InstalledAppProvider.shared.app(forBundleId: resolvedBundleId) {
+                return discovered.icon
+            }
+
+            if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: resolvedBundleId) {
+                return NSWorkspace.shared.icon(forFile: appURL.path)
+            }
+
+            if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == resolvedBundleId }) {
+                return runningApp.icon
+            }
+        }
+
+        if let runningApp = NSWorkspace.shared.runningApplications.first(where: {
+            ($0.localizedName ?? "").caseInsensitiveCompare(appName) == .orderedSame
+        }) {
+            return runningApp.icon
+        }
+
+        return nil
     }
 
     private func timeAgo(_ date: Date) -> String {

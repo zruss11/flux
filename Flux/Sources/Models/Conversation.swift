@@ -170,7 +170,10 @@ final class ConversationStore {
         didSet { UserDefaults.standard.set(workspacePath, forKey: "workspacePath") }
     }
     var activeWorktreeBranch: String?
+    private(set) var worktreeTaskTitlesByBranch: [String: String] = [:]
+    private(set) var worktreeConversationIdsByBranch: [String: String] = [:]
     private var runningConversationIds: Set<UUID> = []
+    private var loadingConversationIds: Set<UUID> = []
     /// Conversation IDs that finished running but haven't been viewed yet.
     private(set) var unreadReadyConversationIds: Set<UUID> = []
     private(set) var scrollRevision: Int = 0
@@ -194,6 +197,9 @@ final class ConversationStore {
         historyDirectory.appendingPathComponent("index.json")
     }
 
+    private static let worktreeTaskTitlesKey = "worktreeTaskTitlesByBranch"
+    private static let worktreeConversationIdsKey = "worktreeConversationIdsByBranch"
+
     var activeConversation: Conversation? {
         conversations.first { $0.id == activeConversationId }
     }
@@ -202,9 +208,27 @@ final class ConversationStore {
         !runningConversationIds.isEmpty
     }
 
+    func isConversationRunning(_ conversationId: UUID) -> Bool {
+        runningConversationIds.contains(conversationId)
+    }
+
     /// Number of conversations that finished but haven't been viewed yet.
     var unreadReadyCount: Int {
         unreadReadyConversationIds.count
+    }
+
+    /// Running conversations, ordered by most recent activity.
+    var inboxRunningSummaries: [ConversationSummary] {
+        summaries
+            .filter { runningConversationIds.contains($0.id) }
+            .sorted { $0.lastMessageAt > $1.lastMessageAt }
+    }
+
+    /// Finished (unread) conversations, ordered by most recent activity.
+    var inboxUnreadSummaries: [ConversationSummary] {
+        summaries
+            .filter { unreadReadyConversationIds.contains($0.id) }
+            .sorted { $0.lastMessageAt > $1.lastMessageAt }
     }
 
     var activeConversationHasPendingUserInput: Bool {
@@ -216,11 +240,198 @@ final class ConversationStore {
         unreadReadyConversationIds.remove(id)
     }
 
+    func worktreeTaskTitle(for branch: String) -> String? {
+        let normalizedBranch = normalizedWorktreeBranch(branch)
+        guard !normalizedBranch.isEmpty else { return nil }
+        return worktreeTaskTitlesByBranch[normalizedBranch]
+    }
+
+    func conversationId(forWorktreeBranch branch: String) -> UUID? {
+        let normalizedBranch = normalizedWorktreeBranch(branch)
+        guard !normalizedBranch.isEmpty,
+              let raw = worktreeConversationIdsByBranch[normalizedBranch] else {
+            return nil
+        }
+        return UUID(uuidString: raw)
+    }
+
+    func worktreeBranch(for conversationId: UUID) -> String? {
+        let rawId = conversationId.uuidString
+        return worktreeConversationIdsByBranch.first(where: { $0.value == rawId })?.key
+    }
+
+    func bindWorktreeBranch(_ branch: String, to conversationId: UUID, title: String? = nil) {
+        rememberWorktreeConversation(branch: branch, conversationId: conversationId)
+        rememberWorktreeTaskTitle(branch: branch, conversationId: conversationId, titleOverride: title)
+    }
+
+    private func normalizedWorktreeBranch(_ branch: String) -> String {
+        branch.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizeWorktreeTitle(_ title: String) -> String? {
+        let cleanedTitle = title
+            .split(whereSeparator: { $0.isNewline })
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard !cleanedTitle.isEmpty,
+              cleanedTitle != "New Chat" else {
+            return nil
+        }
+
+        return cleanedTitle.count > 72 ? String(cleanedTitle.prefix(69)) + "…" : cleanedTitle
+    }
+
+    private func rememberWorktreeConversation(branch: String, conversationId: UUID) {
+        let normalizedBranch = normalizedWorktreeBranch(branch)
+        guard !normalizedBranch.isEmpty else { return }
+
+        let conversationRawId = conversationId.uuidString
+        if worktreeConversationIdsByBranch[normalizedBranch] != conversationRawId {
+            worktreeConversationIdsByBranch[normalizedBranch] = conversationRawId
+            UserDefaults.standard.set(worktreeConversationIdsByBranch, forKey: Self.worktreeConversationIdsKey)
+        }
+    }
+
+    private func rememberWorktreeTaskTitle(branch: String, conversationId: UUID, titleOverride: String? = nil) {
+        let normalizedBranch = normalizedWorktreeBranch(branch)
+        guard !normalizedBranch.isEmpty else { return }
+
+        rememberWorktreeConversation(branch: normalizedBranch, conversationId: conversationId)
+
+        let rawTitle = titleOverride
+            ?? summaries.first(where: { $0.id == conversationId })?.title
+            ?? conversations.first(where: { $0.id == conversationId })?.messages.first(where: { $0.role == .user })?.content
+
+        guard let rawTitle,
+              let finalTitle = normalizeWorktreeTitle(rawTitle) else {
+            return
+        }
+
+        if worktreeTaskTitlesByBranch[normalizedBranch] != finalTitle {
+            worktreeTaskTitlesByBranch[normalizedBranch] = finalTitle
+            UserDefaults.standard.set(worktreeTaskTitlesByBranch, forKey: Self.worktreeTaskTitlesKey)
+        }
+    }
+
+    private func rehydrateWorktreeTaskTitlesFromHistoryIfNeeded() {
+        guard worktreeTaskTitlesByBranch.isEmpty else { return }
+
+        let candidates = summaries
+            .prefix(160)
+            .map { ($0.id, $0.title) }
+
+        guard !candidates.isEmpty else { return }
+
+        Task { [weak self] in
+            let recovered = await Self.recoverWorktreeTaskTitles(candidates: candidates)
+            guard let self, !recovered.isEmpty else { return }
+
+            var changed = false
+            for (branch, title) in recovered {
+                guard self.worktreeTaskTitlesByBranch[branch] == nil else { continue }
+                self.worktreeTaskTitlesByBranch[branch] = title
+                changed = true
+            }
+
+            if changed {
+                UserDefaults.standard.set(self.worktreeTaskTitlesByBranch, forKey: Self.worktreeTaskTitlesKey)
+            }
+        }
+    }
+
+    private func rehydrateWorktreeConversationMappingsFromHistoryIfNeeded() {
+        guard worktreeConversationIdsByBranch.isEmpty else { return }
+
+        let candidates = summaries
+            .prefix(160)
+            .map(\.id)
+
+        guard !candidates.isEmpty else { return }
+
+        Task { [weak self] in
+            let recovered = await Self.recoverWorktreeConversationMappings(candidates: candidates)
+            guard let self, !recovered.isEmpty else { return }
+
+            var changed = false
+            for (branch, conversationId) in recovered {
+                guard self.worktreeConversationIdsByBranch[branch] == nil else { continue }
+                self.worktreeConversationIdsByBranch[branch] = conversationId
+                changed = true
+            }
+
+            if changed {
+                UserDefaults.standard.set(self.worktreeConversationIdsByBranch, forKey: Self.worktreeConversationIdsKey)
+            }
+        }
+    }
+
+    private static func recoverWorktreeTaskTitles(candidates: [(UUID, String)]) async -> [String: String] {
+        await Task.detached(priority: .utility) {
+            var recovered: [String: String] = [:]
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+
+            for (id, rawTitle) in candidates {
+                let trimmedTitle = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedTitle.isEmpty, trimmedTitle != "New Chat" else { continue }
+
+                let url = Self.conversationsDirectory.appendingPathComponent("\(id.uuidString).json")
+                guard let data = try? Data(contentsOf: url),
+                      let conversation = try? decoder.decode(Conversation.self, from: data) else {
+                    continue
+                }
+
+                for message in conversation.messages {
+                    for toolCall in message.toolCalls where toolCall.toolName == "set_worktree" {
+                        let branch = toolCall.inputSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !branch.isEmpty, recovered[branch] == nil else { continue }
+                        recovered[branch] = trimmedTitle
+                    }
+                }
+            }
+
+            return recovered
+        }.value
+    }
+
+    private static func recoverWorktreeConversationMappings(candidates: [UUID]) async -> [String: String] {
+        await Task.detached(priority: .utility) {
+            var recovered: [String: String] = [:]
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+
+            for id in candidates {
+                let url = Self.conversationsDirectory.appendingPathComponent("\(id.uuidString).json")
+                guard let data = try? Data(contentsOf: url),
+                      let conversation = try? decoder.decode(Conversation.self, from: data) else {
+                    continue
+                }
+
+                for message in conversation.messages {
+                    for toolCall in message.toolCalls where toolCall.toolName == "set_worktree" {
+                        let branch = toolCall.inputSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !branch.isEmpty, recovered[branch] == nil else { continue }
+                        recovered[branch] = id.uuidString
+                    }
+                }
+            }
+
+            return recovered
+        }.value
+    }
+
     // MARK: - Lifecycle
 
     init() {
         workspacePath = UserDefaults.standard.string(forKey: "workspacePath")
         loadIndex()
+        worktreeTaskTitlesByBranch = UserDefaults.standard.dictionary(forKey: Self.worktreeTaskTitlesKey) as? [String: String] ?? [:]
+        worktreeConversationIdsByBranch = UserDefaults.standard.dictionary(forKey: Self.worktreeConversationIdsKey) as? [String: String] ?? [:]
+        rehydrateWorktreeTaskTitlesFromHistoryIfNeeded()
+        rehydrateWorktreeConversationMappingsFromHistoryIfNeeded()
     }
 
     // MARK: - Conversation CRUD
@@ -401,6 +612,11 @@ final class ConversationStore {
             conversations[index].messages.append(message)
             conversations[index].invalidateDisplaySegments()
         }
+
+        if info.toolName == "set_worktree" {
+            rememberWorktreeTaskTitle(branch: info.inputSummary, conversationId: conversationId)
+        }
+
         lastScrollConversationId = conversationId
         scrollRevision &+= 1
     }
@@ -412,6 +628,12 @@ final class ConversationStore {
             if let tcIndex = conversations[convIndex].messages[msgIndex].toolCalls.firstIndex(where: { $0.id == toolUseId }) {
                 conversations[convIndex].messages[msgIndex].toolCalls[tcIndex].status = .complete
                 conversations[convIndex].messages[msgIndex].toolCalls[tcIndex].resultPreview = resultPreview
+
+                let toolCall = conversations[convIndex].messages[msgIndex].toolCalls[tcIndex]
+                if toolCall.toolName == "set_worktree" {
+                    rememberWorktreeTaskTitle(branch: toolCall.inputSummary, conversationId: conversationId)
+                }
+
                 conversations[convIndex].invalidateDisplaySegments()
                 saveConversation(conversations[convIndex])
                 lastScrollConversationId = conversationId
@@ -551,15 +773,37 @@ final class ConversationStore {
     // MARK: - History Management
 
     /// Load a conversation from disk into memory and set it as active.
+    ///
+    /// Important: this avoids synchronous file I/O on the main actor to prevent
+    /// UI stalls when opening large conversation logs from history/at-a-glance.
     func openConversation(id: UUID) {
         markConversationRead(id)
+
         if let existing = conversations.first(where: { $0.id == id }) {
             activeConversationId = existing.id
             return
         }
-        if let loaded = loadConversationSync(id: id) {
-            conversations.append(loaded)
-            activeConversationId = loaded.id
+
+        guard !loadingConversationIds.contains(id) else { return }
+        loadingConversationIds.insert(id)
+
+        Task { [weak self] in
+            guard let self else { return }
+            let loaded = await self.loadConversation(id: id)
+            guard !Task.isCancelled else { return }
+
+            self.loadingConversationIds.remove(id)
+
+            // Conversation may have been created/loaded while async I/O was in flight.
+            if let existing = self.conversations.first(where: { $0.id == id }) {
+                self.activeConversationId = existing.id
+                return
+            }
+
+            if let loaded {
+                self.conversations.append(loaded)
+                self.activeConversationId = loaded.id
+            }
         }
     }
 
@@ -572,6 +816,23 @@ final class ConversationStore {
         conversations.removeAll { $0.id == id }
         summaries.removeAll { $0.id == id }
         runningConversationIds.remove(id)
+        unreadReadyConversationIds.remove(id)
+
+        let rawId = id.uuidString
+        let removedBranches = worktreeConversationIdsByBranch
+            .filter { $0.value == rawId }
+            .map(\.key)
+
+        for branch in removedBranches {
+            worktreeConversationIdsByBranch.removeValue(forKey: branch)
+            worktreeTaskTitlesByBranch.removeValue(forKey: branch)
+        }
+
+        if !removedBranches.isEmpty {
+            UserDefaults.standard.set(worktreeConversationIdsByBranch, forKey: Self.worktreeConversationIdsKey)
+            UserDefaults.standard.set(worktreeTaskTitlesByBranch, forKey: Self.worktreeTaskTitlesKey)
+        }
+
         // Remove from any folder
         for i in folders.indices {
             folders[i].conversationIds.removeAll { $0 == id }
@@ -588,6 +849,11 @@ final class ConversationStore {
     func renameConversation(id: UUID, to newTitle: String) {
         if let si = summaries.firstIndex(where: { $0.id == id }) {
             summaries[si].title = newTitle
+            if let branch = worktreeBranch(for: id),
+               let normalizedTitle = normalizeWorktreeTitle(newTitle) {
+                worktreeTaskTitlesByBranch[branch] = normalizedTitle
+                UserDefaults.standard.set(worktreeTaskTitlesByBranch, forKey: Self.worktreeTaskTitlesKey)
+            }
             saveIndex()
         }
     }
@@ -912,6 +1178,49 @@ struct Conversation: Identifiable, Codable {
         _segmentCache.segments = nil
     }
 
+    /// Number of display segments in this conversation.
+    /// Used to support progressive rendering in the chat UI without building
+    /// the full `[DisplaySegment]` array up front.
+    var displaySegmentCount: Int {
+        messages.reduce(into: 0) { count, message in
+            switch message.role {
+            case .user, .system:
+                count += 1
+            case .assistant:
+                if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    count += 1
+                }
+                if !message.toolCalls.isEmpty {
+                    count += 1
+                }
+                count += message.permissionRequests.count
+                count += message.askUserQuestions.count
+                count += message.subAgentActivities.count
+            }
+        }
+    }
+
+    /// Tail-only version that avoids constructing all display segments when we
+    /// only need the latest portion of a long conversation.
+    func displaySegmentsTail(limit: Int) -> [DisplaySegment] {
+        guard limit > 0 else { return [] }
+
+        var reversedTail: [DisplaySegment] = []
+        reversedTail.reserveCapacity(limit)
+
+        for message in messages.reversed() {
+            let messageSegments = Self.segments(for: message)
+            for segment in messageSegments.reversed() {
+                reversedTail.append(segment)
+                if reversedTail.count == limit {
+                    return Array(reversedTail.reversed())
+                }
+            }
+        }
+
+        return Array(reversedTail.reversed())
+    }
+
     /// Produces display segments for the chat view by grouping tool calls and
     /// separating them from assistant text content. Results are cached until
     /// explicitly invalidated.
@@ -919,36 +1228,34 @@ struct Conversation: Identifiable, Codable {
         if let cached = _segmentCache.segments {
             return cached
         }
-        var segments: [DisplaySegment] = []
 
-        for message in messages {
-            switch message.role {
-            case .user:
-                segments.append(.userMessage(message))
-            case .assistant:
-                let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty {
-                    segments.append(.assistantText(message))
-                }
-                if !message.toolCalls.isEmpty {
-                    segments.append(.toolCallGroup(id: message.id.uuidString, calls: message.toolCalls))
-                }
-                for req in message.permissionRequests {
-                    segments.append(.permissionRequest(req))
-                }
-                for q in message.askUserQuestions {
-                    segments.append(.askUserQuestion(q))
-                }
-                for activity in message.subAgentActivities {
-                    segments.append(.subAgentGroup(activity))
-                }
-            case .system:
-                segments.append(.assistantText(message))
-            }
-        }
-
+        let segments = messages.flatMap(Self.segments(for:))
         _segmentCache.segments = segments
         return segments
+    }
+
+    private static func segments(for message: Message) -> [DisplaySegment] {
+        switch message.role {
+        case .user:
+            return [.userMessage(message)]
+
+        case .assistant:
+            var segments: [DisplaySegment] = []
+            let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                segments.append(.assistantText(message))
+            }
+            if !message.toolCalls.isEmpty {
+                segments.append(.toolCallGroup(id: message.id.uuidString, calls: message.toolCalls))
+            }
+            segments.append(contentsOf: message.permissionRequests.map(DisplaySegment.permissionRequest))
+            segments.append(contentsOf: message.askUserQuestions.map(DisplaySegment.askUserQuestion))
+            segments.append(contentsOf: message.subAgentActivities.map(DisplaySegment.subAgentGroup))
+            return segments
+
+        case .system:
+            return [.assistantText(message)]
+        }
     }
 }
 

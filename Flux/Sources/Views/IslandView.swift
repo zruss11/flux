@@ -351,6 +351,10 @@ struct IslandView: View {
             }
         }
         .onPreferenceChange(ChatContentHeightKey.self) { height in
+            // Ignore hidden/collapsed updates; we only care about visible chat
+            // content while expanded.
+            guard isExpanded, contentType == .chat else { return }
+
             // Gate updates by a threshold to prevent micro-fluctuation
             // cascades during streaming that cause layout thrash.
             if abs(height - measuredChatHeight) > 2 {
@@ -452,8 +456,10 @@ struct IslandView: View {
             VStack(alignment: .leading, spacing: 0) {
                 openedHeaderContent
                     .frame(height: max(24, closedHeight))
+                    .zIndex(10)
 
                 expandedBody
+                    .zIndex(0)
 
                 // Drag handle — always mounted to preserve sibling view identity
                 dragHandleView

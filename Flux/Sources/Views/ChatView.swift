@@ -47,9 +47,7 @@ struct ChatView: View {
     @State private var showSlashCommands = false
     @State private var slashTriggerActive = false
     @State private var slashSearchQuery = ""
-    @State private var ciStatusMonitor = CIStatusMonitor.shared
     @State private var watcherService = WatcherService.shared
-    @AppStorage("showCIStatusChip") private var showCIStatusChip = true
     @AppStorage("showWatcherAlertsChip") private var showWatcherAlertsChip = true
     @FocusState private var isInputFocused: Bool
     @State private var showMicPermissionAlert = false
@@ -66,9 +64,13 @@ struct ChatView: View {
     @State private var pendingImageAttachments: [MessageImageAttachment] = []
     @State private var forkBannerVisible = false
     @State private var forkBannerDismissTask: Task<Void, Never>?
+    @State private var autoScrollTask: Task<Void, Never>?
     @State private var pendingForkContexts: [UUID: ForkContext] = [:]
+    @State private var visibleSegmentLimit = 60
 
     private let maxAttachmentBytes = 10 * 1024 * 1024
+    private let initialVisibleSegmentLimit = 60
+    private let segmentLoadStep = 100
 
     private let shareScreenFileName = "__flux_screenshot.jpg"
 
@@ -89,78 +91,131 @@ struct ChatView: View {
         watcherService.alerts.filter { !$0.isDismissed }
     }
 
+    private var visibleSegments: [DisplaySegment] {
+        guard let conversation = conversationStore.activeConversation else { return [] }
+        return conversation.displaySegmentsTail(limit: visibleSegmentLimit)
+    }
+
+    private var isActiveConversationRunning: Bool {
+        guard let conversationId = conversationStore.activeConversationId else { return false }
+        return conversationStore.isConversationRunning(conversationId)
+    }
+
+
     var body: some View {
+        let displayedSegments = visibleSegments
+        let totalSegmentCount = conversationStore.activeConversation?.displaySegmentCount ?? 0
+        let hiddenSegments = max(totalSegmentCount - displayedSegments.count, 0)
+        let isConversationEmpty = conversationStore.activeConversation?.messages.isEmpty ?? true
+
         VStack(spacing: 0) {
             // At a Glance cards when chat is empty
-            if conversationStore.activeConversation?.messages.isEmpty ?? true {
-                AtAGlanceView { prompt in
-                    inputText = prompt
-                    sendMessage()
-                }
+            if isConversationEmpty {
+                AtAGlanceView(
+                    conversationStore: conversationStore,
+                    onPromptAction: { prompt in
+                        inputText = prompt
+                        sendMessage()
+                    },
+                    onOpenConversation: { conversationId in
+                        conversationStore.openConversation(id: conversationId)
+                    },
+                    onOpenWorktree: { snapshot in
+                        openWorktreeConversation(snapshot)
+                    }
+                )
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
 
             // Messages
-            ScrollViewReader { scrollProxy in
+            if !isConversationEmpty {
+                ScrollViewReader { scrollProxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        if let conversation = conversationStore.activeConversation {
-                            ForEach(conversation.displaySegments) { segment in
-                                Group {
-                                    switch segment {
-                                    case .userMessage(let message):
-                                        MessageBubble(message: message)
-                                    case .assistantText(let message):
-                                        if message.role == .system {
-                                            ForkIndicatorView(content: message.content)
-                                        } else {
-                                            MessageBubble(message: message)
-                                        }
-                                    case .toolCallGroup(_, let calls):
-                                        ToolCallGroupView(calls: calls)
-                                    case .permissionRequest(let req):
-                                        PermissionApprovalCard(request: req) {
-                                            guard let convId = conversationStore.activeConversationId else { return }
-                                            conversationStore.resolvePermissionRequest(
-                                                in: convId,
-                                                requestId: req.id,
-                                                approved: true
+                        if hiddenSegments > 0 {
+                            Button {
+                                visibleSegmentLimit += segmentLoadStep
+                            } label: {
+                                Text("Load \(min(segmentLoadStep, hiddenSegments)) earlier updates")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.7))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color.white.opacity(0.08))
+                                            .overlay(
+                                                Capsule()
+                                                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
                                             )
-                                            agentBridge.sendPermissionResponse(requestId: req.id, behavior: "allow")
-                                        } onDeny: {
-                                            guard let convId = conversationStore.activeConversationId else { return }
-                                            conversationStore.resolvePermissionRequest(
-                                                in: convId,
-                                                requestId: req.id,
-                                                approved: false
-                                            )
-                                            agentBridge.sendPermissionResponse(requestId: req.id, behavior: "deny", message: "User denied this action")
-                                        }
-                                    case .askUserQuestion(let q):
-                                        AskUserQuestionCard(question: q) { answers in
-                                            guard let convId = conversationStore.activeConversationId else { return }
-                                            conversationStore.resolveAskUserQuestion(
-                                                in: convId,
-                                                requestId: q.id,
-                                                answers: answers
-                                            )
-                                            agentBridge.sendPermissionResponse(
-                                                requestId: q.id,
-                                                behavior: "allow",
-                                                answers: answers
-                                            )
-                                        }
-                                    case .subAgentGroup(let activity):
-                                        SubAgentGroupView(activity: activity)
-                                    }
-                                }
-                                .id(segment.id)
+                                    )
                             }
+                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        }
+
+                        ForEach(displayedSegments) { segment in
+                            Group {
+                                switch segment {
+                                case .userMessage(let message):
+                                    MessageBubble(message: message)
+                                case .assistantText(let message):
+                                    if message.role == .system {
+                                        ForkIndicatorView(content: message.content)
+                                    } else {
+                                        MessageBubble(message: message)
+                                    }
+                                case .toolCallGroup(_, let calls):
+                                    ToolCallGroupView(calls: calls)
+                                case .permissionRequest(let req):
+                                    PermissionApprovalCard(request: req) {
+                                        guard let convId = conversationStore.activeConversationId else { return }
+                                        conversationStore.resolvePermissionRequest(
+                                            in: convId,
+                                            requestId: req.id,
+                                            approved: true
+                                        )
+                                        agentBridge.sendPermissionResponse(requestId: req.id, behavior: "allow")
+                                    } onDeny: {
+                                        guard let convId = conversationStore.activeConversationId else { return }
+                                        conversationStore.resolvePermissionRequest(
+                                            in: convId,
+                                            requestId: req.id,
+                                            approved: false
+                                        )
+                                        agentBridge.sendPermissionResponse(requestId: req.id, behavior: "deny", message: "User denied this action")
+                                    }
+                                case .askUserQuestion(let q):
+                                    AskUserQuestionCard(question: q) { answers in
+                                        guard let convId = conversationStore.activeConversationId else { return }
+                                        conversationStore.resolveAskUserQuestion(
+                                            in: convId,
+                                            requestId: q.id,
+                                            answers: answers
+                                        )
+                                        agentBridge.sendPermissionResponse(
+                                            requestId: q.id,
+                                            behavior: "allow",
+                                            answers: answers
+                                        )
+                                    }
+                                case .subAgentGroup(let activity):
+                                    SubAgentGroupView(activity: activity)
+                                }
+                            }
+                            .id(segment.id)
                         }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .preference(key: ChatContentHeightKey.self, value: geo.size.height)
+                        }
+                    )
                 }
                 .overlay(alignment: .top) {
                     if forkBannerVisible {
@@ -176,12 +231,27 @@ struct ChatView: View {
                     // Avoid expensive off-screen ScrollViewReader work while the island is collapsed.
                     guard IslandWindowManager.shared.isExpanded else { return }
                     guard conversationStore.lastScrollConversationId == conversationStore.activeConversationId,
-                          let conversation = conversationStore.activeConversation,
-                          let lastSegment = conversation.displaySegments.last else { return }
-                    withAnimation {
-                        scrollProxy.scrollTo(lastSegment.id, anchor: .bottom)
+                          let lastSegment = displayedSegments.last else { return }
+
+                    autoScrollTask?.cancel()
+                    let targetId = lastSegment.id
+                    let shouldAnimate = !isActiveConversationRunning
+
+                    autoScrollTask = Task { @MainActor in
+                        // While streaming, coalesce frequent chunk updates into a single
+                        // scroll operation to avoid saturating the main thread.
+                        if !shouldAnimate {
+                            try? await Task.sleep(for: .milliseconds(120))
+                            guard !Task.isCancelled else { return }
+                            scrollProxy.scrollTo(targetId, anchor: .bottom)
+                        } else {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                scrollProxy.scrollTo(targetId, anchor: .bottom)
+                            }
+                        }
                     }
                 }
+            }
             }
 
             // Input row
@@ -472,22 +542,6 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
 
-                if showCIStatusChip, ciStatusMonitor.aggregateStatus != .idle {
-                    CIStatusChip(
-                        aggregateStatus: ciStatusMonitor.aggregateStatus,
-                        repoStatuses: ciStatusMonitor.repoStatuses,
-                        onRefresh: {
-                            CIStatusMonitor.shared.forceRefresh()
-                        },
-                        onOpenSettings: {
-                            NotificationCenter.default.post(name: .islandOpenSettingsRequested, object: nil)
-                        },
-                        onHide: {
-                            showCIStatusChip = false
-                        }
-                    )
-                }
-
                 if showWatcherAlertsChip, !activeWatcherAlerts.isEmpty {
                     WatcherAlertsChip(
                         activeAlerts: activeWatcherAlerts,
@@ -576,16 +630,12 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
                 }
+                .padding(.horizontal, 10)
             }
+            .defaultScrollAnchor(.leading)
             .padding(.top, 8)
             .padding(.bottom, 12)
         }
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .preference(key: ChatContentHeightKey.self, value: geo.size.height)
-            }
-        )
         .preference(key: SkillsVisibleKey.self, value: showSkills || showSlashCommands)
         .preference(key: HasPendingAttachmentsKey.self, value: !pendingImageAttachments.isEmpty)
         .onChange(of: inputText) { oldValue, newValue in
@@ -674,6 +724,7 @@ struct ChatView: View {
         }
         .onDisappear {
             forkBannerDismissTask?.cancel()
+            autoScrollTask?.cancel()
         }
         .onChange(of: conversationStore.workspacePath) { _, newPath in
             GitBranchMonitor.shared.monitor(workspacePath: newPath)
@@ -683,13 +734,20 @@ struct ChatView: View {
             guard voiceInput.isRecording else { return }
             inputText = newValue
         }
-        .onChange(of: conversationStore.activeConversationId) { _, _ in
+        .onChange(of: conversationStore.activeConversationId) { _, newConversationId in
+            autoScrollTask?.cancel()
             inputText = ""
+            visibleSegmentLimit = initialVisibleSegmentLimit
             selectedSkillDirNames.removeAll()
             worktreeEnabled = false
-            conversationStore.activeWorktreeBranch = nil
             pendingImageAttachments.removeAll()
             selectedModelSpec = conversationStore.activeConversation?.modelSpec
+            if let newConversationId,
+               let worktreeBranch = conversationStore.worktreeBranch(for: newConversationId) {
+                conversationStore.activeWorktreeBranch = worktreeBranch
+            } else {
+                conversationStore.activeWorktreeBranch = nil
+            }
             if showSkills {
                 showSkills = false
                 dollarTriggerActive = false
@@ -770,6 +828,25 @@ struct ChatView: View {
         } message: {
             Text(branchCheckoutErrorMessage ?? "Unable to switch branches.")
         }
+    }
+
+    private func openWorktreeConversation(_ snapshot: WorktreeSnapshot) {
+        if conversationStore.workspacePath != snapshot.path {
+            conversationStore.workspacePath = snapshot.path
+        }
+
+        if let existingConversationId = conversationStore.conversationId(forWorktreeBranch: snapshot.branch) {
+            conversationStore.openConversation(id: existingConversationId)
+            conversationStore.activeWorktreeBranch = snapshot.branch
+            return
+        }
+
+        let effectiveModelSpec = selectedModelSpec ?? defaultModelSpec
+        let conversation = conversationStore.createConversation(modelSpec: effectiveModelSpec)
+        let title = conversationStore.worktreeTaskTitle(for: snapshot.branch) ?? snapshot.branch
+        conversationStore.renameConversation(id: conversation.id, to: title)
+        conversationStore.bindWorktreeBranch(snapshot.branch, to: conversation.id, title: title)
+        conversationStore.activeWorktreeBranch = snapshot.branch
     }
 
     private func sendMessage() {
