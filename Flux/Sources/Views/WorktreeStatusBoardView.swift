@@ -137,6 +137,8 @@ private struct WorktreeStatusRow: View {
 
                 Spacer(minLength: 4)
 
+                ciBadge
+
                 if !snapshot.diff.isZero {
                     diffBadge
                 }
@@ -159,6 +161,23 @@ private struct WorktreeStatusRow: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    private var ciBadge: some View {
+        HStack(spacing: 4) {
+            Image(systemName: ciIcon)
+                .font(.system(size: 8.5, weight: .semibold))
+            Text(ciLabel)
+                .font(.system(size: 9, weight: .semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(ciColor)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2.5)
+        .background(
+            Capsule()
+                .strokeBorder(ciColor.opacity(0.55), lineWidth: 0.75)
+        )
     }
 
     private var diffBadge: some View {
@@ -186,8 +205,17 @@ private struct WorktreeStatusRow: View {
         switch snapshot.ciStatus {
         case .passing: return "checkmark"
         case .failing: return "xmark"
-        case .running: return "ellipsis"
+        case .running: return "arrow.triangle.2.circlepath"
         case .unknown: return "questionmark"
+        }
+    }
+
+    private var ciLabel: String {
+        switch snapshot.ciStatus {
+        case .passing: return "Passing"
+        case .failing: return "Failing"
+        case .running: return "Running"
+        case .unknown: return "Unknown"
         }
     }
 
