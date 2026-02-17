@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class ConversationStoreIntegrationTests: XCTestCase {
-    func testConversationStorePersistsConversation() throws {
+    func testConversationStorePersistsConversation() async throws {
         let fm = FileManager.default
         let tempDir = fm.temporaryDirectory.appendingPathComponent("flux-history-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -39,6 +39,11 @@ final class ConversationStoreIntegrationTests: XCTestCase {
 
         let storeReloaded = ConversationStore()
         storeReloaded.openConversation(id: conversation.id)
+
+        let timeout = Date().addingTimeInterval(2.0)
+        while storeReloaded.activeConversation == nil && Date() < timeout {
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         XCTAssertEqual(storeReloaded.summaries.count, 1, "Expected exactly 1 conversation but found \(storeReloaded.summaries.count)")
         XCTAssertEqual(storeReloaded.summaries.first?.messageCount, 2)
