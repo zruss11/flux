@@ -68,11 +68,12 @@ struct ChatView: View {
     @State private var forkBannerDismissTask: Task<Void, Never>?
     @State private var autoScrollTask: Task<Void, Never>?
     @State private var pendingForkContexts: [UUID: ForkContext] = [:]
-    @State private var visibleSegmentLimit = 60
+    @State private var visibleSegmentLimit = 24
+    @State private var isPinnedToLatest = true
 
     private let maxAttachmentBytes = 10 * 1024 * 1024
-    private let initialVisibleSegmentLimit = 60
-    private let segmentLoadStep = 100
+    private let initialVisibleSegmentLimit = 24
+    private let segmentLoadStep = 80
 
     private let shareScreenFileName = "__flux_screenshot.jpg"
 
@@ -129,6 +130,7 @@ struct ChatView: View {
         let totalSegmentCount = conversationStore.activeConversation?.displaySegmentCount ?? 0
         let hiddenSegments = max(totalSegmentCount - displayedSegments.count, 0)
         let isConversationEmpty = conversationStore.activeConversation?.messages.isEmpty ?? true
+        let latestSegmentId = displayedSegments.last?.id
 
         VStack(spacing: 0) {
             // At a Glance cards when chat is empty
@@ -158,6 +160,7 @@ struct ChatView: View {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         if hiddenSegments > 0 {
                             Button {
+                                isPinnedToLatest = false
                                 visibleSegmentLimit += segmentLoadStep
                             } label: {
                                 Text("Load \(min(segmentLoadStep, hiddenSegments)) earlier updates")
@@ -228,6 +231,16 @@ struct ChatView: View {
                                 }
                             }
                             .id(segment.id)
+                            .onAppear {
+                                if segment.id == latestSegmentId {
+                                    isPinnedToLatest = true
+                                }
+                            }
+                            .onDisappear {
+                                if segment.id == latestSegmentId {
+                                    isPinnedToLatest = false
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 12)
@@ -252,6 +265,7 @@ struct ChatView: View {
                 .onChange(of: conversationStore.scrollRevision) { _, _ in
                     // Avoid expensive off-screen ScrollViewReader work while the island is collapsed.
                     guard IslandWindowManager.shared.isExpanded else { return }
+                    guard isPinnedToLatest else { return }
                     guard conversationStore.lastScrollConversationId == conversationStore.activeConversationId,
                           let lastSegment = displayedSegments.last else { return }
 
@@ -751,6 +765,7 @@ struct ChatView: View {
             }
         }
         .onAppear {
+            isPinnedToLatest = true
             selectedModelSpec = conversationStore.activeConversation?.modelSpec
             selectedThinkingLevel = conversationStore.activeConversation?.thinkingLevel
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -780,6 +795,7 @@ struct ChatView: View {
             autoScrollTask?.cancel()
             inputText = ""
             visibleSegmentLimit = initialVisibleSegmentLimit
+            isPinnedToLatest = true
             selectedSkillDirNames.removeAll()
             worktreeEnabled = false
             pendingImageAttachments.removeAll()
