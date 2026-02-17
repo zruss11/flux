@@ -16,7 +16,7 @@ final class AgentBridge: @unchecked Sendable {
 
     var onAssistantMessage: ((String, String) -> Void)?  // conversationId, content
     var onToolRequest: ((String, String, String, [String: Any]) -> Void)?  // conversationId, toolUseId, toolName, input
-    var onStreamChunk: ((String, String) -> Void)?  // conversationId, content
+    var onStreamChunk: (@MainActor (String, String) -> Void)?  // conversationId, content
     var onToolUseStart: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, inputSummary
     var onToolUseComplete: ((String, String, String, String) -> Void)?  // conversationId, toolUseId, toolName, resultPreview
     var onRunStatus: ((String, Bool) -> Void)?  // conversationId, isWorking
@@ -42,6 +42,12 @@ final class AgentBridge: @unchecked Sendable {
     private var activeStreamConversationIds: Set<String> = []
     private var streamIdleWorkItems: [String: DispatchWorkItem] = [:]
     private let streamIdleTimeout: TimeInterval = 1.2
+
+    // Coalesce high-frequency stream tokens off-main to avoid creating one MainActor task per token.
+    private let streamChunkQueue = DispatchQueue(label: "com.flux.agentbridge.stream-chunks")
+    private var pendingStreamChunks: [String: String] = [:]
+    private var streamChunkFlushWorkItems: [String: DispatchWorkItem] = [:]
+    private let streamChunkFlushInterval: TimeInterval = 0.06
 
     private var webSocketTask: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .default)
@@ -447,6 +453,7 @@ final class AgentBridge: @unchecked Sendable {
         switch type {
         case "assistant_message":
             if let content = json["content"] as? String {
+                flushPendingStreamChunk(conversationId: conversationId)
                 Task { @MainActor in
                     self.onAssistantMessage?(conversationId, content)
                 }
@@ -466,12 +473,7 @@ final class AgentBridge: @unchecked Sendable {
 
         case "stream_chunk":
             if let content = json["content"] as? String {
-                Task { @MainActor in
-                    self.onStreamChunk?(conversationId, content)
-                }
-                // Some sidecar paths can stream without a preceding local sendChat call.
-                setRunStatus(for: conversationId, isWorking: true)
-                registerStreamChunk(for: conversationId)
+                enqueueStreamChunk(conversationId: conversationId, content: content)
             }
 
         case "tool_use_start":
@@ -496,6 +498,9 @@ final class AgentBridge: @unchecked Sendable {
 
         case "run_status":
             if let isWorking = json["isWorking"] as? Bool {
+                if !isWorking {
+                    flushPendingStreamChunk(conversationId: conversationId)
+                }
                 Task { @MainActor in
                     self.onRunStatus?(conversationId, isWorking)
                 }
@@ -578,6 +583,61 @@ final class AgentBridge: @unchecked Sendable {
         }
     }
 
+    private func enqueueStreamChunk(conversationId: String, content: String) {
+        streamChunkQueue.async { [weak self] in
+            guard let self else { return }
+
+            self.pendingStreamChunks[conversationId, default: ""].append(content)
+
+            // One scheduled flush per conversation to coalesce token bursts.
+            guard self.streamChunkFlushWorkItems[conversationId] == nil else { return }
+
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                let chunk = self.pendingStreamChunks.removeValue(forKey: conversationId) ?? ""
+                self.streamChunkFlushWorkItems.removeValue(forKey: conversationId)
+                guard !chunk.isEmpty else { return }
+
+                // Mark/refresh stream activity at the same cadence as UI chunk delivery.
+                self.registerStreamChunk(for: conversationId)
+                Task { @MainActor in
+                    self.onStreamChunk?(conversationId, chunk)
+                }
+            }
+
+            self.streamChunkFlushWorkItems[conversationId] = workItem
+            self.streamChunkQueue.asyncAfter(
+                deadline: .now() + self.streamChunkFlushInterval,
+                execute: workItem
+            )
+        }
+    }
+
+    private func flushPendingStreamChunk(conversationId: String) {
+        streamChunkQueue.async { [weak self] in
+            guard let self else { return }
+
+            self.streamChunkFlushWorkItems[conversationId]?.cancel()
+            self.streamChunkFlushWorkItems.removeValue(forKey: conversationId)
+
+            let chunk = self.pendingStreamChunks.removeValue(forKey: conversationId) ?? ""
+            guard !chunk.isEmpty else { return }
+
+            Task { @MainActor in
+                self.onStreamChunk?(conversationId, chunk)
+            }
+        }
+    }
+
+    private func clearPendingStreamChunks() {
+        streamChunkQueue.async { [weak self] in
+            guard let self else { return }
+            self.streamChunkFlushWorkItems.values.forEach { $0.cancel() }
+            self.streamChunkFlushWorkItems.removeAll()
+            self.pendingStreamChunks.removeAll()
+        }
+    }
+
     private func handleDisconnect() {
         clearRunState()
         Task { @MainActor in
@@ -621,6 +681,7 @@ final class AgentBridge: @unchecked Sendable {
     }
 
     private func clearRunState() {
+        clearPendingStreamChunks()
         Task { @MainActor in
             for conversationId in self.activeRunConversationIds {
                 self.onRunStatus?(conversationId, false)

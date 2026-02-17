@@ -494,10 +494,13 @@ final class DictationManager {
 
     private func enhanceWithFoundationModels(_ text: String, appContext: EnhancementAppContext) async -> String? {
         guard FoundationModelsClient.shared.isAvailable else { return nil }
-        return try? await FoundationModelsClient.shared.completeText(
+        guard let response = try? await FoundationModelsClient.shared.completeText(
             system: enhancementSystemPrompt(appContext: appContext),
             user: text
-        )
+        ) else {
+            return nil
+        }
+        return sanitizeEnhancementOutput(response)
     }
 
     // MARK: - Claude Enhancement
@@ -547,7 +550,7 @@ final class DictationManager {
                 .text?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard let textResponse, !textResponse.isEmpty else { return nil }
-            return textResponse
+            return sanitizeEnhancementOutput(textResponse)
         } catch {
             Log.voice.error("Claude dictation enhancement error: \(error.localizedDescription, privacy: .public)")
             return nil
@@ -574,12 +577,108 @@ final class DictationManager {
         )
     }
 
+    private func sanitizeEnhancementOutput(_ raw: String) -> String? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+
+        // Strip markdown fence wrappers if the model encloses output in a code block.
+        if text.hasPrefix("```") && text.hasSuffix("```") {
+            var lines = text.components(separatedBy: .newlines)
+            if !lines.isEmpty { lines.removeFirst() }
+            if !lines.isEmpty { lines.removeLast() }
+            text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Remove common preambles like: "Here is the rewritten text:".
+        let lower = text.lowercased()
+        let prefacePrefixes = [
+            "here is the rewritten text:",
+            "here's the rewritten text:",
+            "here’s the rewritten text:",
+            "rewritten text:",
+            "final rewritten text:",
+            "final text:",
+            "cleaned text:",
+            "edited text:"
+        ]
+        if let prefix = prefacePrefixes.first(where: { lower.hasPrefix($0) }) {
+            text = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Remove label-only first line variants without colon.
+        var lines = text.components(separatedBy: .newlines)
+        if let first = lines.first {
+            let normalizedFirst = first
+                .lowercased()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: ":", with: "")
+
+            let labelOnlyFirstLines = Set([
+                "here is the rewritten text",
+                "here's the rewritten text",
+                "here’s the rewritten text",
+                "rewritten text",
+                "final rewritten text",
+                "final text",
+                "cleaned text",
+                "edited text"
+            ])
+
+            if labelOnlyFirstLines.contains(normalizedFirst) {
+                lines.removeFirst()
+                text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        // Unwrap a single outer quote pair.
+        if (text.hasPrefix("\"") && text.hasSuffix("\"")) ||
+            (text.hasPrefix("“") && text.hasSuffix("”")) ||
+            (text.hasPrefix("'") && text.hasSuffix("'")) {
+            text = String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard !text.isEmpty else { return nil }
+
+        // Some model providers occasionally return safety-policy refusals instead
+        // of a rewrite. If that happens, ignore the enhancement and fall back to
+        // the cleaned transcript.
+        if isRefusalLikeEnhancementOutput(text) {
+            Log.voice.warning("Dictation enhancement returned refusal-like output; using cleaned transcript instead")
+            return nil
+        }
+
+        return text
+    }
+
+    private func isRefusalLikeEnhancementOutput(_ text: String) -> Bool {
+        let lower = text.lowercased()
+
+        // High-signal refusal snippets we never want inserted into user text.
+        let refusalPhrases = [
+            "i apologize, but i cannot comply with your request",
+            "i am sorry, but i cannot comply with your request",
+            "as an ai language model",
+            "as an ai assistant",
+            "i cannot generate content that is offensive, harmful, or inappropriate",
+            "i cannot assist with that request",
+            "i can't assist with that request",
+            "i cannot help with that request",
+            "i'm unable to comply with your request",
+            "ethical guidelines",
+            "community rules"
+        ]
+
+        return refusalPhrases.contains { lower.contains($0) }
+    }
+
     private func enhancementSystemPrompt(appContext: EnhancementAppContext) -> String {
         var prompt = """
         Clean up dictated text for grammar and punctuation.
         Preserve original meaning.
         Keep wording concise and natural for the target app context.
         Return only the final rewritten text.
+        Do not include any preamble, labels, quotes, markdown, or code fences.
+        Never say phrases like "Here is the rewritten text:".
         """
 
         let appInstruction = appContext.appInstruction?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

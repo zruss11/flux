@@ -6,6 +6,45 @@ DERIVED_DATA="${ROOT}/.context/DerivedData"
 SIDECAR_DIR="${ROOT}/sidecar"
 DEV_APP_BUNDLE="${FLUX_DEV_APP_BUNDLE:-$HOME/Applications/Flux Dev.app}"
 
+load_env_file() {
+  local file="$1"
+  [[ -f "${file}" ]] || return 0
+
+  while IFS= read -r raw || [[ -n "${raw}" ]]; do
+    local line="${raw%$'\r'}"
+
+    # Trim leading whitespace for comment/empty checks.
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "${line}" || "${line:0:1}" == "#" ]] && continue
+
+    # Support optional "export KEY=VALUE" syntax.
+    if [[ "${line}" == export\ * ]]; then
+      line="${line#export }"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
+
+    if [[ "${line}" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      local key="${BASH_REMATCH[1]}"
+      local value="${BASH_REMATCH[2]}"
+
+      # Strip matching surrounding quotes if present.
+      if [[ "${value}" =~ ^\"(.*)\"$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      elif [[ "${value}" =~ ^\'(.*)\'$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      fi
+
+      export "${key}=${value}"
+    fi
+  done < "${file}"
+
+  echo "[dev] Loaded env file: ${file}"
+}
+
+# Load project env so sidecar tools (e.g., Kroger skill) can access credentials.
+load_env_file "${ROOT}/.env"
+load_env_file "${ROOT}/.env.local"
+
 mkdir -p "${DERIVED_DATA}"
 
 sidecar_pid=""
