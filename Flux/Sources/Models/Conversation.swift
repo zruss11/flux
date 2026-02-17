@@ -167,8 +167,12 @@ final class ConversationStore {
     var folders: [ChatFolder] = []
     var summaries: [ConversationSummary] = []
     var workspacePath: String? {
-        didSet { UserDefaults.standard.set(workspacePath, forKey: "workspacePath") }
+        didSet {
+            UserDefaults.standard.set(workspacePath, forKey: "workspacePath")
+            recordRecentWorkspacePath(workspacePath)
+        }
     }
+    private(set) var recentWorkspacePaths: [String] = []
     var activeWorktreeBranch: String?
     private(set) var worktreeTaskTitlesByBranch: [String: String] = [:]
     private(set) var worktreeConversationIdsByBranch: [String: String] = [:]
@@ -199,6 +203,7 @@ final class ConversationStore {
 
     private static let worktreeTaskTitlesKey = "worktreeTaskTitlesByBranch"
     private static let worktreeConversationIdsKey = "worktreeConversationIdsByBranch"
+    private static let recentWorkspacePathsKey = "recentWorkspacePaths"
 
     var activeConversation: Conversation? {
         conversations.first { $0.id == activeConversationId }
@@ -426,12 +431,34 @@ final class ConversationStore {
     // MARK: - Lifecycle
 
     init() {
+        recentWorkspacePaths = UserDefaults.standard.stringArray(forKey: Self.recentWorkspacePathsKey) ?? []
         workspacePath = UserDefaults.standard.string(forKey: "workspacePath")
         loadIndex()
         worktreeTaskTitlesByBranch = UserDefaults.standard.dictionary(forKey: Self.worktreeTaskTitlesKey) as? [String: String] ?? [:]
         worktreeConversationIdsByBranch = UserDefaults.standard.dictionary(forKey: Self.worktreeConversationIdsKey) as? [String: String] ?? [:]
         rehydrateWorktreeTaskTitlesFromHistoryIfNeeded()
         rehydrateWorktreeConversationMappingsFromHistoryIfNeeded()
+    }
+
+    private func recordRecentWorkspacePath(_ path: String?) {
+        guard let path else { return }
+
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let normalized = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+
+        var updated = recentWorkspacePaths.filter { $0 != normalized }
+        updated.insert(normalized, at: 0)
+
+        if updated.count > 5 {
+            updated = Array(updated.prefix(5))
+        }
+
+        guard updated != recentWorkspacePaths else { return }
+
+        recentWorkspacePaths = updated
+        UserDefaults.standard.set(updated, forKey: Self.recentWorkspacePathsKey)
     }
 
     // MARK: - Conversation CRUD

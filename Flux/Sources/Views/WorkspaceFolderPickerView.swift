@@ -36,6 +36,12 @@ struct WorkspaceFolderPickerView: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
 
+            if !recentWorkspaces.isEmpty {
+                recentWorkspacesRow
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
+
             Divider()
                 .overlay(Color.white.opacity(0.08))
 
@@ -169,6 +175,59 @@ struct WorkspaceFolderPickerView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var recentWorkspaces: [URL] {
+        conversationStore.recentWorkspacePaths
+            .prefix(5)
+            .compactMap { path -> URL? in
+                let expanded = NSString(string: path).expandingTildeInPath
+                let url = URL(fileURLWithPath: expanded)
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                    return nil
+                }
+                return url
+            }
+    }
+
+    private var recentWorkspacesRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                Text("Recent")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.42))
+                    .padding(.trailing, 2)
+
+                ForEach(recentWorkspaces, id: \.path) { url in
+                    Button {
+                        navigateTo(url)
+                        selectedURL = url
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
+                                .font(.system(size: 9))
+                            Text(url.lastPathComponent)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .lineLimit(1)
+                            Text(shortParentPath(for: url))
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(.white.opacity(0.35))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(.white.opacity(0.65))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule()
+                                .fill(.white.opacity(0.06))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(url.path)
                 }
             }
         }
@@ -377,5 +436,20 @@ struct WorkspaceFolderPickerView: View {
             selectedURL = nil
             errorMessage = nil  // Clear any previous errors
         }
+    }
+
+    private func shortParentPath(for url: URL) -> String {
+        let parent = url.deletingLastPathComponent().path
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+        if parent == home {
+            return "~/"
+        }
+
+        if parent.hasPrefix(home + "/") {
+            return "~" + String(parent.dropFirst(home.count)) + "/"
+        }
+
+        return parent + "/"
     }
 }
