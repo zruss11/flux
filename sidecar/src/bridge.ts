@@ -545,10 +545,9 @@ function parsePositiveIntEnv(value: string | undefined, fallback: number): numbe
 }
 
 function parseSettingSources(value: string | undefined): Array<'user' | 'project' | 'local'> {
-  const raw = value?.trim();
-  if (!raw) return ['project'];
+  if (!value || !/\S/.test(value)) return ['project'];
   const valid = new Set(['user', 'project', 'local']);
-  const parsed = raw
+  const parsed = value
     .split(',')
     .map((item) => item.trim())
     .filter((item): item is 'user' | 'project' | 'local' => valid.has(item));
@@ -567,10 +566,10 @@ function parseAgentModelSpec(spec: string): { provider: string; model: string } 
     if (provider && model) return { provider, model };
   }
 
-  const fallbackProvider = (process.env.FLUX_AGENT_PROVIDER || 'anthropic').trim() || 'anthropic';
-  return { provider: fallbackProvider, model: trimmed };
+  return { provider: FALLBACK_AGENT_PROVIDER, model: trimmed };
 }
 
+const FALLBACK_AGENT_PROVIDER = (process.env.FLUX_AGENT_PROVIDER || 'anthropic').trim() || 'anthropic';
 const AGENT_MODEL_SPEC = process.env.FLUX_AGENT_MODEL || 'anthropic:claude-sonnet-4-20250514';
 const { provider: AGENT_PROVIDER, model: AGENT_MODEL } = parseAgentModelSpec(AGENT_MODEL_SPEC);
 const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
@@ -580,6 +579,8 @@ const AGENT_THINKING_LEVEL: ThinkingLevel = VALID_THINKING_LEVELS.has(rawThinkin
   : 'low';
 const AGENT_SETTING_SOURCES = parseSettingSources(process.env.FLUX_AGENT_SETTING_SOURCES);
 const AGENT_IDLE_TIMEOUT_MS = parsePositiveIntEnv(process.env.FLUX_AGENT_IDLE_TIMEOUT_MS, 900_000);
+const FLUX_MAX_IMAGES_PER_MESSAGE = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGES_PER_MESSAGE, 4);
+const FLUX_MAX_IMAGE_BASE64_CHARS = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGE_BASE64_CHARS, 8 * 1024 * 1024);
 const AGENT_WARMUP_ENABLED = process.env.FLUX_AGENT_WARMUP_ENABLED !== '0';
 const AGENT_WARMUP_MAX_ATTEMPTS = parsePositiveIntEnv(process.env.FLUX_AGENT_WARMUP_MAX_ATTEMPTS, 2);
 const TOOL_TIMEOUT_MS = 60_000;
@@ -738,9 +739,8 @@ let agentWarmupComplete = false;
 let lastActiveApp: { appName: string; bundleId: string; pid: number; appInstruction?: string } | null = null;
 
 function sanitizeAppInstruction(instruction: string | undefined): string | undefined {
-  if (!instruction) return undefined;
+  if (!instruction || !/\S/.test(instruction)) return undefined;
   const trimmed = instruction.trim();
-  if (trimmed.length === 0) return undefined;
   const maxLen = 2_000;
   const clipped = trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
   return clipped.replace(/\r\n|\r/g, '\n');
@@ -774,13 +774,13 @@ export function collectCommandLikeInputValues(input: Record<string, unknown>): s
   const values: string[] = [];
   for (const key of COMMAND_LIKE_KEYS) {
     const value = input[key];
-    if (typeof value === 'string' && value.trim().length > 0) {
-      values.push(value);
+    if (typeof value === 'string') {
+      if (/\S/.test(value)) values.push(value);
       continue;
     }
     if (Array.isArray(value)) {
       const combined = value.filter((item): item is string => typeof item === 'string').join(' ');
-      if (combined.trim().length > 0) values.push(combined);
+      if (/\S/.test(combined)) values.push(combined);
     }
   }
   return values;
@@ -1726,25 +1726,27 @@ async function handleChat(ws: WebSocket, message: ChatMessage): Promise<void> {
 function sanitizeChatImages(images: ChatImagePayload[] | undefined): ChatImagePayload[] {
   if (!Array.isArray(images)) return [];
 
-  const maxImages = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGES_PER_MESSAGE, 4);
-  // Base64 overhead is ~33%, so 8MB base64 is ~6MB binary.
-  const maxBase64Chars = parsePositiveIntEnv(process.env.FLUX_MAX_IMAGE_BASE64_CHARS, 8 * 1024 * 1024);
+  const result: ChatImagePayload[] = [];
+  const limit = Math.min(images.length, FLUX_MAX_IMAGES_PER_MESSAGE);
 
-  return images
-    .slice(0, Math.max(0, maxImages))
-    .filter((image) => typeof image?.data === 'string' && image.data.length > 0)
-    .filter((image) => image.data.length <= maxBase64Chars)
-    .map((image) => {
-      const mediaType = image.mediaType?.startsWith('image/') ? image.mediaType : 'image/png';
-      const fileName = typeof image.fileName === 'string' && image.fileName.trim().length > 0
-        ? image.fileName
-        : 'image';
-      return {
-        fileName,
-        mediaType,
-        data: image.data,
-      };
+  for (let i = 0; i < limit; i++) {
+    const image = images[i];
+    if (typeof image?.data !== 'string' || image.data.length === 0) continue;
+    if (image.data.length > FLUX_MAX_IMAGE_BASE64_CHARS) continue;
+
+    const mediaType = image.mediaType?.startsWith('image/') ? image.mediaType : 'image/png';
+    const fileName = typeof image.fileName === 'string' && /\S/.test(image.fileName)
+      ? image.fileName
+      : 'image';
+
+    result.push({
+      fileName,
+      mediaType,
+      data: image.data,
     });
+  }
+
+  return result;
 }
 
 function userMessageContent(message: QueuedUserMessage): string | SDKUserContentBlock[] {
