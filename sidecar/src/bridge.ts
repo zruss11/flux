@@ -794,19 +794,26 @@ export function requiresApproval(toolName: string, input: Record<string, unknown
     return true;
   }
 
-  const isCommandExecutionTool =
-    lowerToolName.includes('shell') ||
-    lowerToolName.includes('bash') ||
-    lowerToolName.includes('terminal') ||
-    lowerToolName.includes('applescript') ||
-    lowerToolName.includes('command');
+  // Iterate over command-like keys directly to check for dangerous patterns
+  // without allocating an intermediate array of all candidates.
+  for (const key of COMMAND_LIKE_KEYS) {
+    const value = input[key];
+    if (typeof value === 'string') {
+      if (APPROVAL_REQUIRED_COMMAND_PATTERN.test(value)) {
+        return true;
+      }
+      continue;
+    }
 
-  const commandCandidates = collectCommandLikeInputValues(input);
-  if (!isCommandExecutionTool && commandCandidates.length === 0) {
-    return false;
+    if (Array.isArray(value)) {
+      const combined = value.filter((item): item is string => typeof item === 'string').join(' ');
+      if (/\S/.test(combined) && APPROVAL_REQUIRED_COMMAND_PATTERN.test(combined)) {
+        return true;
+      }
+    }
   }
 
-  return commandCandidates.some((command) => APPROVAL_REQUIRED_COMMAND_PATTERN.test(command));
+  return false;
 }
 
 interface ConversationSession {
