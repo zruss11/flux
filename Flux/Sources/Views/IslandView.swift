@@ -9,6 +9,9 @@ enum IslandContentType: Equatable {
     case history
     case skills
     case dictationHistory
+    case meetings
+    case meetingDetail(UUID)
+    case meetingFolderDetail(MeetingFolder)
     case folderDetail(ChatFolder)
     case folderPicker
     case imagePicker
@@ -17,8 +20,10 @@ enum IslandContentType: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
         case (.chat, .chat), (.settings, .settings), (.history, .history), (.skills, .skills), (.folderPicker, .folderPicker), (.imagePicker, .imagePicker): return true
-        case (.dictationHistory, .dictationHistory): return true
+        case (.dictationHistory, .dictationHistory), (.meetings, .meetings): return true
         case (.tour, .tour): return true
+        case (.meetingDetail(let a), .meetingDetail(let b)): return a == b
+        case (.meetingFolderDetail(let a), .meetingFolderDetail(let b)): return a.id == b.id
         case (.folderDetail(let a), .folderDetail(let b)): return a.id == b.id
         default: return false
         }
@@ -42,7 +47,9 @@ struct IslandView: View {
     @State private var userHeightOverride: CGFloat? = nil
     @State private var dragOffset: CGFloat = 0
     @State private var isDragHandleHovering = false
-    
+    @State private var meetingStore = MeetingStore.shared
+    @State private var meetingCaptureManager = MeetingCaptureManager.shared
+
     /// Debug mode: force show live transcript dropdown with mock text
     @State private var debugShowLiveTranscript = false
     @State private var debugMockTranscript = "This is a sample live transcript that grows as you speak more text into the microphone during dictation mode."
@@ -185,10 +192,16 @@ struct IslandView: View {
 
     /// The auto-computed height before any user drag override.
     private var autoExpandedHeight: CGFloat {
-        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .imagePicker || contentType == .dictationHistory || contentType == .tour {
+        if contentType == .settings || contentType == .history || contentType == .skills || contentType == .folderPicker || contentType == .imagePicker || contentType == .dictationHistory || contentType == .meetings || contentType == .tour {
             return maxExpandedHeight
         }
         if case .folderDetail = contentType {
+            return maxExpandedHeight
+        }
+        if case .meetingDetail = contentType {
+            return maxExpandedHeight
+        }
+        if case .meetingFolderDetail = contentType {
             return maxExpandedHeight
         }
         // No messages yet — compact initial state with just the input row.
@@ -610,6 +623,10 @@ struct IslandView: View {
         case .history: return "History"
         case .skills: return "Skills"
         case .dictationHistory: return "Dictation"
+        case .meetings: return "Meetings"
+        case .meetingDetail(let meetingId):
+            return meetingStore.summaries.first(where: { $0.id == meetingId })?.title ?? "Meeting"
+        case .meetingFolderDetail(let folder): return folder.name
         case .folderDetail(let folder): return folder.name
         case .folderPicker: return "Workspace"
         case .imagePicker: return "Add Images"
@@ -624,6 +641,7 @@ struct IslandView: View {
     private var backDestination: IslandContentType {
         switch contentType {
         case .folderDetail: return .history
+        case .meetingDetail, .meetingFolderDetail: return .meetings
         default: return .chat
         }
     }
@@ -677,6 +695,20 @@ struct IslandView: View {
                     }
                 } label: {
                     Image(systemName: "waveform")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(.white.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+
+                // Meetings button
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        contentType = .meetings
+                    }
+                } label: {
+                    Image(systemName: "person.2.wave.2")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 28, height: 28)
@@ -808,6 +840,33 @@ struct IslandView: View {
                             SkillsMarketplaceView()
                         case .dictationHistory:
                             DictationHistoryView(historyStore: DictationManager.shared.historyStore)
+                        case .meetings:
+                            MeetingsView(
+                                meetingStore: meetingStore,
+                                captureManager: meetingCaptureManager,
+                                onOpenMeeting: { meetingId in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .meetingDetail(meetingId)
+                                    }
+                                },
+                                onOpenFolder: { folder in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .meetingFolderDetail(folder)
+                                    }
+                                }
+                            )
+                        case .meetingDetail(let meetingId):
+                            MeetingDetailView(meetingStore: meetingStore, meetingId: meetingId)
+                        case .meetingFolderDetail(let folder):
+                            MeetingFolderDetailView(
+                                meetingStore: meetingStore,
+                                folder: folder,
+                                onOpenMeeting: { meetingId in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        contentType = .meetingDetail(meetingId)
+                                    }
+                                }
+                            )
                         case .folderDetail(let folder):
                             FolderDetailView(
                                 conversationStore: conversationStore,

@@ -56,6 +56,7 @@ final class VoiceInput {
     var isRecording = false
     var transcript = ""
     var audioLevelMeter: AudioLevelMeter?
+    private(set) var lastCapturedPCMData: Data?
 
     private var audioEngine: AVAudioEngine?
     private var onComplete: ((String) -> Void)?
@@ -164,6 +165,7 @@ final class VoiceInput {
         self.currentSpeechProvider = provider
         self.onComplete = onComplete
         self.onFailure = onFailure
+        self.lastCapturedPCMData = nil
 
         switch mode {
         case .live:
@@ -533,6 +535,7 @@ final class VoiceInput {
         liveSessionAny = nil
 
         let pcmData = pcmAccumulator.takeAll()
+        lastCapturedPCMData = pcmData
         guard !pcmData.isEmpty else {
             failureCallback?("No audio captured.")
             return
@@ -592,6 +595,7 @@ final class VoiceInput {
         liveSessionAny = nil
 
         let pcmData = pcmAccumulator.takeAll()
+        lastCapturedPCMData = pcmData
         guard !pcmData.isEmpty else {
             failureCallback?("No audio captured.")
             return
@@ -824,6 +828,7 @@ final class VoiceInput {
         transcript = ""
         recordingMode = .live
         pcmAccumulator.reset()
+        lastCapturedPCMData = nil
         IslandWindowManager.shared.suppressDeactivationCollapse = false
         onComplete = nil
         onFailure = nil
