@@ -13,3 +13,7 @@
 ## 2026-02-15 - [Regex Combination Optimization]
 **Learning:** Iterating through an array of `RegExp` objects for matching (O(N*M)) is slower than combining them into a single `RegExp` with alternations (O(N)), especially for frequently executed checks like security validations.
 **Action:** Combine multiple regex patterns into a single compiled regex using `|` alternations where possible.
+
+## 2026-02-16 - [Node.js Environment Access & Array Chains]
+**Learning:** Accessing `process.env` inside high-frequency functions (like `sanitizeChatImages`) adds overhead. Chained array methods (`.slice().filter().map()`) create unnecessary intermediate arrays.
+**Action:** Extract environment variables to top-level constants. Replace array method chains with single-pass loops where performance matters.
