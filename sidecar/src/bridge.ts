@@ -770,6 +770,10 @@ const APPROVAL_REQUIRED_COMMAND_PATTERN = new RegExp(
 
 const COMMAND_LIKE_KEYS = ['command', 'cmd', 'script', 'shell', 'bash', 'args'];
 
+/**
+ * Collects values from command-like keys for testing or legacy purposes.
+ * @deprecated Use requiresApproval's internal logic for performance.
+ */
 export function collectCommandLikeInputValues(input: Record<string, unknown>): string[] {
   const values: string[] = [];
   for (const key of COMMAND_LIKE_KEYS) {
@@ -794,19 +798,25 @@ export function requiresApproval(toolName: string, input: Record<string, unknown
     return true;
   }
 
-  const isCommandExecutionTool =
-    lowerToolName.includes('shell') ||
-    lowerToolName.includes('bash') ||
-    lowerToolName.includes('terminal') ||
-    lowerToolName.includes('applescript') ||
-    lowerToolName.includes('command');
-
-  const commandCandidates = collectCommandLikeInputValues(input);
-  if (!isCommandExecutionTool && commandCandidates.length === 0) {
-    return false;
+  // Optimize by checking keys one by one and failing fast if a dangerous command matches.
+  // This avoids allocating an array of all collected values.
+  for (const key of COMMAND_LIKE_KEYS) {
+    const value = input[key];
+    if (typeof value === 'string') {
+      if (/\S/.test(value) && APPROVAL_REQUIRED_COMMAND_PATTERN.test(value)) {
+        return true;
+      }
+      continue;
+    }
+    if (Array.isArray(value)) {
+      const combined = value.filter((item): item is string => typeof item === 'string').join(' ');
+      if (/\S/.test(combined) && APPROVAL_REQUIRED_COMMAND_PATTERN.test(combined)) {
+        return true;
+      }
+    }
   }
 
-  return commandCandidates.some((command) => APPROVAL_REQUIRED_COMMAND_PATTERN.test(command));
+  return false;
 }
 
 interface ConversationSession {
