@@ -17,3 +17,7 @@
 ## 2026-02-16 - [Node.js Environment Access & Array Chains]
 **Learning:** Accessing `process.env` inside high-frequency functions (like `sanitizeChatImages`) adds overhead. Chained array methods (`.slice().filter().map()`) create unnecessary intermediate arrays.
 **Action:** Extract environment variables to top-level constants. Replace array method chains with single-pass loops where performance matters.
+
+## 2026-02-17 - [Fail-Fast Iteration vs Collection]
+**Learning:** Collecting values into an intermediate array (e.g., `collectCommandLikeInputValues`) before checking a condition (`.some()`) adds unnecessary allocation overhead and delays the check.
+**Action:** Use a single loop to check conditions on-the-fly and return early (fail-fast) to avoid allocations and reduce average-case runtime.
