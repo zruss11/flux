@@ -2447,17 +2447,43 @@ function toolResultPreview(toolName: string, result: string): string {
   return result.substring(0, 200);
 }
 
-function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
-  const trimmed = raw.trim();
-  const dataUrlMatch = trimmed.match(/^data:(image\/[^;]+);base64,(.+)$/);
-  if (dataUrlMatch) {
-    return { mediaType: dataUrlMatch[1], data: dataUrlMatch[2] };
+export function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
+  const len = raw.length;
+  if (len === 0) return null;
+
+  // Manual whitespace trimming to avoid allocating new strings for large payloads.
+  let start = 0;
+  while (start < len && raw.charCodeAt(start) <= 32) start++;
+
+  if (start === len) return null; // All whitespace
+
+  let end = len;
+  while (end > start && raw.charCodeAt(end - 1) <= 32) end--;
+
+  // Check for data URL: "data:image/xxx;base64,..."
+  // 'data:image/' is 11 chars
+  if (raw.startsWith('data:image/', start)) {
+    const semicolon = raw.indexOf(';', start + 11);
+    // Ensure we found a semicolon and it's within a reasonable mime type length (e.g. 50 chars)
+    if (semicolon > -1 && semicolon < start + 60) {
+      if (raw.startsWith(';base64,', semicolon)) {
+        const mediaType = raw.substring(start + 5, semicolon);
+        const data = raw.substring(semicolon + 8, end);
+        return { mediaType, data };
+      }
+    }
   }
 
-  if (trimmed.startsWith('iVBOR')) return { mediaType: 'image/png', data: trimmed };
-  if (trimmed.startsWith('/9j/')) return { mediaType: 'image/jpeg', data: trimmed };
-  if (trimmed.startsWith('R0lGOD')) return { mediaType: 'image/gif', data: trimmed };
-  if (trimmed.startsWith('UklGR')) return { mediaType: 'image/webp', data: trimmed };
+  // Check raw base64 signatures
+  // We need at least a few chars to verify signature (longest prefix is 6 chars for R0lGOD)
+  if (end - start < 4) return null;
+
+  // Use startsWith with position argument to avoid substring allocation
+  if (raw.startsWith('iVBOR', start)) return { mediaType: 'image/png', data: raw.substring(start, end) };
+  if (raw.startsWith('/9j/', start)) return { mediaType: 'image/jpeg', data: raw.substring(start, end) };
+  if (raw.startsWith('R0lGOD', start)) return { mediaType: 'image/gif', data: raw.substring(start, end) };
+  if (raw.startsWith('UklGR', start)) return { mediaType: 'image/webp', data: raw.substring(start, end) };
+
   return null;
 }
 
