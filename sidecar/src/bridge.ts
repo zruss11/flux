@@ -2436,28 +2436,73 @@ function getTelegramConversationId(chatId: string, threadId?: number): string {
   return conversationId;
 }
 
-function toolResultPreview(toolName: string, result: string): string {
+export function toolResultPreview(toolName: string, result: string): string {
   if (toolName === 'capture_screen') {
     const parsed = parseImageToolResult(result);
     if (parsed) {
-      const decodedBytes = Buffer.from(parsed.data, 'base64').length;
+      // Calculate approximate decoded length without allocating a buffer.
+      // Base64 encodes 3 bytes into 4 chars. Padding '=' at the end indicates empty bytes.
+      let padding = 0;
+      const len = parsed.data.length;
+      if (len > 0) {
+        if (parsed.data.endsWith('==')) padding = 2;
+        else if (parsed.data.endsWith('=')) padding = 1;
+      }
+      const decodedBytes = Math.floor((len * 3) / 4) - padding;
       return `[image ${parsed.mediaType}, decoded bytes=${decodedBytes}]`;
     }
   }
   return result.substring(0, 200);
 }
 
-function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
-  const trimmed = raw.trim();
-  const dataUrlMatch = trimmed.match(/^data:(image\/[^;]+);base64,(.+)$/);
-  if (dataUrlMatch) {
-    return { mediaType: dataUrlMatch[1], data: dataUrlMatch[2] };
+export function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
+  // Avoid trim() allocation by manual index scanning.
+  let start = 0;
+  const len = raw.length;
+  while (start < len && raw.charCodeAt(start) <= 32) start++;
+  if (start >= len) return null;
+
+  // Check for data:image/...;base64, prefix
+  if (raw.startsWith('data:', start)) {
+    // Expected format: data:image/xxx;base64,DATA
+    // Minimal length check: "data:image/x;base64," is 22 chars.
+    if (len - start < 22) return null;
+
+    const commaIndex = raw.indexOf(',', start + 5);
+    if (commaIndex === -1) return null;
+
+    const prefixEnd = commaIndex;
+    const base64Marker = ';base64';
+    const markerIndex = raw.lastIndexOf(base64Marker, prefixEnd);
+
+    // Validate marker position: must be at the end of the prefix
+    if (markerIndex === -1 || markerIndex + base64Marker.length !== prefixEnd) return null;
+
+    const mediaTypeStart = start + 5; // skip "data:"
+    const mediaType = raw.substring(mediaTypeStart, markerIndex);
+
+    // Quick validation of media type
+    if (!mediaType.startsWith('image/')) return null;
+
+    // Manually scan for end of string to emulate trimEnd() without allocation
+    let end = len;
+    while (end > commaIndex + 1 && raw.charCodeAt(end - 1) <= 32) end--;
+
+    // We still have to allocate the data substring, but we avoided regex and trim() on the full string.
+    const data = raw.substring(commaIndex + 1, end);
+    return { mediaType, data };
   }
 
-  if (trimmed.startsWith('iVBOR')) return { mediaType: 'image/png', data: trimmed };
-  if (trimmed.startsWith('/9j/')) return { mediaType: 'image/jpeg', data: trimmed };
-  if (trimmed.startsWith('R0lGOD')) return { mediaType: 'image/gif', data: trimmed };
-  if (trimmed.startsWith('UklGR')) return { mediaType: 'image/webp', data: trimmed };
+  // Check for raw base64 prefixes
+  // iVBOR = PNG, /9j/ = JPEG, R0lGOD = GIF, UklGR = WebP
+  let end = len;
+  while (end > start && raw.charCodeAt(end - 1) <= 32) end--;
+
+  if (raw.startsWith('iVBOR', start)) return { mediaType: 'image/png', data: raw.substring(start, end) };
+  if (raw.startsWith('/9j/', start)) return { mediaType: 'image/jpeg', data: raw.substring(start, end) };
+  if (raw.startsWith('R0lGOD', start)) return { mediaType: 'image/gif', data: raw.substring(start, end) };
+  if (raw.startsWith('UklGR', start)) return { mediaType: 'image/webp', data: raw.substring(start, end) };
+
   return null;
 }
 
