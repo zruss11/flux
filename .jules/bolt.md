@@ -17,3 +17,7 @@
 ## 2026-02-16 - [Node.js Environment Access & Array Chains]
 **Learning:** Accessing `process.env` inside high-frequency functions (like `sanitizeChatImages`) adds overhead. Chained array methods (`.slice().filter().map()`) create unnecessary intermediate arrays.
 **Action:** Extract environment variables to top-level constants. Replace array method chains with single-pass loops where performance matters.
+
+## 2026-02-18 - [Base64 Length Calculation]
+**Learning:** Decoding a base64 string into a Buffer just to check its length (`Buffer.from(str, 'base64').length`) causes a large memory allocation and subsequent GC, which is expensive for high-frequency operations like logging.
+**Action:** Use the mathematical formula `(str.length * 3) / 4 - padding` to calculate the decoded byte length without allocation.
