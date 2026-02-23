@@ -17,3 +17,6 @@
 ## 2026-02-16 - [Node.js Environment Access & Array Chains]
 **Learning:** Accessing `process.env` inside high-frequency functions (like `sanitizeChatImages`) adds overhead. Chained array methods (`.slice().filter().map()`) create unnecessary intermediate arrays.
 **Action:** Extract environment variables to top-level constants. Replace array method chains with single-pass loops where performance matters.
+## 2026-02-23 - Avoid Buffer.from() for Base64 Length
+**Learning:** In Node.js, `Buffer.from(str, 'base64')` allocates a new Buffer with the decoded data. For purely logging or previewing the size of a base64 string (e.g., screenshots), this is extremely wasteful (allocates ~0.75x string size).
+**Action:** Use mathematical calculation `(base64.length * 3) / 4 - padding` to estimate decoded size without allocation. Be aware this may slightly overestimate if the string contains whitespace, but it is acceptable for logging purposes.
