@@ -2436,18 +2436,25 @@ function getTelegramConversationId(chatId: string, threadId?: number): string {
   return conversationId;
 }
 
-function toolResultPreview(toolName: string, result: string): string {
+export function toolResultPreview(toolName: string, result: string): string {
   if (toolName === 'capture_screen') {
     const parsed = parseImageToolResult(result);
     if (parsed) {
-      const decodedBytes = Buffer.from(parsed.data, 'base64').length;
+      // Optimized: Calculate decoded size without allocating a Buffer.
+      // Note: This may slightly overestimate size if the base64 string contains whitespace/newlines,
+      // but avoids the expensive Buffer allocation for large images just for logging.
+      const base64 = parsed.data;
+      let padding = 0;
+      if (base64.endsWith('==')) padding = 2;
+      else if (base64.endsWith('=')) padding = 1;
+      const decodedBytes = Math.floor((base64.length * 3) / 4) - padding;
       return `[image ${parsed.mediaType}, decoded bytes=${decodedBytes}]`;
     }
   }
   return result.substring(0, 200);
 }
 
-function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
+export function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
   const trimmed = raw.trim();
   const dataUrlMatch = trimmed.match(/^data:(image\/[^;]+);base64,(.+)$/);
   if (dataUrlMatch) {
