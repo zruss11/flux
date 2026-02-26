@@ -2436,18 +2436,23 @@ function getTelegramConversationId(chatId: string, threadId?: number): string {
   return conversationId;
 }
 
-function toolResultPreview(toolName: string, result: string): string {
+export function toolResultPreview(toolName: string, result: string): string {
   if (toolName === 'capture_screen') {
     const parsed = parseImageToolResult(result);
     if (parsed) {
-      const decodedBytes = Buffer.from(parsed.data, 'base64').length;
+      // Optimization: Calculate byte length mathematically instead of allocating a Buffer.
+      // (length * 3) / 4 - padding
+      let padding = 0;
+      if (parsed.data.endsWith('==')) padding = 2;
+      else if (parsed.data.endsWith('=')) padding = 1;
+      const decodedBytes = (parsed.data.length * 3) / 4 - padding;
       return `[image ${parsed.mediaType}, decoded bytes=${decodedBytes}]`;
     }
   }
   return result.substring(0, 200);
 }
 
-function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
+export function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
   const trimmed = raw.trim();
   const dataUrlMatch = trimmed.match(/^data:(image\/[^;]+);base64,(.+)$/);
   if (dataUrlMatch) {
