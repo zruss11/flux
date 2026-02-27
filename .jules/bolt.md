@@ -17,3 +17,6 @@
 ## 2026-02-16 - [Node.js Environment Access & Array Chains]
 **Learning:** Accessing `process.env` inside high-frequency functions (like `sanitizeChatImages`) adds overhead. Chained array methods (`.slice().filter().map()`) create unnecessary intermediate arrays.
 **Action:** Extract environment variables to top-level constants. Replace array method chains with single-pass loops where performance matters.
+## 2026-02-27 - [Image Parsing Optimization]
+**Learning:** In the Node.js sidecar, when parsing large strings (e.g., base64 images), avoid `trim()` and full-string regex captures (`match`) as they cause expensive allocations. Use manual index-based scanning (`charCodeAt`, `indexOf`, `startsWith`) instead. When needing the byte length of a base64 string for logging or previews, calculate it mathematically `(length * 3) / 4 - padding` based on string length and padding (`=`) rather than decoding into a Buffer to save memory.
+**Action:** When extracting data from large payloads or logging them, calculate properties algorithmically and slice explicitly rather than doing regex captures.
