@@ -2436,28 +2436,52 @@ function getTelegramConversationId(chatId: string, threadId?: number): string {
   return conversationId;
 }
 
-function toolResultPreview(toolName: string, result: string): string {
+export function toolResultPreview(toolName: string, result: string): string {
   if (toolName === 'capture_screen') {
     const parsed = parseImageToolResult(result);
     if (parsed) {
-      const decodedBytes = Buffer.from(parsed.data, 'base64').length;
+      // Optimization: calculate base64 byte length mathematically without
+      // allocating a full Buffer via Buffer.from, avoiding high memory overhead.
+      const len = parsed.data.length;
+      let padding = 0;
+      if (len > 0 && parsed.data[len - 1] === '=') padding++;
+      if (len > 1 && parsed.data[len - 2] === '=') padding++;
+      const decodedBytes = Math.floor((len * 3) / 4) - padding;
       return `[image ${parsed.mediaType}, decoded bytes=${decodedBytes}]`;
     }
   }
   return result.substring(0, 200);
 }
 
-function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
-  const trimmed = raw.trim();
-  const dataUrlMatch = trimmed.match(/^data:(image\/[^;]+);base64,(.+)$/);
-  if (dataUrlMatch) {
-    return { mediaType: dataUrlMatch[1], data: dataUrlMatch[2] };
+export function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
+  // Optimization: avoid full string `.trim()` and regex `.match()` allocations
+  // on large multi-megabyte base64 image strings. Use index scanning instead.
+  let start = 0;
+  while (start < raw.length && raw.charCodeAt(start) <= 32) {
+    start++;
+  }
+  if (start >= raw.length) return null;
+
+  let end = raw.length - 1;
+  while (end > start && raw.charCodeAt(end) <= 32) {
+    end--;
   }
 
-  if (trimmed.startsWith('iVBOR')) return { mediaType: 'image/png', data: trimmed };
-  if (trimmed.startsWith('/9j/')) return { mediaType: 'image/jpeg', data: trimmed };
-  if (trimmed.startsWith('R0lGOD')) return { mediaType: 'image/gif', data: trimmed };
-  if (trimmed.startsWith('UklGR')) return { mediaType: 'image/webp', data: trimmed };
+  if (raw.startsWith('data:image/', start)) {
+    const semi = raw.indexOf(';', start);
+    if (semi !== -1 && raw.startsWith(';base64,', semi)) {
+      const mediaType = raw.substring(start + 5, semi);
+      const dataStart = semi + 8;
+      if (dataStart <= end + 1) {
+        return { mediaType, data: raw.substring(dataStart, end + 1) };
+      }
+    }
+  }
+
+  if (raw.startsWith('iVBOR', start)) return { mediaType: 'image/png', data: raw.substring(start, end + 1) };
+  if (raw.startsWith('/9j/', start)) return { mediaType: 'image/jpeg', data: raw.substring(start, end + 1) };
+  if (raw.startsWith('R0lGOD', start)) return { mediaType: 'image/gif', data: raw.substring(start, end + 1) };
+  if (raw.startsWith('UklGR', start)) return { mediaType: 'image/webp', data: raw.substring(start, end + 1) };
   return null;
 }
 
