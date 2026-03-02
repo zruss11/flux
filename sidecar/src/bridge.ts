@@ -770,6 +770,7 @@ const APPROVAL_REQUIRED_COMMAND_PATTERN = new RegExp(
 
 const COMMAND_LIKE_KEYS = ['command', 'cmd', 'script', 'shell', 'bash', 'args'];
 
+// Preserved solely for testing compatibility
 export function collectCommandLikeInputValues(input: Record<string, unknown>): string[] {
   const values: string[] = [];
   for (const key of COMMAND_LIKE_KEYS) {
@@ -794,19 +795,22 @@ export function requiresApproval(toolName: string, input: Record<string, unknown
     return true;
   }
 
-  const isCommandExecutionTool =
-    lowerToolName.includes('shell') ||
-    lowerToolName.includes('bash') ||
-    lowerToolName.includes('terminal') ||
-    lowerToolName.includes('applescript') ||
-    lowerToolName.includes('command');
-
-  const commandCandidates = collectCommandLikeInputValues(input);
-  if (!isCommandExecutionTool && commandCandidates.length === 0) {
-    return false;
+  // Iterate directly over COMMAND_LIKE_KEYS to avoid intermediate array allocations
+  for (const key of COMMAND_LIKE_KEYS) {
+    const value = input[key];
+    if (typeof value === 'string') {
+      if (/\S/.test(value) && APPROVAL_REQUIRED_COMMAND_PATTERN.test(value)) {
+        return true;
+      }
+    } else if (Array.isArray(value)) {
+      const combined = value.filter((item): item is string => typeof item === 'string').join(' ');
+      if (/\S/.test(combined) && APPROVAL_REQUIRED_COMMAND_PATTERN.test(combined)) {
+        return true;
+      }
+    }
   }
 
-  return commandCandidates.some((command) => APPROVAL_REQUIRED_COMMAND_PATTERN.test(command));
+  return false;
 }
 
 interface ConversationSession {
@@ -2436,28 +2440,50 @@ function getTelegramConversationId(chatId: string, threadId?: number): string {
   return conversationId;
 }
 
-function toolResultPreview(toolName: string, result: string): string {
+export function toolResultPreview(toolName: string, result: string): string {
   if (toolName === 'capture_screen') {
     const parsed = parseImageToolResult(result);
     if (parsed) {
-      const decodedBytes = Buffer.from(parsed.data, 'base64').length;
+      // Calculate decoded byte length mathematically without instantiating a Buffer
+      const len = parsed.data.length;
+      let padding = 0;
+      if (len > 0 && parsed.data[len - 1] === '=') padding++;
+      if (len > 1 && parsed.data[len - 2] === '=') padding++;
+      const decodedBytes = Math.floor((len * 3) / 4) - padding;
       return `[image ${parsed.mediaType}, decoded bytes=${decodedBytes}]`;
     }
   }
   return result.substring(0, 200);
 }
 
-function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
-  const trimmed = raw.trim();
-  const dataUrlMatch = trimmed.match(/^data:(image\/[^;]+);base64,(.+)$/);
-  if (dataUrlMatch) {
-    return { mediaType: dataUrlMatch[1], data: dataUrlMatch[2] };
+export function parseImageToolResult(raw: string): { mediaType: string; data: string } | null {
+  // Avoid expensive trim() and match() on large base64 strings
+  let start = 0;
+  const len = raw.length;
+  while (start < len && raw.charCodeAt(start) <= 32) start++;
+  if (start >= len) return null;
+
+  let end = len - 1;
+  while (end >= start && raw.charCodeAt(end) <= 32) end--;
+
+  // Manual fast-path for "data:image/"
+  if (raw.startsWith('data:image/', start)) {
+    const semiIdx = raw.indexOf(';', start + 11);
+    if (semiIdx !== -1 && semiIdx < end && raw.startsWith(';base64,', semiIdx)) {
+      const mediaType = raw.substring(start + 5, semiIdx);
+      const data = raw.substring(semiIdx + 8, end + 1);
+      return { mediaType, data };
+    }
   }
 
-  if (trimmed.startsWith('iVBOR')) return { mediaType: 'image/png', data: trimmed };
-  if (trimmed.startsWith('/9j/')) return { mediaType: 'image/jpeg', data: trimmed };
-  if (trimmed.startsWith('R0lGOD')) return { mediaType: 'image/gif', data: trimmed };
-  if (trimmed.startsWith('UklGR')) return { mediaType: 'image/webp', data: trimmed };
+  const trimmedLen = end - start + 1;
+  if (trimmedLen >= 4) {
+    if (raw.startsWith('iVBOR', start)) return { mediaType: 'image/png', data: raw.substring(start, end + 1) };
+    if (raw.startsWith('/9j/', start)) return { mediaType: 'image/jpeg', data: raw.substring(start, end + 1) };
+    if (raw.startsWith('R0lGOD', start)) return { mediaType: 'image/gif', data: raw.substring(start, end + 1) };
+    if (raw.startsWith('UklGR', start)) return { mediaType: 'image/webp', data: raw.substring(start, end + 1) };
+  }
+
   return null;
 }
 

@@ -17,3 +17,7 @@
 ## 2026-02-16 - [Node.js Environment Access & Array Chains]
 **Learning:** Accessing `process.env` inside high-frequency functions (like `sanitizeChatImages`) adds overhead. Chained array methods (`.slice().filter().map()`) create unnecessary intermediate arrays.
 **Action:** Extract environment variables to top-level constants. Replace array method chains with single-pass loops where performance matters.
+
+## 2026-03-01 - [Base64 Parsing Overhead]
+**Learning:** Calling `trim()` and `match()` on large base64 image strings (which can be multi-megabyte payloads) clones the entire string in V8, causing massive memory spikes and slowing down garbage collection. Furthermore, calling `Buffer.from(..., 'base64').length` purely to determine decoded byte length allocates a huge array buffer unnecessarily.
+**Action:** Use index-based scanning (`charCodeAt`, `substring`) for parsing boundaries of large strings instead of regex/trim, and calculate base64 byte length mathematically (`(len * 3) / 4 - padding`).
